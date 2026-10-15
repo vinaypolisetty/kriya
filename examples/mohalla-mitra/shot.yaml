@@ -1,0 +1,79 @@
+# Shot recipe: runs once per shot. Draw, pick, fix, and animate if marked.
+graph: shot_recipe
+level: shot
+
+inputs:
+  item: json
+
+outputs:
+  panel: pick.selected
+  clip: animate.clip
+
+nodes:
+  - id: draw
+    kind: model
+    name: Draw the shot
+    capability: image.generate
+    options: 3
+    prompt: |
+      {{series.style}}
+      {{item.action}}
+      Only these characters. No other people. Exactly one of each.
+    uses: [item.action, item.characters@look, item.place@look, series.style]
+    out:
+      image: image
+
+  - id: pick
+    kind: screen
+    name: Pick one panel
+    review: pick_one
+    show: draw.image
+    beside: [item.action, item.lines, item.characters]
+    batch: true
+    actions:
+      - { id: lock, needs: [selection] }
+      - { id: edit, needs: [selection, note] }
+      - { id: crop, needs: [selection, region] }
+      - { id: retry, needs: [note] }
+
+  - id: edit
+    kind: model
+    name: Edit the image
+    capability: image.edit
+    context: local
+    prompt: |
+      Edit the first image. Keep everything exactly the same.
+      Exactly one of each character. Only change: {{pick.note}}
+    uses: [pick.selected]
+    out:
+      image: image
+
+  - id: crop
+    kind: tool
+    name: Crop
+    tool: crop
+    out:
+      image: image
+
+  - id: animate
+    kind: model
+    name: Animate the shot
+    capability: video.from_image
+    trust: when_confident
+    prompt: |
+      {{item.action}}. Camera static. Keep the 2D cartoon style, flat colors, no 3D.
+      Ambient sound only, no music, no speech.
+    uses: [pick.selected, item.action]
+    out:
+      clip: video
+
+edges:
+  - { from: draw, to: pick }
+  - { from: pick, to: draw, when: "action == 'retry'", max_loops: 4 }
+  - { from: pick, to: edit, when: "action == 'edit'" }
+  - { from: pick, to: crop, when: "action == 'crop'" }
+  - { from: edit, to: pick, max_loops: 4 }
+  - { from: crop, to: pick, max_loops: 4 }
+  - { from: pick, to: animate, when: "action == 'lock' and item.animate == true" }
+  - { from: pick, to: END, when: "action == 'lock' and item.animate == false" }
+  - { from: animate, to: END }

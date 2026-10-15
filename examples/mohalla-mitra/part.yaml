@@ -1,0 +1,95 @@
+# Part recipe: one Instagram Reel (3 pages of a 9-page story).
+graph: part_recipe
+level: part
+description: Turn three story pages into a finished, reviewed Reel.
+
+inputs:
+  story_pages: text
+  part_no: number
+
+types:
+  shot:
+    fields:
+      id: text
+      characters: list<text>
+      place: text
+      action: text
+      lines: list<line>
+      animate: boolean
+  line:
+    fields:
+      id: text
+      speaker: text
+      hinglish: text
+      emotion: text
+      caption_en: text
+
+outputs:
+  reel: assemble.reel
+
+nodes:
+  - id: shot_list
+    kind: model
+    name: Break it into shots
+    capability: llm.write
+    prompt: |
+      Turn these pages into 10 to 13 shots named P{{inputs.part_no}}-NN.
+      Mark the 4 shots with the biggest motion as animate.
+      Write a voice table and an end-card hook.
+    uses: [inputs.story_pages, series.rules, series.cast]
+    out:
+      shots: list<shot>
+      lines: list<line>
+      hook: text
+
+  - id: approve_shots
+    kind: screen
+    name: Approve the shot list
+    review: approve
+    show: shot_list.shots
+    actions:
+      - { id: approve }
+      - { id: redo, needs: [note] }
+
+  - id: per_shot
+    kind: map
+    name: Make each shot
+    over: shot_list.shots
+    graph: shot_recipe
+
+  - id: voices
+    kind: map
+    name: Voice each line
+    over: shot_list.lines
+    graph: voice_recipe
+
+  - id: assemble
+    kind: tool
+    name: Assemble the Reel
+    tool: assemble_reel
+    args:
+      aspect: "9:16"
+      max_mb: 30
+      captions: english
+      music: duck_under_voices
+    out:
+      reel: video
+
+  - id: watch
+    kind: screen
+    name: Watch the Reel
+    review: approve
+    show: assemble.reel
+    actions:
+      - { id: approve }
+      - { id: fix, needs: [note] }
+
+edges:
+  - { from: shot_list, to: approve_shots }
+  - { from: approve_shots, to: shot_list, when: "action == 'redo'", max_loops: 3 }
+  - { from: approve_shots, to: per_shot, when: "action == 'approve'" }
+  - { from: approve_shots, to: voices, when: "action == 'approve'" }
+  - { from: [per_shot, voices], to: assemble, wait: all }
+  - { from: assemble, to: watch }
+  - { from: watch, to: assemble, when: "action == 'fix'", max_loops: 5 }
+  - { from: watch, to: END, when: "action == 'approve'" }

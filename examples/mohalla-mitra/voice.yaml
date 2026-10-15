@@ -1,0 +1,48 @@
+# Voice recipe: runs once per voice line.
+graph: voice_recipe
+level: line
+
+inputs:
+  item: json
+
+outputs:
+  audio: listen.selected
+
+nodes:
+  - id: speak
+    kind: model
+    name: Voice the line
+    capability: audio.speech
+    prompt: "{{item.hinglish}}"
+    uses: [item.hinglish, item.emotion, item.speaker@voice, item.speaker@speech]
+    out:
+      audio: audio
+      seconds: number
+
+  - id: too_long
+    kind: model
+    name: Redo faster
+    capability: audio.speech
+    prompt: "{{item.hinglish}} (speak 20% faster)"
+    uses: [item.hinglish, item.emotion, item.speaker@voice]
+    out:
+      audio: audio
+      seconds: number
+
+  - id: listen
+    kind: screen
+    name: Listen and approve
+    review: listen
+    show: speak.audio
+    beside: [item.hinglish, item.caption_en]
+    batch: true
+    actions:
+      - { id: approve }
+      - { id: redo, needs: [note] }
+
+edges:
+  - { from: speak, to: too_long, when: "speak.seconds > 8" }
+  - { from: speak, to: listen, when: "speak.seconds <= 8" }
+  - { from: too_long, to: listen }
+  - { from: listen, to: speak, when: "action == 'redo'", max_loops: 4 }
+  - { from: listen, to: END, when: "action == 'approve'" }
