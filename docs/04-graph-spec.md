@@ -95,12 +95,15 @@ Unknown fields are **errors** (schemas are strict), so typos don't pass silently
   kind: agent
   goal: Make the panel pass the rubric with the fewest changes.
   tools: [image.edit, crop, vision_check, ask_user]
-  max_turns: 8
+  max_turns: 8                 # default 8; any positive number
+  budget: { usd: 2 }           # optional spend cap for the whole run
   context: local
   out: { image: image }
 ```
 
 Agents may only call the tools listed. Each turn is recorded. (Decision: explicit tool lists for safety and cost.)
+
+`max_turns` has no fixed ceiling, so long-running agents are possible. The agent stops at whichever limit it hits first: turns or budget. Above 50 turns without a `budget`, the validator warns, because turns alone don't bound cost. ([Decision D-27](17-decisions.md))
 
 ### `tool`: run code
 
