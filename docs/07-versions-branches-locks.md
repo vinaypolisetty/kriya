@@ -19,7 +19,8 @@ Operations inside a node:
 |---|---|
 | **Generate** | Candidates per the config (`options: 3`) |
 | **Refine** | A child version from a conversational instruction |
-| **Adopt** | A version with two parents: "take A″, but use A‴'s ending" (a merge) |
+| **Adopt** | A version with two parents: "take A″, but use A‴'s ending" (a merge). For media it is a model call with both as references, so the result goes through the normal check → fix loop |
+| **Replay change** | Re-apply the recorded instruction behind a version to another version, branch or item: "do the same gamcha fix on every shot with Bheem". One parent; a new attempt ([D-30](17-decisions.md)) |
 | **Branch** | A separate, named path with its own conversation, from any version |
 | **Fork context** | Copy everything up to this point into a new node or another workflow |
 | **Lock** | Declare the node's output |
@@ -70,7 +71,7 @@ When the episode agent is asked "make Tiwari sweatier in every shot":
 - It finds affected nodes (4 shots with @Tiwari).
 - Unlocked nodes: it sends instructions to each node's micro-agent; each produces a new version.
 - Locked nodes: it **proposes** instead: *"P3-08 is locked and includes Tiwari. Unlock and redo? This makes its clip and the Reel stale."*
-- By default it shows the whole **plan and cost first**; the creator can enable automatic mode for a step or level. Locked nodes always require approval.
+- By default it shows the whole **plan and cost first**; the creator can enable automatic mode for a step or level. In automatic mode, changes to locked nodes apply without asking: each is recorded as an auto-approved proposal, shows up in the inbox as a notice, and can be reverted to the previous lock in one action ([D-28](17-decisions.md)).
 
 ## Run upgrades (recipe changed mid-run)
 

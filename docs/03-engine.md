@@ -37,7 +37,10 @@ Every engine action is appended as an event. Current state is computed by replay
 | `FixChosen` | The loop controller or agent picked a fix |
 | `Suspended` / `Resumed` | Waiting on a ticket (model job, human, timer) |
 | `HumanDecision` | A screen was submitted: action, selection, note, region |
-| `Locked` / `Unlocked` | A version became / stopped being the node's output |
+| `AgentTurn` | One agent model response: tool call or final answer, tokens, cost, model version |
+| `ToolCalled` / `ToolResult` | An agent's tool call began / returned (result stored by content hash) |
+| `HistoryCompacted` | A long agent history was summarized; the summary replaces earlier turns in its prompt |
+| `Locked` / `Unlocked` | A version became / stopped being the node's output (`Locked` carries the optional `why` note, D-29) |
 | `BranchCreated` / `BranchSwitched` / `Adopted` | Version-tree operations |
 | `MarkedStale` | Inputs changed under accepted work |
 | `NodeCompleted` / `RunCompleted` / `NodeFailed` | Terminal states |
@@ -55,6 +58,8 @@ Rules:
 - **Stable task keys** come from item identity (`per_shot[P3-04].draw`), not position. If the shot list is regenerated and P3-04 is unchanged, its accepted work survives.
 - **Item-level edges**: `clips[P3-01]` depends on `images[P3-01]` only, so clips start while other panels are still in their fix loops.
 - **Barriers** (`wait: all`) when a stage must finish first, optionally with a human sign-off on the whole set.
+- **Splitting, adding or removing items is a data change** ([D-35](17-decisions.md)): edit the locked list and the map re-materializes. Unchanged keys keep their work, removed keys are parked, new keys start. The running graph itself is never edited in place.
+- **Stream by default** ([D-34](17-decisions.md)): between maps linked by the same item key, each item moves on as soon as *its* output is locked. Joins over whole maps (`from: [per_shot, voices]`) are barriers. Set-level review is opt-in: `wait: all` plus a screen on the set.
 
 ## 3. Node instance lifecycle
 
@@ -185,6 +190,72 @@ agent:fix_P3-04  turn 1 → tool: vision_check(panel)          → verdict: gamc
 ```
 
 Agents survive crashes, wait as long as needed, replay turn by turn, and run under the same budgets and attempt limits as everything else.
+
+### The engine owns the agent loop ([Decision D-26](17-decisions.md))
+
+An agent executor never runs its own `while` loop. It takes **one turn** and returns; the scheduler decides whether there is another.
+
+```ts
+interface AgentExecutor {
+  turn(ctx: TaskContext, history: AgentHistory): Promise<
+    | { toolCall: ToolCall }   // engine records it, runs the tool, records the result
+    | { final: Candidate }     // engine records it as a candidate of the node
+  >
+}
+```
+
+If the executor owned the loop, the engine would only see "started" and "finished": a crash on turn 37 would pay for turns 1–36 again and the model would take a different path. With one turn per call, `history` is rebuilt from the event log on resume and the next call is turn 37.
+
+One agent run through the engine:
+
+```
+Scheduler    analyst READY → start turn N
+Context      prompt = goal + locked inputs + history (from events)
+Executor     one model call → tool call or final answer
+Event log    AgentTurn{N, response, tokens, cost, model version}
+Executor     run the tool (only tools listed on the node, D-22)
+Event log    ToolCalled → ToolResult{N, content hash}
+Suspension   slow tool or ask_human → ticket; node parks (minutes or days)
+Scheduler    limits left? → turn N+1, else stop cleanly
+             final answer → CandidateProduced → normal lock / check / fix flow
+```
+
+Rules:
+
+- **Replay, don't re-ask.** On resume, every recorded `AgentTurn` and `ToolResult` is replayed. No model or tool is called for a turn that already has its events.
+- **The crash window is between `ToolCalled` and `ToolResult`.** A tool that ran but whose result wasn't recorded runs again on resume, so tools with side effects (post, send, pay) must accept an idempotency key derived from `(attempt id, turn)`. Read-only tools need nothing.
+- **Limits are checked per turn:** `max_turns`, and the node's `budget.usd` ([D-27](17-decisions.md)) using the reserve-then-settle rule from §7. The scheduler stops the agent between turns, never mid-call.
+- **Asking a human is a tool.** `ask_human` is a built-in tool that opens an inbox ticket; its answer comes back as that turn's `ToolResult`. Human and tool waits use the same suspend/resume path.
+- **Long histories are compacted by a recorded step.** See *Agent memory* below.
+- **Turns are private to the node.** Only the final, locked output enters downstream context (D-11). The turn history stays in the event log for audit, replay and knowledge-base mining.
+
+### Agent memory: the context ladder ([Decision D-39](17-decisions.md))
+
+The engine owns an agent's context. The prompt for turn N is a pure function of the event log and the node's memory policy, so replay rebuilds it exactly. Provider-side context trimming may be added later inside an adapter only if its result is recorded.
+
+Cheapest and least lossy first:
+
+| Step | What happens | Model call | Loses info |
+|---|---|---|---|
+| 0. **Decompose** | Split the work into child agents or a `map`; each gets a small fresh context and returns one result | No | No |
+| 1. **Offload** | A tool result over ~2k tokens is stored as a blob; the history keeps `{hash, size, preview}`. Built-in `recall(hash, range)` reads it back | No | No |
+| 2. **Clear** | Tool results older than the last 6 turns become stubs (`[result abc123 cleared, recall to view]`) | No | No |
+| 3. **Notes** | Built-in `note(key, text)` writes durable working memory, always in the prompt, never compacted | No | No |
+| 4. **Summarize** | The oldest span becomes a structured digest, recorded as `HistoryCompacted` | Yes | Yes, checked |
+| 5. **Hand off** | After repeated summaries, a fresh context starts from goal + notes + latest digest | Yes | Yes, checked |
+
+Never a sliding window (silent loss). No embedding retrieval for now; offload + `recall` covers it.
+
+- **Trigger:** at 70% of the model's context window, compact down to ~30%. The agent may also ask to compact early at a phase boundary. Counts come from the provider's recorded usage in `AgentTurn`, never a local re-count, so replay makes the same decisions.
+- **Batches, not drips:** clearing and summarizing process a whole old span at once. Changing the prompt prefix every turn would defeat provider prompt caching.
+- **Digest shape:** `{ progress, facts: [{ claim, source: <hash> }], decisions, open, next }`.
+- **Model:** the node's own model by default; `compact_model` overrides. The exact version is pinned and recorded.
+- **Checks (code, free):** every fact cites a hash from the summarized span; every note and open item is carried over. On failure, re-summarize once, then hand off. No LLM judge at run time.
+- **Protected, never compacted:** the goal, locked inputs, lock `why` notes (D-29), the agent's notes, human answers to `ask_human`, and the last 6 turns.
+- **Evals in CI:** plant facts in early tool results, run past several compactions, check the final output still states them.
+- An agent that keeps reaching step 4 is a sign it should be a graph (step 0); the trace view can suggest the split.
+
+A single agent node is a valid one-step recipe for open-ended or exploratory work. The trade-off is granularity: stale tracking, re-checks and cost estimates work per node, so inside one agent a changed input reruns the whole agent. Once the agent's path repeats across runs, turn it into a graph.
 
 ## 10. Build vs buy
 

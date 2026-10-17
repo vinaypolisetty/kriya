@@ -51,7 +51,7 @@ One-line framing: **a build system for creative work, with judges.** Like Make/B
 1. **The engine is deterministic; models are not.** Randomness lives only inside model calls and is recorded once.
 2. **Humans decide; the system remembers.** Every choice, note and waiver is data.
 3. **Only decisions flow forward.** Rejected options stay in history, out of context.
-4. **Nothing changes silently.** Locked work changes only through approved proposals.
+4. **Nothing changes silently.** Locked work changes only through proposals: approved by you, or auto-approved in automatic mode, always recorded and revertible.
 5. **Plain words for creators.** No variables, schemas or stack traces in the creator UI.
 6. **Cost is visible before it's spent.** Estimates before runs and rebuilds; spending caps.
 7. **Every loop has a limit.** No runaway spend.
