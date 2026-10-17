@@ -16,7 +16,7 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | 4 | Fri Oct 16 | Storage | SQLite + Drizzle: definitions, versions, releases, runs, events; blob store | Write and read a blob by hash |
 | 5 | Sat Oct 17 | Event log | Append-only events; rebuild state by replay | Replay == live state |
 | 6 | Sun Oct 18 | Scheduler | Ready queue with fake executors; condition evaluator wired to edges ✅ (evaluator exists) | A branch and a capped loop pass |
-| 7 | Mon Oct 19 | For-each and join | Map fan-out with stable keys; wait-for-all; weekly notes | Part graph runs end to end with fakes |
+| 7 | Mon Oct 19 | For-each and join | Map fan-out with stable keys; item-level streaming between maps (D-34); wait-for-all joins; weekly notes | Part graph runs end to end with fakes |
 
 (Days 1–3 were completed together on Oct 13.)
 
@@ -25,7 +25,7 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | Day | Date | Focus | Done when |
 |---|---|---|---|
 | 8 | Tue Oct 20 | Version tree: candidates, parents, lock; only locked outputs enter context | Lock/context tests pass |
-| 9 | Wed Oct 21 | Branches: create, switch, park; adopt (two parents) | Branch tests pass |
+| 9 | Wed Oct 21 | Branches: create, switch, park; `replay_change` first, then adopt (two parents) | Branch tests pass; one instruction replayed onto two items |
 | 10 | Thu Oct 22 | Cache keys and stale (spec + inputs + refs + model version) | Changing one shot marks only its work stale |
 | 11 | Fri Oct 23 | Durable waits: tickets; crash-and-resume test | Resume makes no duplicate calls |
 | 12 | Sat Oct 24 | Context and assets: inheritance, full/local/isolated, @mentions, overrides | Context tests pass |
@@ -53,7 +53,7 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | 24 | Thu Nov 5 | Region tool (crop, local edit) and audio players | Crop and approve a line in the UI |
 | 25 | Fri Nov 6 | Run view: steps, status, stale markers, plan-and-cost card | A whole Part at a glance |
 | 26 | Sat Nov 7 | Version tree panel (branch, switch); read-only Library | Switch branches from the UI |
-| 27 | Sun Nov 8 | Phone layout; batch review | Review a batch on a phone |
+| 27 | Sun Nov 8 | Phone layout; batch review; LAN access with a pairing token (D-38) | Review a batch on a phone over home wifi |
 | 28 | Mon Nov 9 | Buffer + write-up: locks and stale tracking | Draft saved |
 
 ### Week 5 · Two real use cases (Nov 10–16)
@@ -82,6 +82,8 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 
 ## v0.2 — Builder
 
+**Sandboxed agent tools** (moved from v0.4, D-32): agents write and run their own tools in Deno / Docker sandboxes; secrets broker; promotion to trusted tools with review.
+
 Recipe view, step cards, UI-action settings, conditions with pickers, drag and drop (dnd-kit), validation in the UI, click-through test, publish, run upgrades.
 
 ## v0.3 — Smart authoring
@@ -90,7 +92,7 @@ Builder assistant (chat → graph operations, with an eval set of "request → e
 
 ## v0.4 — Others can use it
 
-Hosted option, accounts, guided key setup, templates and forks, phone polish, sandboxed code blocks, onboarding.
+Hosted option, accounts, guided key setup, templates and forks, phone polish, hosted-grade sandboxing (Firecracker / gVisor), onboarding.
 
 ## Full-time estimate (for reference)
 

@@ -93,4 +93,4 @@ Three things narrow the change: local mode, a target (person + optional region),
 
 Higher-level agents see each node's locked output plus a short summary of its conversation ("3 versions, locked B, gamcha fixed by edit"), not every message. The project agent sees episode summaries. Each conversation stays small.
 
-Open question: should the next step receive only the locked output, or also a short note on *why* it was chosen? ([18-open-questions.md](18-open-questions.md))
+**The "why" of a lock.** A lock can carry the creator's own note on why that version was chosen, verbatim (`<node>.why`). Agent and LLM steps receive it by default; image, clip and voice steps only when they list it in `uses`. With no note, nothing is passed; it is never generated. ([D-29](17-decisions.md))

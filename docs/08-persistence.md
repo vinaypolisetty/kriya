@@ -6,7 +6,7 @@ Authoring is saved as **versioned definitions**, kept separate from run state an
 
 | Store | Holds | Changes how | v0.1 → later |
 |---|---|---|---|
-| **Definitions** | Levels, graphs (nodes + edges), asset kinds, knowledge-base rules | Draft autosaves; publish creates an immutable release | SQLite → Postgres (JSON columns) |
+| **Definitions** | Levels, graphs (nodes + edges), asset kinds, knowledge-base rules | **Files in a recipe folder are canonical** (git-friendly YAML/JSON); publish snapshots the folder into an immutable, hashed release ([D-33](17-decisions.md)) | Recipe folder + release snapshots in SQLite → Postgres (JSON columns) |
 | **Run state** | Event log per run: versions, branches, locks, decisions, stale marks | Append-only | Same DB, `events` table |
 | **Media** | Images, clips, audio, sheets, Reels | Write-once, content-addressed by hash | Local folder → S3/R2 |
 | **Secrets** | Creators' API keys | Encrypted | `.env` (v0.1) → KMS/Vault envelope encryption |
@@ -45,7 +45,7 @@ The engine executes only `rule`. `said` is for display. If they disagree, the bu
 ## Four rules
 
 1. **Stable ids, not names.** Steps, fields and conditions get permanent ids. Renaming "Draw each shot" to "Make panels" breaks nothing.
-2. **Draft, then publish.** Drafts autosave with edit history (undo, branch a draft). Publishing freezes a **release**: a manifest pinning the exact version of every definition, identified by a hash.
+2. **Files are the draft; publish freezes a release.** The recipe folder is the working draft: edited by hand, in git, or by the builder through graph operations (which write the files back, keeping comments and key order). Publishing snapshots every definition into a **release**: a manifest pinning the exact version of each, identified by a hash. Releases live in the database so runs can pin them; the files stay the source of truth.
 3. **Runs pin a release.** Editing never changes a running episode. Upgrading compares releases by stable id (see [07](07-versions-branches-locks.md)).
 4. **The Library is versioned separately from recipes.** Recipes define *kinds*; the Library holds *things* (Mitra, look v2), each facet with its own versions. Runs record which facet versions they used.
 
@@ -73,4 +73,4 @@ secrets              owner_id, provider, encrypted_key      (later; .env in v0.1
 ## Templates and export
 
 - A **template** is a published release copied into a new project with its origin recorded, so a fork can be told "the original has an update".
-- **Export** is the release manifest plus its definitions as a JSON/YAML bundle. YAML recipes in `examples/` are this format; the JSON bundle should be a supported format from day one (open question: GitHub-friendly export, see [18](18-open-questions.md)).
+- **There is no separate export.** A recipe folder already is the shareable format; forking is `git clone`, and recipe changes are reviewed as diffs. Locks, runs, assets and media are run data and stay out of the recipe folder (database + blob store).

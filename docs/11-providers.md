@@ -57,8 +57,23 @@ Tools are code steps with typed inputs and outputs.
 
 ## Code blocks by assistant
 
-Open question: should the builder assistant write new code tools (e.g. a custom ffmpeg step) for creators? Proposal: composite blocks and catalog models for everyone; code blocks only for advanced users, sandboxed. ([18](18-open-questions.md))
+## Agent-written tools and provider choice ([D-32](17-decisions.md))
+
+- **Agents write their own tools, sandboxed** (v0.2): Deno with permission flags for TS/JS, Docker with no network for Python/ffmpeg. The code is a recorded, hashed output; replay uses recorded results. No approval needed in auto mode.
+- **Agents pick, discover and switch providers** on their own within budget: catalog models, `swap_provider`, new Replicate models (exact version pinned), and arbitrary web APIs through a sandboxed `http` tool with a domain allowlist.
+- **Secrets broker:** the engine injects keys into provider calls. Agent-written code never sees a key, so the worst case is spent budget, which is capped.
+- **Promotion** of a sandboxed tool to a trusted, unrestricted tool needs a human who has read the code. It is recorded, revertible and pinned by hash; changed code drops back to the sandbox.
+- **Never:** unsandboxed AI-written code that no human reviewed.
+- v0.1: the creator writes tools (functions behind `Executor`); agents choose among catalog tools and providers and course-correct.
 
 ## Which providers at launch
 
-Replicate and Anthropic for v0.1. Others are open ([18](18-open-questions.md)).
+Three providers in v0.1, each with one job ([D-31](17-decisions.md)):
+
+| Provider | Role | Capabilities |
+|---|---|---|
+| **Anthropic** | Reasoning and navigation: agents, checkers, shot lists, the builder assistant | `llm.write`, `llm.vision` |
+| **Replicate** | Real media generation | `image.generate`, `image.edit`, `video.from_image`, `audio.speech`, `audio.music` |
+| **Fake** | Quick testing and the no-keys demo: canned outputs for every capability, $0, deterministic | All |
+
+Anything else runs through **manual mode** until it earns an adapter.
