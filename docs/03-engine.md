@@ -31,6 +31,7 @@ Every engine action is appended as an event. Current state is computed by replay
 |---|---|
 | `RunStarted` | A run began, pinned to a release hash |
 | `NodeReady` | All inputs available, conditions satisfied |
+| `EdgeFollowed` | The scheduler followed an edge (by index); counts toward its `max_loops` |
 | `AttemptStarted` | A model/agent/tool call began |
 | `CandidateProduced` | A version was created (with prompt, inputs, model version, seed, cost) |
 | `VerdictRecorded` | A checker (code, LLM or human) judged a candidate |

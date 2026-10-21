@@ -5,3 +5,4 @@ export * from "./load.js";
 export * from "./events.js";
 export * from "./state.js";
 export * from "./recorder.js";
+export * from "./scheduler.js";

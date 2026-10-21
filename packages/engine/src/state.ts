@@ -54,6 +54,8 @@ export type RunState = {
   inputs: Record<string, unknown>;
   status: "running" | "completed" | "failed" | "cancelled";
   nodes: Record<string, NodeState>;
+  /** How many times each edge (by index) has been followed. */
+  edges: Record<string, number>;
   costUsd: number;
 };
 
@@ -73,12 +75,18 @@ const newNode = (): NodeState => ({
 export function apply(state: RunState | undefined, e: EngineEvent): RunState {
   if (e.type === "RunStarted") {
     if (state) fail(e, "the run has already started");
-    return { release: e.release, graph: e.graph, inputs: e.inputs, status: "running", nodes: {}, costUsd: 0 };
+    return { release: e.release, graph: e.graph, inputs: e.inputs, status: "running", nodes: {}, edges: {}, costUsd: 0 };
   }
   if (!state) fail(e, "it came before RunStarted");
   if (state.status !== "running") fail(e, `the run is already ${state.status}`);
 
   if (e.type === "RunCompleted") return { ...state, status: e.status };
+
+  if (e.type === "EdgeFollowed") {
+    const from = state.nodes[e.from];
+    if (!from || from.status !== "completed") fail(e, `step '${e.from}' hasn't completed`);
+    return { ...state, edges: { ...state.edges, [e.edge]: (state.edges[e.edge] ?? 0) + 1 } };
+  }
 
   if (e.type === "NodeReady") {
     const prev = state.nodes[e.node];
