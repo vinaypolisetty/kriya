@@ -10,10 +10,15 @@ import { apply, replay, type RunState } from "./state.js";
 export interface EventSink {
   append(runId: string, type: string, payload: unknown): number;
   read(runId: string, afterSeq?: number): { type: string; payload: unknown }[];
+  /** Atomic: all of them or none. Without it, a batch is appended one by one. */
+  appendMany?(runId: string, events: { type: string; payload: unknown }[]): void;
 }
 
 export class Recorder {
   private current: RunState | undefined;
+  /** Events recorded since `begin`, not yet written; and the state to go back to if they're dropped. */
+  private pending: { type: string; payload: unknown }[] | undefined;
+  private committed: RunState | undefined;
 
   private constructor(
     private readonly log: EventSink,
@@ -44,9 +49,48 @@ export class Recorder {
     const { type, ...payload } = e;
     checkJson(payload, type);
     const next = apply(this.current, e);
-    this.log.append(this.runId, type, payload);
+    if (this.pending) this.pending.push({ type, payload });
+    else this.log.append(this.runId, type, payload);
     this.current = next;
     return next;
+  }
+
+  /**
+   * Starts a batch: events are applied but held until `commit`, which writes
+   * them atomically. A crash before the commit loses the whole batch and
+   * nothing else, so the log never holds half of a step.
+   */
+  begin(): void {
+    if (this.pending) throw new Error("a batch is already open");
+    this.pending = [];
+    this.committed = this.current;
+  }
+
+  /** Whether a batch is open. */
+  get batching(): boolean {
+    return this.pending !== undefined;
+  }
+
+  commit(): void {
+    const batch = this.pending;
+    if (!batch) return;
+    try {
+      if (batch.length > 0) {
+        if (this.log.appendMany) this.log.appendMany(this.runId, batch);
+        else for (const e of batch) this.log.append(this.runId, e.type, e.payload);
+      }
+    } catch (err) {
+      this.rollback();
+      throw err;
+    }
+    this.pending = undefined;
+  }
+
+  /** Drops the open batch and goes back to the last committed state. */
+  rollback(): void {
+    if (!this.pending) return;
+    this.current = this.committed;
+    this.pending = undefined;
   }
 }
 
