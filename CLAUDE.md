@@ -37,11 +37,17 @@ packages/engine/src/
   load.ts          YAML → graphs, problems with file:line:col
   cli-validate.ts  CLI entry for validation
 packages/engine/test/   vitest tests
+packages/store/src/
+  blobs.ts         content-addressed blob store (sha256, write-once)
+  events.ts        append-only event log on SQLite (better-sqlite3), schema migrations
+  index.ts         openStore(dir): .kriya/kriya.db + .kriya/blobs/
 examples/mohalla-mitra/ reference recipes (part, shot, voice)
 docs/                   design docs (numbered)
 ```
 
-Planned packages (not created yet): `cli`, `web` (review inbox), `adapters` (Replicate, Anthropic), `store` (SQLite event log and blob store).
+Planned packages (not created yet): `cli`, `web` (review inbox), `adapters` (Replicate, Anthropic).
+
+Local run data lives in `.kriya/` at the project root (gitignored): `kriya.db` and `blobs/`.
 
 ## Non-negotiable design rules
 
