@@ -32,6 +32,7 @@ edges: [ ... ]
 | `outputs` | no | Map of output name → reference (`node.field`) |
 | `nodes` | yes | List of nodes (see below) |
 | `edges` | no | List of edges (see below) |
+| `inherits` | no | Higher levels whose locked context the recipe reads, e.g. `[series]` → `series.style`. The run must be started with that context ([D-47](17-decisions.md)) |
 
 ## Types
 
@@ -251,7 +252,7 @@ Implemented in `validate.ts`. Errors block publishing; warnings don't.
 | Duplicate graph or node ids | error |
 | Edge endpoints must be nodes (with "did you mean") | error |
 | `map` / `subgraph` must point at an existing graph; a graph can't map over itself | error |
-| References must start at a node or a built-in scope | error |
+| References in `uses`, `show`, `beside`, `{{prompt}}`, `over` and `outputs` must start at a step, a built-in scope (`item`, `inputs`, `run`, `assets`) or an inherited level; a known level that isn't inherited gets "add inherits: [series]" | error |
 | Field types must be primitives or declared types | error |
 | Conditions must parse | error |
 | `action == 'x'` on an edge from a screen must name one of its buttons | error |

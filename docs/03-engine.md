@@ -175,8 +175,8 @@ Each version records **what it was made from**, one content hash per input, rath
 |---|---|
 | `spec` | The step's settings (prompt, model, options, …), **not** its name or description: renaming never makes work stale (rule 4) |
 | `inputs` / `item` | The run's inputs, or this item of a map |
-| `uses:<ref>` | Each `uses` entry and each `{{ref}}` in the prompt, read from locked, non-stale outputs |
-| `after:<step>` | Each step an edge leads from (not loop-backs). From a screen, only the button pressed: its data is tracked through `uses` / `over` |
+| `uses:<ref>` | What the step actually **receives** under its context mode: `uses`, prompt `{{refs}}` and mentions, minus removed defaults; facets with their versions; locked, non-stale outputs only |
+| `after:<step>` | Each step an edge leads from (not loop-backs, not screens: screens are revisited, and what they pass on is tracked through `uses` / `over`) |
 | `over`, `item:<key>` | For a map: its list, and each item's outputs |
 
 The model version is part of `spec` when pinned there; provider-reported versions join the key with real adapters (Day 15).

@@ -3,7 +3,7 @@
  * the event is checked and applied first, then appended, so an event that
  * can't happen never reaches the log, and live state always equals replay.
  */
-import { EngineEvent, parseEvent } from "./events.js";
+import { EngineEvent, parseEvent, type EngineEventInput } from "./events.js";
 import { apply, replay, type RunState } from "./state.js";
 
 /** What the engine needs from storage. `@kriya/store`'s SqliteEventLog fits this. */
@@ -44,7 +44,7 @@ export class Recorder {
     return this.current;
   }
 
-  record(event: EngineEvent): RunState {
+  record(event: EngineEventInput): RunState {
     const e = EngineEvent.parse(event);
     const { type, ...payload } = e;
     checkJson(payload, type);

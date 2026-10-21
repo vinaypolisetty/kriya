@@ -21,7 +21,7 @@ import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
 import type { Recorder } from "./recorder.js";
 import type { NodeStatus, RunState } from "./state.js";
-import { startNodes } from "./validate.js";
+import { promptRefs, startNodes } from "./validate.js";
 
 export type StepContext = {
   /** Which run of this step this is: 1 the first time, 2 after one loop back, … */
@@ -43,6 +43,8 @@ export type StepContext = {
   shows?: { version: string; value: unknown }[];
   /** For a model, tool or agent call: the same for every try of this attempt, across crashes (`run/step#attempt`). */
   idempotencyKey?: string;
+  /** Asset facet versions in what it received, `Entity.facet` → version. */
+  assets?: Record<string, string>;
 };
 
 export type Decision = { action: string; selection?: string[]; note?: string };
@@ -58,6 +60,15 @@ export interface Executors {
   /** screen steps: what the human chose, or undefined if there's no answer yet (the step waits; see `answer`). */
   decide(node: ScreenNode, ctx: StepContext): Decision | undefined;
 }
+
+/** Where asset facets come from (the Library, Day 18). Behind an interface so tests use fakes. */
+export interface Assets {
+  /** The locked version of one facet of one entity, e.g. ("Bheem", "look"), or undefined if it doesn't exist yet. */
+  facet(entity: string, facet: string): { version: string; value: unknown } | undefined;
+}
+
+/** What a step receives, by its context mode (D-47). */
+type Received = { uses: Record<string, unknown>; assets: Record<string, string>; missing: string[]; parent: boolean };
 
 /** One recipe being run: the top level, or one item of a map. */
 type Context = { prefix: string; graph: Graph; inputs: Record<string, unknown> };
@@ -79,7 +90,7 @@ const approvalScreen = (node: Producer): ScreenNode => ({
   batch: false,
 });
 
-const ACTIVE: NodeStatus[] = ["ready", "running", "checking", "fixing", "waiting_external", "awaiting_human"];
+const ACTIVE: NodeStatus[] = ["blocked", "ready", "running", "checking", "fixing", "waiting_external", "awaiting_human"];
 const ITEM_KEY = /^[A-Za-z0-9_-]+$/;
 const MAX_STEPS = 100_000;
 
@@ -88,19 +99,28 @@ export class Scheduler {
   private readonly conditions = new Map<Graph, (Expr | undefined)[]>();
 
   /** `bundle` holds the recipes that `map` steps run (usually every graph loaded from the folder). */
+  private readonly assets: Assets;
+
   constructor(
     private readonly graph: Graph,
     private readonly rec: Recorder,
     private readonly exec: Executors,
     bundle: Graph[] = [],
+    options: { assets?: Assets } = {},
   ) {
     this.graphs = new Map([...bundle, graph].map((g) => [g.graph, g]));
+    this.assets = options.assets ?? { facet: () => undefined };
   }
 
   /** Starts a run: records RunStarted and makes the starting steps ready. */
-  start(release: string, inputs: Record<string, unknown> = {}): void {
+  start(release: string, inputs: Record<string, unknown> = {}, context: Record<string, Record<string, unknown>> = {}): void {
+    for (const g of this.recipesUsed()) {
+      for (const level of g.inherits) {
+        if (!context[level]) throw new Error(`recipe '${g.graph}' reads from '${level}', but the run wasn't given any '${level}' context`);
+      }
+    }
     this.atomic(() => {
-      this.rec.record({ type: "RunStarted", release, graph: this.graph.graph, inputs });
+      this.rec.record({ type: "RunStarted", release, graph: this.graph.graph, inputs, context });
       for (const id of startNodes(this.graph)) this.rec.record({ type: "NodeReady", node: id });
     });
   }
@@ -113,8 +133,8 @@ export class Scheduler {
       if (this.atomic(() => this.settleMaps(all))) continue;
       const next = all.find((x) => this.status(x.key) === "ready");
       if (!next) {
-        // Waiting for a person or a provider job: the run stays open; `answer` / `deliver` continue it.
-        if (Object.values(this.rec.state.nodes).some((n) => n.status === "awaiting_human" || n.status === "waiting_external")) {
+        // Waiting for a person, a provider job or a missing asset: the run stays open.
+        if (Object.values(this.rec.state.nodes).some((n) => n.status === "awaiting_human" || n.status === "waiting_external" || n.status === "blocked")) {
           return this.rec.state;
         }
         const top = this.root();
@@ -218,6 +238,10 @@ export class Scheduler {
       ({ parent, instruction } = this.refineSource(ctx, node.refines));
     }
 
+    // A missing facet (Tiwari has no look yet) blocks the step until it exists; nothing is spent.
+    const missing = this.received(key, node, ctx).missing;
+    if (missing.length > 0) return void this.rec.record({ type: "NodeBlocked", node: key, reason: [...new Set(missing)].join("; ") });
+
     this.rec.record({ type: "AttemptStarted", node: key, attempt: n.attempts + 1 });
     if (target !== key) this.rec.record({ type: "AttemptStarted", node: target, attempt: this.rec.state.nodes[target]!.attempts + 1 });
     this.call(key, node, ctx);
@@ -248,6 +272,7 @@ export class Scheduler {
     const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
     const attempt = this.rec.state.nodes[target]!.attempts;
     const inputs = this.inputsOf(key, node, ctx);
+    const assets = this.received(key, node, ctx).assets;
     if (outputs.length === 0) return this.fail(key, "it produced no output");
     outputs.forEach((output, i) =>
       this.rec.record({
@@ -259,6 +284,7 @@ export class Scheduler {
         parents: parent ? [parent] : [],
         cost_usd: 0,
         inputs,
+        ...(Object.keys(assets).length > 0 ? { assets } : {}),
         ...(instruction ? { instruction } : {}),
         ...(target !== key ? { made_by: key } : {}),
       }),
@@ -353,8 +379,10 @@ export class Scheduler {
     parent?: string,
     instruction?: string,
   ): StepContext {
-    const sc: StepContext = { visit, inputs: ctx.inputs, key, uses: this.resolveUses(node, ctx) };
-    if (parent && target) sc.parent = { version: parent, output: this.rec.state.nodes[target]!.versions[parent]!.output };
+    const got = this.received(key, node, ctx);
+    const sc: StepContext = { visit, inputs: ctx.inputs, key, uses: got.uses };
+    if (Object.keys(got.assets).length > 0) sc.assets = got.assets;
+    if (got.parent && parent && target) sc.parent = { version: parent, output: this.rec.state.nodes[target]!.versions[parent]!.output };
     if (instruction) sc.instruction = instruction;
     return sc;
   }
@@ -478,6 +506,62 @@ export class Scheduler {
     });
   }
 
+  /** A higher level's locked context changed (e.g. the series style). Work that read it goes stale. */
+  updateContext(level: string, values: Record<string, unknown>): void {
+    this.atomic(() => {
+      this.reopen(`'${level}' context changed`);
+      this.rec.record({ type: "ContextUpdated", level, values });
+      this.refreshStale();
+    });
+  }
+
+  /**
+   * Overrides one facet for one step (its key) or the whole episode (`run`),
+   * without touching the Library: "in this episode Mitra has a cold" (node > episode > project).
+   */
+  override(scope: string, entity: string, facet: string, value: unknown): void {
+    this.atomic(() => {
+      if (scope !== "run" && !this.rec.state.nodes[scope]) throw new Error(`there's no step '${scope}' in this run; use 'run' for the whole episode`);
+      this.reopen(`@${entity} ${facet} was overridden`);
+      this.rec.record({ type: "OverrideSet", scope, entity, facet, value });
+      this.refreshStale();
+    });
+  }
+
+  /** Adds an asset or output to one step's context, saved with the step: `@P2-13`-style mentions. */
+  mention(key: string, ref: string, note?: string): void {
+    this.atomic(() => {
+      if (!this.rec.state.nodes[key]) throw new Error(`there's no step '${key}' in this run`);
+      this.reopen(`a step's context changed`);
+      this.rec.record({ type: "MentionAdded", node: key, ref, ...(note ? { note } : {}) });
+      this.refreshStale();
+    });
+  }
+
+  /** Removes one automatic input from one step (✕ on a chip). */
+  removeDefault(key: string, ref: string): void {
+    this.atomic(() => {
+      if (!this.rec.state.nodes[key]) throw new Error(`there's no step '${key}' in this run`);
+      this.reopen(`a step's context changed`);
+      this.rec.record({ type: "DefaultRemoved", node: key, ref });
+      this.refreshStale();
+    });
+  }
+
+  /** The Library changed (a new facet version): work that used the old version goes stale. */
+  assetsChanged(): void {
+    this.atomic(() => this.refreshStale());
+  }
+
+  /** Tries blocked steps again, e.g. after the missing look was added to the Library. Call `run()` after. */
+  unblock(): string[] {
+    return this.atomic(() => {
+      const blocked = Object.entries(this.rec.state.nodes).filter(([, n]) => n.status === "blocked").map(([k]) => k);
+      for (const k of blocked) this.rec.record({ type: "NodeReady", node: k });
+      return blocked;
+    });
+  }
+
   private reopen(reason: string): void {
     if (this.rec.state.status !== "running") this.rec.record({ type: "RunReopened", reason });
   }
@@ -573,16 +657,15 @@ export class Scheduler {
     else out.item = hash(ctx.inputs.item ?? null);
     const scope = this.scope(ctx);
     const read = (ref: string) => evaluate(parseCondition(ref), scope) ?? null;
-    const refs = new Set<string>("uses" in node ? node.uses.filter((r) => !r.includes("@")) : []);
-    if ("prompt" in node && node.prompt) for (const m of node.prompt.matchAll(/\{\{\s*([A-Za-z_][\w.]*)\s*\}\}/g)) refs.add(m[1]!);
-    for (const r of refs) out[`uses:${r}`] = hash(read(r));
+    // Only what the step actually receives (its context mode, mentions, removed defaults, facet versions).
+    for (const [r, v] of Object.entries(this.received(key, node, ctx).uses)) out[`uses:${r}`] = hash(v ?? null);
     for (const e of ctx.graph.edges) {
       if (e.to !== node.id || e.max_loops !== undefined) continue;
       for (const s of Array.isArray(e.from) ? e.from : [e.from]) {
-        // From a screen only the button pressed counts: its data flows through `uses` and `over`, tracked there.
-        const isScreen = ctx.graph.nodes.find((x) => x.id === s)?.kind === "screen";
-        const v = scope[s] as { action?: unknown } | undefined;
-        out[`after:${s}`] = hash(isScreen ? (v?.action ?? null) : (v ?? null));
+        // A preceding screen isn't an input: screens are revisited, and what they pass on
+        // (`pick.selected`, the shot list) is tracked through `uses` and `over`.
+        if (ctx.graph.nodes.find((x) => x.id === s)?.kind === "screen") continue;
+        out[`after:${s}`] = hash(scope[s] ?? null);
       }
     }
     if (node.kind === "map") {
@@ -617,9 +700,11 @@ export class Scheduler {
         const now = this.inputsOf(ctx.prefix + maker.id, maker, ctx);
         const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k]);
         if (diff.length > 0 && n.status !== "stale") {
+          this.reopen("something its work used changed");
           this.rec.record({ type: "MarkedStale", node: key, reason: describe(diff, node) });
           changed = true;
         } else if (diff.length === 0 && n.status === "stale") {
+          this.reopen("something its work used changed");
           this.rec.record({ type: "MarkedFresh", node: key });
           changed = true;
         }
@@ -693,12 +778,63 @@ export class Scheduler {
   }
 
   /** Resolves a step's `uses` against locked outputs only. */
-  private resolveUses(node: Node, ctx: Context): Record<string, unknown> {
-    if (!("uses" in node)) return {};
+  /**
+   * What a step receives (D-47), by its context mode:
+   * - `full`: its `uses` and prompt `{{refs}}` (minus removed defaults), facets included, plus mentions and its parent;
+   * - `local`: only its parent (the version it edits) and mentions;
+   * - `isolated`: only mentions.
+   * Outputs are read locked and non-stale; facets resolve step override > run override > Library.
+   */
+  private received(key: string, node: Node, ctx: Context): Received {
+    const mode = "context" in node ? node.context : "full";
+    const n = this.rec.state.nodes[key];
+    const mentions = n?.mentions.map((m) => m.ref) ?? [];
+    let refs: string[] = [];
+    if (mode === "full" && node.kind !== "screen") {
+      const declared = [...("uses" in node ? node.uses : []), ...("prompt" in node && node.prompt ? promptRefs(node.prompt) : [])];
+      refs = [...new Set(declared)].filter((r) => !n?.removed.includes(r));
+    }
+    refs = [...new Set([...refs, ...mentions])];
+
     const scope = this.scope(ctx);
-    const out: Record<string, unknown> = {};
-    for (const ref of node.uses) if (!ref.includes("@")) out[ref] = evaluate(parseCondition(ref), scope);
-    return out;
+    const got: Received = { uses: {}, assets: {}, missing: [], parent: mode !== "isolated" };
+    for (const ref of refs) got.uses[ref] = this.resolve(ref, key, scope, got);
+    return got;
+  }
+
+  /** One reference: `@Mitra.voice` (a facet), `item.characters@look` (facets of named entities), or a path. */
+  private resolve(ref: string, key: string, scope: Record<string, unknown>, got: Received): unknown {
+    if (ref.startsWith("@")) {
+      const [entity, facet] = ref.slice(1).split(".");
+      return this.facet(entity!, facet ?? "", key, got);
+    }
+    const at = ref.indexOf("@");
+    if (at < 0) return evaluate(parseCondition(ref), scope);
+    const names = evaluate(parseCondition(ref.slice(0, at)), scope);
+    const facet = ref.slice(at + 1);
+    if (Array.isArray(names)) return names.map((e) => this.facet(String(e), facet, key, got));
+    return names == null ? undefined : this.facet(String(names), facet, key, got);
+  }
+
+  private facet(entity: string, facet: string, key: string, got: Received): { entity: string; facet: string; version: string; value: unknown } | undefined {
+    const o = this.rec.state.overrides;
+    const name = `${entity}.${facet}`;
+    const override = o[key]?.[name] !== undefined ? o[key]![name] : o.run?.[name];
+    const found = override !== undefined ? { version: `override:${hash(override).slice(0, 12)}`, value: override } : this.assets.facet(entity, facet);
+    if (!found) {
+      got.missing.push(`@${entity} has no ${facet} yet; add it to the Library`);
+      return undefined;
+    }
+    got.assets[name] = found.version;
+    return { entity, facet, version: found.version, value: found.value };
+  }
+
+  /** This recipe and every recipe its maps run. */
+  private recipesUsed(g = this.graph, seen = new Set<Graph>()): Graph[] {
+    if (seen.has(g)) return [];
+    seen.add(g);
+    for (const n of g.nodes) if (n.kind === "map") { const c = this.graphs.get(n.graph); if (c) this.recipesUsed(c, seen); }
+    return [...seen];
   }
 
   /** Starts a map: reads its list and makes each item's first steps ready. */
@@ -859,6 +995,7 @@ export class Scheduler {
         scope[node.id] = n.versions[n.locked.version]?.output;
       }
     }
+    for (const level of ctx.graph.inherits) if (s.context[level]) scope[level] = s.context[level];
     scope.inputs = ctx.inputs;
     scope.item = ctx.inputs.item;
     if (fromKey) {
@@ -881,7 +1018,7 @@ export class Scheduler {
     if (!screen.show) return d.selection;
     const [root, ...path] = screen.show.split(".");
     const t = this.rec.state.nodes[ctx.prefix + root];
-    if (!t) return undefined;
+    if (!t || t.status === "stale") return undefined; // stale work is out of context
     const ids = d.selection && d.selection.length > 0 ? d.selection : t.locked ? [t.locked.version] : [];
     const values = ids.map((id) => {
       let v: unknown = t.versions[id]?.output;

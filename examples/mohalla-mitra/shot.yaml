@@ -1,6 +1,7 @@
 # Shot recipe: runs once per shot. Draw, pick, fix, and animate if marked.
 graph: shot_recipe
 level: shot
+inherits: [series]   # reads the series' locked style, rules and cast
 
 inputs:
   item: json

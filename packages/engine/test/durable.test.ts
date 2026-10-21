@@ -4,6 +4,12 @@ import { openDatabase, SqliteEventLog } from "@kriya/store";
 import { loadDir } from "../src/load.js";
 import { Recorder, readRun, replay, Scheduler, type Decision, type Executors, type EventSink, type RunState, type StepContext } from "../src/index.js";
 
+/** The series' locked context the Mohalla Mitra recipes inherit. */
+const SERIES = { series: { style: "2D cartoon, flat colors", rules: "no real film songs", cast: ["Mitra", "Bheem"] } };
+
+/** A fake Library where every facet exists at v1. */
+const LIBRARY = { assets: { facet: (entity: string, facet: string) => ({ version: "v1", value: `${entity}:${facet}` }) } };
+
 const { graphs } = loadDir(resolve(__dirname, "../../../examples"));
 const part = graphs.find((g) => g.graph === "part_recipe")!;
 const RELEASE = "a".repeat(64);
@@ -99,8 +105,8 @@ function uninterrupted() {
   const db = new SqliteEventLog(openDatabase(":memory:"));
   const log = new CrashingLog(db, Number.POSITIVE_INFINITY);
   const rec = Recorder.start(log, "run1");
-  const s = new Scheduler(part, rec, executors(provider), graphs);
-  s.start(RELEASE, INPUTS);
+  const s = new Scheduler(part, rec, executors(provider), graphs, LIBRARY);
+  s.start(RELEASE, INPUTS, SERIES);
   drive(s, rec, provider);
   return { state: rec.state, provider, writes: log.writes, events: readRun(db, "run1") };
 }
@@ -109,10 +115,10 @@ function crashAndResume(crashAt: number) {
   const provider = new Provider();
   const db = new SqliteEventLog(openDatabase(":memory:"));
   const rec = Recorder.start(new CrashingLog(db, crashAt), "run1");
-  const s = new Scheduler(part, rec, executors(provider), graphs);
+  const s = new Scheduler(part, rec, executors(provider), graphs, LIBRARY);
   let crashed = false;
   try {
-    s.start(RELEASE, INPUTS);
+    s.start(RELEASE, INPUTS, SERIES);
     drive(s, rec, provider);
   } catch (e) {
     if (!(e instanceof Crash)) throw e;
@@ -122,13 +128,13 @@ function crashAndResume(crashAt: number) {
   let state: RunState;
   if (db.read("run1").length === 0) {
     const fresh = Recorder.start(db, "run1");
-    const s2 = new Scheduler(part, fresh, executors(provider), graphs);
-    s2.start(RELEASE, INPUTS);
+    const s2 = new Scheduler(part, fresh, executors(provider), graphs, LIBRARY);
+    s2.start(RELEASE, INPUTS, SERIES);
     drive(s2, fresh, provider);
     state = fresh.state;
   } else {
     const resumed = Recorder.resume(db, "run1");
-    const s2 = new Scheduler(part, resumed, executors(provider), graphs);
+    const s2 = new Scheduler(part, resumed, executors(provider), graphs, LIBRARY);
     s2.recover();
     drive(s2, resumed, provider);
     state = resumed.state;
@@ -177,8 +183,8 @@ describe("tickets", () => {
   it("a slow job keeps the step waiting until it's delivered", () => {
     const provider = new Provider();
     const rec = Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run1");
-    const s = new Scheduler(part, rec, executors(provider), graphs);
-    s.start(RELEASE, INPUTS);
+    const s = new Scheduler(part, rec, executors(provider), graphs, LIBRARY);
+    s.start(RELEASE, INPUTS, SERIES);
     s.run();
     const waiting = Object.entries(rec.state.nodes).filter(([, n]) => n.status === "waiting_external").map(([k]) => k);
     expect(waiting.length).toBeGreaterThan(0);
@@ -188,8 +194,8 @@ describe("tickets", () => {
   it("says plainly when nothing waits on a ticket", () => {
     const provider = new Provider();
     const rec = Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run1");
-    const s = new Scheduler(part, rec, executors(provider), graphs);
-    s.start(RELEASE, INPUTS);
+    const s = new Scheduler(part, rec, executors(provider), graphs, LIBRARY);
+    s.start(RELEASE, INPUTS, SERIES);
     expect(() => s.deliver("nope", [])).toThrow("no step is waiting on ticket 'nope'");
   });
 });

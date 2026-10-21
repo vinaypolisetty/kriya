@@ -146,6 +146,8 @@ export const Graph = z
     graph: Id,
     level: Id,
     description: z.string().optional(),
+    /** Higher levels whose locked context this recipe reads, e.g. [series, story] → `series.style` (D-47). */
+    inherits: z.array(Id).default([]),
     inputs: Fields.default({}),
     outputs: z.record(Id, Ref).default({}),
     types: z.record(Id, z.object({ fields: Fields }).strict()).default({}),

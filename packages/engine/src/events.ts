@@ -22,7 +22,23 @@ const on = <T extends string, S extends z.ZodRawShape>(type: T, shape: S) =>
 const Issue = z.object({ type: z.string(), where: z.string().optional(), what: z.string().optional(), fix: z.string().optional() }).strict();
 
 export const EngineEvent = z.discriminatedUnion("type", [
-  on("RunStarted", { release: Hash, graph: z.string().min(1), inputs: z.record(z.unknown()).default({}) }),
+  on("RunStarted", {
+    release: Hash,
+    graph: z.string().min(1),
+    inputs: z.record(z.unknown()).default({}),
+    /** Locked context inherited from higher levels, by level: `{ series: { style, rules } }` (D-47). */
+    context: z.record(z.record(z.unknown())).default({}),
+  }),
+  /** A higher level's locked context changed (e.g. the series style was re-locked). */
+  on("ContextUpdated", { level: z.string().min(1), values: z.record(z.unknown()) }),
+  /** An override of one asset facet: for one step (its key), or the whole run (`run`, the episode level). */
+  on("OverrideSet", { scope: z.string().min(1), entity: z.string().min(1), facet: z.string().min(1), value: z.unknown() }),
+  /** A step can't run until something exists, e.g. a character's look. */
+  on("NodeBlocked", { node: NodeKey, reason: z.string().min(1) }),
+  /** The creator added an asset or output to one step's context ("@P2-13 match this tone"), saved with the step. */
+  on("MentionAdded", { node: NodeKey, ref: z.string().min(1), note: z.string().optional() }),
+  /** The creator removed one automatic input from one step (✕ on a chip). */
+  on("DefaultRemoved", { node: NodeKey, ref: z.string().min(1) }),
   on("NodeReady", { node: NodeKey }),
   /**
    * The scheduler followed an edge. `edge` is its index in the graph's `edges`,
@@ -59,6 +75,8 @@ export const EngineEvent = z.discriminatedUnion("type", [
      * `after:pick`, `over`). If any changes later, the version is stale (docs/03-engine.md §6).
      */
     inputs: z.record(Hash).optional(),
+    /** Asset facet versions it used, `Entity.facet` → version, for lineage. */
+    assets: z.record(z.string()).optional(),
   }),
   on("VerdictRecorded", {
     node: NodeKey,
@@ -116,6 +134,8 @@ export const EngineEvent = z.discriminatedUnion("type", [
 ]);
 
 export type EngineEvent = z.infer<typeof EngineEvent>;
+/** An event as written by the engine: fields with defaults may be left out. */
+export type EngineEventInput = z.input<typeof EngineEvent>;
 export type EventType = EngineEvent["type"];
 export type EventOf<T extends EventType> = Extract<EngineEvent, { type: T }>;
 

@@ -4,6 +4,12 @@ import { openDatabase, SqliteEventLog } from "@kriya/store";
 import { loadDir } from "../src/load.js";
 import { Recorder, readRun, replay, Scheduler, type Decision, type Executors, type StepContext } from "../src/index.js";
 
+/** The series' locked context the Mohalla Mitra recipes inherit. */
+const SERIES = { series: { style: "2D cartoon, flat colors", rules: "no real film songs", cast: ["Mitra", "Bheem"] } };
+
+/** A fake Library where every facet exists at v1. */
+const LIBRARY = { assets: { facet: (entity: string, facet: string) => ({ version: "v1", value: `${entity}:${facet}` }) } };
+
 const { graphs } = loadDir(resolve(__dirname, "../../../examples"));
 const part = graphs.find((g) => g.graph === "part_recipe")!;
 
@@ -38,8 +44,8 @@ function finishedPart() {
   };
   const log = new SqliteEventLog(openDatabase(":memory:"));
   const rec = Recorder.start(log, "run1");
-  const s = new Scheduler(part, rec, exec, graphs);
-  s.start("a".repeat(64), { story_pages: "pages 7–9", part_no: 3 });
+  const s = new Scheduler(part, rec, exec, graphs, LIBRARY);
+  s.start("a".repeat(64), { story_pages: "pages 7–9", part_no: 3 }, SERIES);
   s.run();
   expect(rec.state.status).toBe("completed");
   calls.length = 0;
@@ -138,7 +144,7 @@ describe("what counts as a change", () => {
   it("renaming a step's label doesn't make it stale (rule 4)", () => {
     const { s, rec } = finishedPart();
     const g = { ...part, nodes: part.nodes.map((n) => (n.id === "assemble" ? { ...n, name: "Make the Reel" } : n)) };
-    const s2 = new Scheduler(g, rec, { produce: () => [], decide: () => undefined }, graphs);
+    const s2 = new Scheduler(g, rec, { produce: () => [], decide: () => undefined }, graphs, LIBRARY);
     expect(s2.stale()).toEqual([]);
     expect(s.stale()).toEqual([]);
   });

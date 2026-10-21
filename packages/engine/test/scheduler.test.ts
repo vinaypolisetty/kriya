@@ -4,6 +4,12 @@ import { openDatabase, SqliteEventLog } from "@kriya/store";
 import { loadDir, loadText } from "../src/load.js";
 import { Recorder, readRun, replay, Scheduler, type Decision, type Executors, type Graph, type Node, type StepContext } from "../src/index.js";
 
+/** The series' locked context the Mohalla Mitra recipes inherit. */
+const SERIES = { series: { style: "2D cartoon, flat colors", rules: "no real film songs", cast: ["Mitra", "Bheem"] } };
+
+/** A fake Library where every facet exists at v1. */
+const LIBRARY = { assets: { facet: (entity: string, facet: string) => ({ version: "v1", value: `${entity}:${facet}` }) } };
+
 const EXAMPLES = resolve(__dirname, "../../../examples");
 const { graphs } = loadDir(EXAMPLES);
 const graph = (id: string) => graphs.find((g) => g.graph === id)!;
@@ -35,8 +41,8 @@ function fakes(
 function run(g: Graph, exec: Executors, inputs: Record<string, unknown> = {}) {
   const log = new SqliteEventLog(openDatabase(":memory:"));
   const rec = Recorder.start(log, "run1");
-  const s = new Scheduler(g, rec, exec, graphs);
-  s.start(RELEASE, inputs);
+  const s = new Scheduler(g, rec, exec, graphs, LIBRARY);
+  s.start(RELEASE, inputs, SERIES);
   const state = s.run();
   const events = readRun(log, "run1");
   const path = events.filter((e) => e.type === "EdgeFollowed").map((e) => `${e.from}→${e.to}`);
