@@ -16,6 +16,9 @@ export type Issue = {
 
 const sources = (e: Edge) => (Array.isArray(e.from) ? e.from : [e.from]);
 
+/** Above this many turns an agent without a budget gets a warning. */
+export const LONG_AGENT_TURNS = 50;
+
 export function validateBundle(graphs: Graph[]): Issue[] {
   const issues: Issue[] = [];
   const names = new Map<string, number>();
@@ -49,6 +52,16 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
     }
     if (n.kind === "map" && n.graph === g.graph) err(["nodes", i, "graph"], "a graph can't map over itself");
     if (n.kind === "map") checkRootRef(n.over, ["nodes", i, "over"]);
+  });
+
+  // Long-running agents need a spend cap; turns alone don't bound cost.
+  g.nodes.forEach((n, i) => {
+    if (n.kind === "agent" && n.max_turns > LONG_AGENT_TURNS && !n.budget) {
+      warn(
+        ["nodes", i, "max_turns"],
+        `agent '${n.id}' can take up to ${n.max_turns} turns with no budget; add budget: { usd: … } so a long run can't overspend`,
+      );
+    }
   });
 
   // Declared types used by fields.

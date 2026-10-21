@@ -64,6 +64,29 @@ describe("graph checks", () => {
     expect(warnings.some((w) => /button 'redo'/.test(w.message))).toBe(true);
   });
 
+  describe("agent limits", () => {
+    const agent = (extra: string) =>
+      minimal(`nodes:\n  - id: a\n    kind: agent\n    goal: g\n    tools: [t]\n${extra}`);
+    const warnings = (text: string) => loadText(text).problems.filter((p) => p.severity === "warning");
+
+    it("allows a high max_turns", () => {
+      expect(errors(agent(`    max_turns: 200\n`))).toEqual([]);
+    });
+
+    it("warns when a long agent has no budget", () => {
+      expect(warnings(agent(`    max_turns: 200\n`)).some((w) => /200 turns with no budget/.test(w.message))).toBe(true);
+    });
+
+    it("doesn't warn when a long agent has a budget", () => {
+      expect(warnings(agent(`    max_turns: 200\n    budget: { usd: 5 }\n`))).toEqual([]);
+    });
+
+    it("rejects a zero budget and unknown budget keys", () => {
+      expect(errors(agent(`    budget: { usd: 0 }\n`)).length).toBeGreaterThan(0);
+      expect(errors(agent(`    budget: { dollars: 5 }\n`)).length).toBeGreaterThan(0);
+    });
+  });
+
   it("reports bad conditions with the reason", () => {
     const text = minimal(`nodes:\n${tool("a")}${tool("b")}edges:\n  - { from: a, to: b, when: "x ==" }\n`);
     expect(errors(text)[0]?.message).toMatch(/ends too early/);

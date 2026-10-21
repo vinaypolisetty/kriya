@@ -85,6 +85,7 @@ Two kinds of "multiple", and they work differently ([Decision D-04](17-decisions
 - Every output is a **version** in the node's **version tree**, with parents, prompt, inputs, model version and verdicts.
 - **Refine** creates a child version ("make the villain funnier" → A2).
 - **Adopt** creates a version with two parents ("take A2 but use the darker branch's ending").
+- **Replay change** re-applies the instruction that produced a version somewhere else (another branch, or every shot with Bheem). Both create new candidates; neither touches the source or moves a lock.
 - **Lock** marks one version as the node's output. Only the locked version, plus the locked context from above, crosses node boundaries.
 - Siblings **vanish from context, not from history**: they stay in the tree, so you can unlock and lock another later.
 
@@ -136,10 +137,10 @@ Conversation happens at the node, episode and project levels, each with a scope:
 
 Rules:
 1. **Higher levels direct, they don't edit.** Changes become new versions in each node's tree.
-2. **Locks are respected.** Touching a locked node becomes a proposal.
+2. **Locks are respected.** Touching a locked node becomes a proposal: approved by the creator in ask mode, auto-approved (recorded, notified, revertible) in auto mode.
 3. **Context flows down, summaries flow up.**
 4. **Questions go up.** A micro-agent that hits a continuity conflict asks the episode agent instead of guessing.
-5. **Higher-level agents show a plan first** by default; creators can switch a step or level to automatic. Locked nodes still require approval. ([Decision D-08](17-decisions.md))
+5. **Higher-level agents show a plan first** by default; creators can switch a step or level to automatic. In automatic mode locked nodes don't ask first; every change to a lock is still recorded, notified and revertible. ([D-08](17-decisions.md), [D-28](17-decisions.md))
 
 In the UI this is **one chat panel whose scope follows the selection**, with a breadcrumb showing who you're talking to.
 

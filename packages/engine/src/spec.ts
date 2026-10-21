@@ -57,7 +57,9 @@ export const AgentNode = z
     goal: z.string().min(1),
     tools: z.array(z.string()).min(1),
     uses: z.array(Ref).default([]),
-    max_turns: z.number().int().min(1).max(50).default(8),
+    max_turns: z.number().int().min(1).default(8),
+    /** Spend cap for the whole agent run, checked between turns. */
+    budget: z.object({ usd: z.number().positive() }).strict().optional(),
     context: ContextMode.default("local"),
     trust: Trust.default("ask_me"),
     out: Fields.default({}),
