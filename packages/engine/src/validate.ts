@@ -4,7 +4,7 @@
  * show up in the builder, not halfway through a paid run.
  */
 import { END, type Edge, type Graph, type Node } from "./spec.js";
-import { ConditionError, literalsComparedTo, parseCondition } from "./condition.js";
+import { ConditionError, literalsComparedTo, parseCondition, pathsIn } from "./condition.js";
 
 export type Issue = {
   graph: string;
@@ -91,6 +91,7 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
     if (e.when !== undefined) {
       try {
         const expr = parseCondition(e.when);
+        if (pathsIn(expr).some((p) => p[0] === "result")) checkResult(e, i);
         for (const s of sources(e)) {
           const n = nodes.get(s);
           if (n?.kind === "screen") {
@@ -106,6 +107,14 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
         if (ex instanceof ConditionError) err(["edges", i, "when"], `condition "${e.when}": ${ex.message}`);
         else throw ex;
       }
+    }
+  });
+
+  // A screen that shows a step should have a button that locks it (D-42).
+  g.nodes.forEach((n, i) => {
+    if (n.kind !== "screen" || !n.show) return;
+    if (!n.actions.some((a) => a.locks)) {
+      warn(["nodes", i, "actions"], `screen '${n.id}' shows '${n.show}' but none of its buttons locks it; add locks: true to the button that accepts it`);
     }
   });
 
@@ -142,6 +151,20 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
   Object.entries(g.outputs).forEach(([k, ref]) => checkRootRef(ref, ["outputs", k]));
 
   return issues;
+
+  /** `result` is the one candidate the edge's source step just made (D-43). */
+  function checkResult(e: Edge, i: number) {
+    const from = sources(e);
+    if (from.length > 1) return err(["edges", i, "when"], "'result' is unclear on an edge that joins several steps; name the step instead");
+    const n = nodes.get(from[0]!);
+    if (!n) return;
+    if (n.kind !== "model" && n.kind !== "agent" && n.kind !== "tool") {
+      return err(["edges", i, "when"], `'${n.id}' is a ${n.kind} step, so it has no 'result'${n.kind === "screen" ? "; use 'action' for the button pressed" : ""}`);
+    }
+    if (n.kind === "model" && n.options > 1) {
+      err(["edges", i, "when"], `'${n.id}' makes ${n.options} options, so 'result' is unclear. Add a pick screen or a checker`);
+    }
+  }
 
   function checkRootRef(ref: string, path: Issue["path"]) {
     const root = ref.split(/[.@]/)[0]!;

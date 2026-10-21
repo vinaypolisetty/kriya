@@ -29,6 +29,11 @@ export type StepContext = {
   inputs: Record<string, unknown>;
   /** The step's full key, e.g. `per_shot[P3-04].draw`. */
   key: string;
+  /**
+   * What the step's `uses` resolve to: locked outputs only, never rejected
+   * candidates (rule 3). Library facets (`@look`) arrive on Day 12.
+   */
+  uses: Record<string, unknown>;
 };
 
 export type Decision = { action: string; selection?: string[]; note?: string };
@@ -131,7 +136,7 @@ export class Scheduler {
     const n = this.rec.state.nodes[key]!;
     // Derived from recorded state, never kept in memory, so a resumed run counts the same.
     const visit = (node.kind === "screen" ? n.decisions.length : n.attempts) + 1;
-    const sc: StepContext = { visit, inputs: ctx.inputs, key };
+    const sc: StepContext = { visit, inputs: ctx.inputs, key, uses: this.resolveUses(node, ctx) };
 
     switch (node.kind) {
       case "model":
@@ -144,16 +149,24 @@ export class Scheduler {
         outputs.forEach((output, i) =>
           this.rec.record({ type: "CandidateProduced", node: key, attempt, candidate: i + 1, output, parents: [], cost_usd: 0 }),
         );
-        this.rec.record({ type: "Locked", node: key, version: versionId(attempt, 1), by: "auto" });
+        // Who locks it (D-42): code output and `trust: always` lock themselves; a step a
+        // screen shows waits for that screen; anything else asks on a generated approval.
+        if (node.kind === "tool" || node.trust === "always") {
+          this.rec.record({ type: "Locked", node: key, version: versionId(attempt, 1), by: "auto" });
+        } else if (!this.reviewer(node.id, ctx)) {
+          if (!this.approve(key, node, ctx, attempt)) return;
+        }
         break;
       }
       case "screen": {
         const ticket = `${key}:${visit}`;
         this.rec.record({ type: "Suspended", node: key, ticket, kind: "human" });
         const d = this.exec.decide(node, sc);
-        if (!node.actions.some((a) => a.id === d.action)) throw new Error(`step '${key}' has no button '${d.action}'`);
-        this.rec.record({ type: "HumanDecision", node: key, ...d });
+        const button = node.actions.find((a) => a.id === d.action);
+        if (!button) throw new Error(`step '${key}' has no button '${d.action}'`);
+        this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
         this.rec.record({ type: "Resumed", node: key, ticket });
+        if (button.locks && node.show && !this.lockShown(key, node, ctx, d)) return;
         break;
       }
       case "map":
@@ -162,6 +175,81 @@ export class Scheduler {
         return this.fail(key, "'subgraph' steps can't run yet (coming in a later update)");
     }
     this.complete(key, ctx);
+  }
+
+  /** The screen in this recipe that shows a step, if any. */
+  private reviewer(stepId: string, ctx: Context): ScreenNode | undefined {
+    return ctx.graph.nodes.find((n): n is ScreenNode => n.kind === "screen" && n.show?.split(".")[0] === stepId);
+  }
+
+  /**
+   * Asks for approval of a step no screen shows, on a generated screen (D-42).
+   * `when_confident` asks too until checkers exist (Day 20). Returns false if it failed.
+   */
+  private approve(key: string, node: Node, ctx: Context, attempt: number): boolean {
+    const n = this.rec.state.nodes[key]!;
+    const screen: ScreenNode = {
+      id: node.id,
+      kind: "screen",
+      name: `Approve '${node.name ?? node.id}'`,
+      review: "approve",
+      show: node.id,
+      beside: [],
+      actions: [{ id: "approve", needs: [], locks: true }],
+      trust: "ask_me",
+      batch: false,
+    };
+    const visit = n.decisions.length + 1;
+    const ticket = `${key}:approve:${visit}`;
+    this.rec.record({ type: "Suspended", node: key, ticket, kind: "human" });
+    const d = this.exec.decide(screen, { visit, inputs: ctx.inputs, key, uses: {} });
+    if (d.action !== "approve") throw new Error(`the approval for '${key}' only has an 'approve' button, not '${d.action}'`);
+    this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
+    this.rec.record({ type: "Resumed", node: key, ticket });
+    const version = this.chooseVersion(key, d, attempt);
+    if (!version) return false;
+    this.rec.record({ type: "Locked", node: key, version, by: "human", ...(d.note ? { why: d.note } : {}) });
+    return true;
+  }
+
+  /** A locking button on a screen locks the chosen version of the step it shows. */
+  private lockShown(screenKey: string, screen: ScreenNode, ctx: Context, d: Decision): boolean {
+    const target = ctx.prefix + screen.show!.split(".")[0];
+    const t = this.rec.state.nodes[target];
+    if (!t || Object.keys(t.versions).length === 0) {
+      this.fail(screenKey, `there's nothing from '${screen.show}' to lock yet`);
+      return false;
+    }
+    const version = this.chooseVersion(target, d, t.attempts, screenKey);
+    if (!version) return false;
+    this.rec.record({ type: "Locked", node: target, version, by: "human", ...(d.note ? { why: d.note } : {}) });
+    return true;
+  }
+
+  /**
+   * Which version a decision means: the one selected, or the only candidate of
+   * the latest attempt. Fails plainly when it's ambiguous or doesn't exist.
+   */
+  private chooseVersion(target: string, d: Decision, attempt: number, failKey = target): string | undefined {
+    const t = this.rec.state.nodes[target]!;
+    if (d.selection && d.selection.length > 0) {
+      if (d.selection.length > 1) return void this.fail(failKey, "pick exactly one version to lock");
+      const id = d.selection[0]!;
+      if (!t.versions[id]) return void this.fail(failKey, `version ${id} of '${target}' doesn't exist`);
+      return id;
+    }
+    const latest = Object.values(t.versions).filter((v) => v.attempt === attempt);
+    if (latest.length !== 1) return void this.fail(failKey, `pick one of the ${latest.length} options of '${target}' to lock`);
+    return latest[0]!.id;
+  }
+
+  /** Resolves a step's `uses` against locked outputs only. */
+  private resolveUses(node: Node, ctx: Context): Record<string, unknown> {
+    if (!("uses" in node)) return {};
+    const scope = this.scope(ctx);
+    const out: Record<string, unknown> = {};
+    for (const ref of node.uses) if (!ref.includes("@")) out[ref] = evaluate(parseCondition(ref), scope);
+    return out;
   }
 
   /** Starts a map: reads its list and makes each item's first steps ready. */
@@ -304,14 +392,42 @@ export class Scheduler {
       if (!n) continue;
       if (node.kind === "screen") {
         const d = n.decisions.at(-1);
-        if (d) scope[node.id] = { action: d.action, selected: d.selection, note: d.note };
+        if (d) scope[node.id] = { action: d.action, selected: this.selected(ctx, node, d), note: d.note };
       } else if (n.locked) {
         scope[node.id] = n.versions[n.locked.version]?.output;
       }
     }
     scope.inputs = ctx.inputs;
     scope.item = ctx.inputs.item;
-    if (fromKey) scope.action = s.nodes[fromKey]?.decisions.at(-1)?.action;
+    if (fromKey) {
+      const from = s.nodes[fromKey];
+      scope.action = from?.decisions.at(-1)?.action;
+      // D-43: an edge may read the candidate its source step just made as `result`.
+      scope.result = from ? Object.values(from.versions).at(-1)?.output : undefined;
+    }
     return scope;
   }
+
+  /**
+   * A screen's `selected`: the shown field (`show: draw.image` → the image) of
+   * the version the decision chose: the selected one, or the one it locked.
+   */
+  private selected(ctx: Context, screen: ScreenNode, d: { selection?: string[] | undefined }): unknown {
+    if (!screen.show) return d.selection;
+    const [root, ...path] = screen.show.split(".");
+    const t = this.rec.state.nodes[ctx.prefix + root];
+    if (!t) return undefined;
+    const ids = d.selection && d.selection.length > 0 ? d.selection : t.locked ? [t.locked.version] : [];
+    const values = ids.map((id) => {
+      let v: unknown = t.versions[id]?.output;
+      for (const k of path) v = v != null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
+      return v;
+    });
+    return values.length === 1 ? values[0] : values;
+  }
+}
+
+/** Drops undefined fields, which can't be recorded. */
+function clean<T extends object>(o: T): T {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 }

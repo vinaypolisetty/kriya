@@ -24,6 +24,8 @@ function fakes(
     decide(node, ctx) {
       calls.push(`${node.id}#${ctx.visit}`);
       const d = decisions[node.id];
+      // Generated approvals (D-42) for steps no screen shows: approve unless the test says otherwise.
+      if (!d && node.show === node.id) return { action: "approve" };
       if (!d) throw new Error(`test has no decision for '${node.id}'`);
       return d(ctx);
     },
@@ -187,10 +189,9 @@ describe("for-each (map) and join: the whole Part", () => {
     const { state } = run(graph("part_recipe"), part(), { story_pages: "…", part_no: 3 });
     const out = state.nodes.per_shot!.versions["1.1"]!.output;
     expect(out.clip).toEqual(["clip:P3-01", null, "clip:P3-03"]);
-    expect(out.panel).toEqual([["1.1"], ["1.1"], ["1.1"]]);
-    // `listen.selected` is the version ids picked on the screen; turning a pick into the
-    // picked output (the audio itself) is what locking does, on Day 8.
-    expect(state.nodes.voices!.versions["1.1"]!.output.audio).toEqual([["1.1"], ["1.1"]]);
+    expect(out.panel).toEqual(["img:P3-01", "img:P3-02", "img:P3-03"]);
+    // `listen.selected` is the approved audio itself (D-42), not version ids.
+    expect(state.nodes.voices!.versions["1.1"]!.output.audio).toEqual(["wav:L1", "wav:L2"]);
   });
 
   it("each item counts its own loops", () => {

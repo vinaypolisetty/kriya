@@ -64,6 +64,35 @@ describe("graph checks", () => {
     expect(warnings.some((w) => /button 'redo'/.test(w.message))).toBe(true);
   });
 
+  describe("result and locking buttons", () => {
+    const warnings = (text: string) => loadText(text).problems.filter((p) => p.severity === "warning");
+
+    it("refuses result when the step makes several options", () => {
+      const text = minimal(`nodes:\n  - { id: draw, kind: model, capability: image.generate, options: 3 }\n${tool("b")}edges:\n  - { from: draw, to: b, when: "result.ok == true" }\n`);
+      expect(errors(text)[0]?.message).toMatch(/'draw' makes 3 options, so 'result' is unclear/);
+    });
+
+    it("refuses result on a screen and points to action", () => {
+      const text = minimal(`nodes:\n  - { id: s, kind: screen, review: approve, actions: [{ id: ok }] }\n${tool("b")}edges:\n  - { from: s, to: b, when: "result.ok == true" }\n`);
+      expect(errors(text)[0]?.message).toMatch(/'s' is a screen step, so it has no 'result'; use 'action'/);
+    });
+
+    it("refuses result on a join", () => {
+      const text = minimal(`nodes:\n${tool("a")}${tool("b")}${tool("c")}edges:\n  - { from: [a, b], to: c, wait: all, when: "result.ok == true" }\n`);
+      expect(errors(text)[0]?.message).toMatch(/'result' is unclear on an edge that joins/);
+    });
+
+    it("allows result on a single-candidate step", () => {
+      const text = minimal(`nodes:\n  - { id: speak, kind: model, capability: audio.speech }\n${tool("b")}edges:\n  - { from: speak, to: b, when: "result.seconds > 8" }\n`);
+      expect(errors(text)).toEqual([]);
+    });
+
+    it("warns when a screen shows a step but no button locks it", () => {
+      const text = minimal(`nodes:\n${tool("a")}  - { id: s, kind: screen, review: approve, show: a.x, actions: [{ id: ok }] }\nedges:\n  - { from: a, to: s }\n  - { from: s, to: END }\n`);
+      expect(warnings(text).some((w) => /shows 'a.x' but none of its buttons locks it/.test(w.message))).toBe(true);
+    });
+  });
+
   describe("agent limits", () => {
     const agent = (extra: string) =>
       minimal(`nodes:\n  - id: a\n    kind: agent\n    goal: g\n    tools: [t]\n${extra}`);
