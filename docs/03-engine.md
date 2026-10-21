@@ -92,6 +92,14 @@ Slow things become tickets:
 
 Human work and model work use the same mechanism. **Manual mode** (the creator runs a model themselves and uploads the result) is the same suspend/resume with a different ticket type.
 
+### Crash safety in v0.1 ([D-46](17-decisions.md))
+
+- **Atomic steps.** Everything the scheduler records between two outside calls (a model, a tool, a person) is written in one transaction. A crash can only fall between outside calls, never in the middle of recording a step.
+- **Write before calling out.** The batch is committed *before* each outside call, so a crash during the call loses nothing that came before it.
+- **Idempotency keys.** Every model, tool or agent call carries `run/step#attempt`. The attempt number comes from recorded state, so after a crash the engine asks again with the *same* key and the provider returns the job it already ran, unpaid.
+- **`recover()`** after a restart repeats only the outside calls that were in flight: model calls with their original key, screens shown again (no cost). Jobs waiting on a ticket keep waiting for `deliver()`.
+- **Tested at every write**: a full Part (with slow jobs on tickets) is crashed at each of its writes, resumed and finished. Every time, the final state, the paid jobs and the event log are identical to a run that never crashed.
+
 ## 5. The loop controller (generate → check → fix)
 
 After each verdict a policy picks the next action:

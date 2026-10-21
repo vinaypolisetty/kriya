@@ -41,14 +41,20 @@ export type StepContext = {
   instruction?: string;
   /** For a screen: the candidates on show (latest attempt of the step it shows), with the shown field. */
   shows?: { version: string; value: unknown }[];
+  /** For a model, tool or agent call: the same for every try of this attempt, across crashes (`run/step#attempt`). */
+  idempotencyKey?: string;
 };
 
 export type Decision = { action: string; selection?: string[]; note?: string };
 
 /** Runs steps. Day 6–7 use fakes; real adapters implement the same shape. */
 export interface Executors {
-  /** model, tool and agent steps: one output per candidate. */
-  produce(node: Node, ctx: StepContext): Record<string, unknown>[];
+  /**
+   * model, tool and agent steps: one output per candidate, or a ticket for a job
+   * that finishes later (the step waits; see `deliver`). Use `ctx.idempotencyKey`
+   * when submitting to a provider, so asking again after a crash never pays twice.
+   */
+  produce(node: Node, ctx: StepContext): Record<string, unknown>[] | { ticket: string };
   /** screen steps: what the human chose, or undefined if there's no answer yet (the step waits; see `answer`). */
   decide(node: ScreenNode, ctx: StepContext): Decision | undefined;
 }
@@ -93,8 +99,10 @@ export class Scheduler {
 
   /** Starts a run: records RunStarted and makes the starting steps ready. */
   start(release: string, inputs: Record<string, unknown> = {}): void {
-    this.rec.record({ type: "RunStarted", release, graph: this.graph.graph, inputs });
-    for (const id of startNodes(this.graph)) this.rec.record({ type: "NodeReady", node: id });
+    this.atomic(() => {
+      this.rec.record({ type: "RunStarted", release, graph: this.graph.graph, inputs });
+      for (const id of startNodes(this.graph)) this.rec.record({ type: "NodeReady", node: id });
+    });
   }
 
   /** Runs ready steps until the run finishes. Returns the final state. */
@@ -102,19 +110,19 @@ export class Scheduler {
     for (let i = 0; i < MAX_STEPS; i++) {
       if (this.rec.state.status !== "running") return this.rec.state;
       const all = this.instances();
-      if (this.settleMaps(all)) continue;
+      if (this.atomic(() => this.settleMaps(all))) continue;
       const next = all.find((x) => this.status(x.key) === "ready");
       if (!next) {
-        // Waiting for a person (or, later, a provider): the run stays open; `answer` continues it.
+        // Waiting for a person or a provider job: the run stays open; `answer` / `deliver` continue it.
         if (Object.values(this.rec.state.nodes).some((n) => n.status === "awaiting_human" || n.status === "waiting_external")) {
           return this.rec.state;
         }
         const top = this.root();
         const failed = Object.values(this.rec.state.nodes).some((n) => n.status === "failed");
-        this.rec.record({ type: "RunCompleted", status: this.endReached(top) && !failed ? "completed" : "failed" });
+        this.atomic(() => this.rec.record({ type: "RunCompleted", status: this.endReached(top) && !failed ? "completed" : "failed" }));
         return this.rec.state;
       }
-      this.step(next);
+      this.atomic(() => this.step(next));
     }
     throw new Error(`run '${this.rec.runId}' took more than ${MAX_STEPS} steps; this is a bug in kriya, not your recipe`);
   }
@@ -212,10 +220,34 @@ export class Scheduler {
 
     this.rec.record({ type: "AttemptStarted", node: key, attempt: n.attempts + 1 });
     if (target !== key) this.rec.record({ type: "AttemptStarted", node: target, attempt: this.rec.state.nodes[target]!.attempts + 1 });
+    this.call(key, node, ctx);
+  }
+
+  /**
+   * The outside call of a started attempt, then everything that follows it.
+   * `recover` calls this again for an attempt that was in flight at a crash:
+   * same attempt, same idempotency key, so the provider doesn't charge twice.
+   */
+  private call(key: string, node: Producer, ctx: Context): void {
+    const n = this.rec.state.nodes[key]!;
+    const target = node.refines ? ctx.prefix + node.refines : key;
+    const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
+    const sc = this.context(key, node, ctx, n.attempts, target, parent, instruction);
+    sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}`;
+    const result = this.external(() => this.exec.produce(node, sc));
+    if (!Array.isArray(result)) {
+      this.rec.record({ type: "Suspended", node: key, ticket: result.ticket, kind: "model_job" });
+      return;
+    }
+    this.accept(key, node, ctx, result);
+  }
+
+  /** Records a call's outputs as candidates and applies the lock policy. */
+  private accept(key: string, node: Producer, ctx: Context, outputs: Record<string, unknown>[]): void {
+    const target = node.refines ? ctx.prefix + node.refines : key;
+    const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
     const attempt = this.rec.state.nodes[target]!.attempts;
-    const sc = this.context(key, node, ctx, n.attempts + 1, target, parent, instruction);
     const inputs = this.inputsOf(key, node, ctx);
-    const outputs = this.exec.produce(node, sc);
     if (outputs.length === 0) return this.fail(key, "it produced no output");
     outputs.forEach((output, i) =>
       this.rec.record({
@@ -264,7 +296,13 @@ export class Scheduler {
     const n = this.rec.state.nodes[key]!;
     const visit = n.decisions.length + 1;
     this.rec.record({ type: "Suspended", node: key, ticket: `${key}:${visit}`, kind: "human" });
-    const d = this.exec.decide(node, { ...this.context(key, node, ctx, visit), shows: this.onShow(ctx, node.show) });
+    this.ask(key, node, ctx);
+  }
+
+  /** Puts the screen in front of the person (again, after a crash: no cost) and continues if they've answered. */
+  private ask(key: string, node: ScreenNode, ctx: Context): void {
+    const visit = this.rec.state.nodes[key]!.decisions.length + 1;
+    const d = this.external(() => this.exec.decide(node, { ...this.context(key, node, ctx, visit), shows: this.onShow(ctx, node.show) }));
     if (d) this.finishScreen(key, node, ctx, d);
   }
 
@@ -285,8 +323,13 @@ export class Scheduler {
     const n = this.rec.state.nodes[key]!;
     const visit = n.decisions.length + 1;
     this.rec.record({ type: "Suspended", node: key, ticket: `${key}:approve:${visit}`, kind: "human" });
+    this.askAgain(key, node, ctx);
+  }
+
+  private askAgain(key: string, node: Producer, ctx: Context): void {
+    const visit = this.rec.state.nodes[key]!.decisions.length + 1;
     const screen = approvalScreen(node);
-    const d = this.exec.decide(screen, { ...this.context(key, node, ctx, visit), shows: this.onShow(ctx, screen.show) });
+    const d = this.external(() => this.exec.decide(screen, { ...this.context(key, node, ctx, visit), shows: this.onShow(ctx, screen.show) }));
     if (d) this.finishApproval(key, node, ctx, d);
   }
 
@@ -316,27 +359,91 @@ export class Scheduler {
     return sc;
   }
 
+  // ── Durable waits and crash recovery ────────────────────────────────────
+
+  /** A provider job finished: continues the step waiting on its ticket. Call `run()` after. */
+  deliver(ticket: string, outputs: Record<string, unknown>[]): void {
+    this.atomic(() => {
+      const inst = this.instances().find((x) => this.rec.state.nodes[x.key]?.ticket === ticket && this.status(x.key) === "waiting_external");
+      if (!inst || !isProducer(inst.node)) throw new Error(`no step is waiting on ticket '${ticket}'`);
+      this.rec.record({ type: "Resumed", node: inst.key, ticket });
+      this.accept(inst.key, inst.node, inst.ctx, outputs);
+    });
+  }
+
+  /**
+   * After a restart (`Recorder.resume` + a new Scheduler): asks again for every
+   * outside call that was in flight. A model call is repeated with the same
+   * idempotency key, so the provider returns the job it already ran; screens
+   * are simply shown again. Jobs waiting on a ticket keep waiting. Then `run()`.
+   */
+  recover(): void {
+    this.atomic(() => {
+      for (const { key, node, ctx } of this.instances()) {
+        const n = this.rec.state.nodes[key];
+        if (!n) continue;
+        if (isProducer(node) && n.status === "running") this.call(key, node, ctx);
+        else if (node.kind === "screen" && n.status === "awaiting_human") this.ask(key, node, ctx);
+        else if (isProducer(node) && n.status === "awaiting_human") this.askAgain(key, node, ctx);
+      }
+    });
+  }
+
+  /** Runs `fn` as one batch of events: written together, or not at all. */
+  private atomic<T>(fn: () => T): T {
+    if (this.rec.batching) return fn();
+    this.rec.begin();
+    try {
+      const r = fn();
+      this.rec.commit();
+      return r;
+    } catch (err) {
+      this.rec.rollback();
+      throw err;
+    }
+  }
+
+  /**
+   * An outside call (model, tool, person). Everything recorded so far is
+   * written first, so a crash during the call loses nothing that happened
+   * before it; what follows goes in a new batch.
+   */
+  private external<T>(fn: () => T): T {
+    if (!this.rec.batching) return fn();
+    this.rec.commit();
+    try {
+      return fn();
+    } finally {
+      this.rec.begin();
+    }
+  }
+
   // ── Things the creator does mid-run ─────────────────────────────────────
 
   /** Answers a step that is waiting for a human: a screen or a generated approval. Call `run()` after. */
   answer(key: string, d: Decision): void {
+    return this.atomic(() => {
     const inst = this.instances().find((x) => x.key === key);
     if (!inst || this.status(key) !== "awaiting_human") throw new Error(`step '${key}' isn't waiting for an answer`);
     if (inst.node.kind === "screen") this.finishScreen(key, inst.node, inst.ctx, d);
     else if (isProducer(inst.node)) this.finishApproval(key, inst.node, inst.ctx, d);
+    });
   }
 
   /** Locks a version directly (the creator's call, not a screen's). */
   lock(key: string, version: string, why?: string): void {
+    return this.atomic(() => {
     const n = this.rec.state.nodes[key];
     if (!n?.versions[version]) throw new Error(`'${key}' has no version ${version}`);
     this.reopen(`'${key}' was locked to version ${version}`);
     this.rec.record({ type: "Locked", node: key, version, by: "human", ...(why ? { why } : {}) });
     this.refreshStale();
+    });
   }
 
   /** Adds a version the creator wrote or edited by hand (e.g. a corrected shot list). Returns its id. */
   writeVersion(key: string, output: Record<string, unknown>, instruction?: string): string {
+    return this.atomic(() => {
     const n = this.rec.state.nodes[key];
     if (!n) throw new Error(`there's no step '${key}' in this run`);
     this.reopen(`'${key}' got a new version`);
@@ -346,6 +453,7 @@ export class Scheduler {
     this.rec.record({ type: "CandidateProduced", node: key, attempt, candidate: 1, output, parents, cost_usd: 0, ...(instruction ? { instruction } : {}) });
     this.rec.record({ type: "NodeCompleted", node: key });
     return versionId(attempt, 1);
+    });
   }
 
   /** Stale work right now, in run order, with the reason (what a rebuild would redo). */
@@ -362,10 +470,12 @@ export class Scheduler {
    * Stale work the recipe no longer reaches stays stale (parked). Call `run()` after.
    */
   rebuild(): string[] {
+    return this.atomic(() => {
     this.refreshStale();
     const all = this.instances(this.root(), [], true);
     const staleMaps = all.filter((x) => x.node.kind === "map" && this.status(x.key) === "stale").map((x) => x.key);
     return this.readyEarliestStale(all.filter((x) => !staleMaps.some((m) => x.key.startsWith(`${m}[`))));
+    });
   }
 
   private reopen(reason: string): void {
@@ -374,12 +484,16 @@ export class Scheduler {
 
   /** Branches off from a version: later versions of this step go on the new branch. */
   branch(key: string, name: string, from: string): void {
+    return this.atomic(() => {
     this.rec.record({ type: "BranchCreated", node: key, branch: name, from });
     this.rec.record({ type: "BranchSwitched", node: key, branch: name });
+    });
   }
 
   switchBranch(key: string, name: string): void {
+    return this.atomic(() => {
     this.rec.record({ type: "BranchSwitched", node: key, branch: name });
+    });
   }
 
   /**
@@ -389,6 +503,7 @@ export class Scheduler {
    * nothing is locked. Returns the new version ids by key.
    */
   replayChange(sourceKey: string, version: string, onto: string[]): Record<string, string[]> {
+    return this.atomic(() => {
     const v = this.rec.state.nodes[sourceKey]?.versions[version];
     if (!v) throw new Error(`'${sourceKey}' has no version ${version}`);
     if (!v.instruction) throw new Error(`version ${version} of '${sourceKey}' wasn't made from an instruction, so there's nothing to replay`);
@@ -414,7 +529,11 @@ export class Scheduler {
       const attempt = this.rec.state.nodes[target]!.attempts;
       const visit = this.rec.state.nodes[stepKey]!.attempts;
       const inputs = this.inputsOf(stepKey, step, inst.ctx);
-      const outputs = this.exec.produce(step, this.context(stepKey, step, inst.ctx, visit, target, parent, v.instruction));
+      const sc = this.context(stepKey, step, inst.ctx, visit, target, parent, v.instruction);
+      sc.idempotencyKey = `${this.rec.runId}/${stepKey}#${visit}`;
+      const result = this.external(() => this.exec.produce(step, sc));
+      if (!Array.isArray(result)) throw new Error(`'${stepKey}' answered with a ticket; replaying a change onto a slow job isn't supported yet`);
+      const outputs = result;
       made[target] = outputs.map((output, i) => {
         this.rec.record({
           type: "CandidateProduced",
@@ -436,6 +555,7 @@ export class Scheduler {
       if (stepKey !== target) this.rec.record({ type: "NodeCompleted", node: stepKey });
     }
     return made;
+    });
   }
 
   // ── Cache keys and stale (docs/03-engine.md §6) ─────────────────────────

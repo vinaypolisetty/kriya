@@ -18,6 +18,8 @@ export interface EventLog {
   append(runId: string, type: string, payload: unknown): number;
   /** A run's events in order, optionally only those after `afterSeq`. */
   read(runId: string, afterSeq?: number): StoredEvent[];
+  /** Appends several events atomically: all of them or none. */
+  appendMany(runId: string, events: { type: string; payload: unknown }[]): void;
 }
 
 const SCHEMA_VERSION = 1;
@@ -64,7 +66,7 @@ export class SqliteEventLog implements EventLog {
   private readonly select: Database.Statement;
 
   constructor(
-    db: Database.Database,
+    private readonly db: Database.Database,
     private readonly now: () => string = () => new Date().toISOString(),
   ) {
     this.insert = db.prepare("INSERT INTO events (run_id, type, payload, at) VALUES (?, ?, ?, ?)");
@@ -75,6 +77,12 @@ export class SqliteEventLog implements EventLog {
     const json = JSON.stringify(payload);
     if (json === undefined) throw new Error(`event '${type}' has a payload that can't be saved as JSON`);
     return Number(this.insert.run(runId, type, json, this.now()).lastInsertRowid);
+  }
+
+  appendMany(runId: string, events: { type: string; payload: unknown }[]): void {
+    this.db.transaction(() => {
+      for (const e of events) this.append(runId, e.type, e.payload);
+    })();
   }
 
   read(runId: string, afterSeq = 0): StoredEvent[] {

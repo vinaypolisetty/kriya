@@ -44,6 +44,22 @@ describe("event log", () => {
     expect(() => db.prepare("DELETE FROM events").run()).toThrow(/append-only/);
   });
 
+  it("appends a batch all together, or not at all", () => {
+    const { log } = memoryLog();
+    log.appendMany("run1", [
+      { type: "A", payload: {} },
+      { type: "B", payload: {} },
+    ]);
+    expect(log.read("run1").map((e) => e.type)).toEqual(["A", "B"]);
+    expect(() =>
+      log.appendMany("run1", [
+        { type: "C", payload: {} },
+        { type: "Bad", payload: undefined },
+      ]),
+    ).toThrow(/can't be saved as JSON/);
+    expect(log.read("run1").map((e) => e.type)).toEqual(["A", "B"]); // C wasn't written either
+  });
+
   it("refuses payloads that aren't JSON", () => {
     const { log } = memoryLog();
     expect(() => log.append("run1", "Bad", undefined)).toThrow(/can't be saved as JSON/);
