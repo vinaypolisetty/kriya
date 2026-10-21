@@ -6,7 +6,7 @@
 |---|---|---|
 | Which node runs next, branches, loops, joins | Yes | Conditions are pure rules on recorded fields; no clock, no randomness |
 | Conditions written in plain English | Yes, at run time | Converted to a rule **when authoring**, never re-interpreted per run |
-| Order of `map` items | Yes | Sorted by stable item key, so parallel execution doesn't change order |
+| Order of `map` items | Yes | The order of the locked source list (recorded data), never completion order, so parallel execution doesn't change it ([D-41](17-decisions.md)) |
 | Which version is locked, what's stale | Yes | Computed from content hashes and lock events |
 | Replay / resume | Yes | Rebuilt from the event log; no model is re-called |
 | Model outputs | **No** | Recorded with prompt, inputs, model version, seed, cost |
