@@ -83,9 +83,9 @@ Written as When / If → Then sentences, using pickers or free typing:
 | Retry limit | Try up to ___ times, then ___ | Try 4 times, then ask me |
 | Same as before | If ___ reuse ___ | Two shots in a row in the same place → edit the first to make the second |
 
-Free typing ("If two shots in a row are in the same place, make the second by editing the first") is converted by the assistant into a rule and shown back as pickers.
+Free typing ("If two shots in a row are in the same place, make the second by editing the first") is converted by the assistant into a rule and shown back as pickers. The saved condition is always the plain condition language, never the typed sentence: the assistant translates once, at authoring time, and is never called when the condition runs ([D-36](17-decisions.md)).
 
-**The key that makes conditions possible:** outputs have **fields**, not just files. The shot list is a list of shots with *characters, place, action, lines, animate*. The assistant infers fields from the step's description and shows them as a simple list the creator can add to.
+**The key that makes conditions possible:** outputs have **fields**, not just files. The shot list is a list of shots with *characters, place, action, lines, animate*. The assistant infers fields from the step's description and shows them as a simple list the creator can add to. Inferred fields are proposals until accepted; once a field is used by a condition or a lock, renaming it changes only its label, never its id ([D-37](17-decisions.md)).
 
 ## Configuration layers
 

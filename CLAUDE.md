@@ -51,8 +51,8 @@ Planned packages (not created yet): `cli`, `web` (review inbox), `adapters` (Rep
 4. **Stable IDs, not names.** Nodes, fields and conditions are referenced by id. Renames must never break references, runs or locks.
 5. **Every loop has a limit.** Any edge that closes a cycle carries `max_loops`. The validator enforces this.
 6. **Pin model versions.** Record the exact provider model version for every call.
-7. **Nothing is silently changed in a locked node.** Changes that touch a lock become proposals the user approves.
-8. **Higher-level agents show a plan before acting** by default (with optional auto mode). Locked nodes always require approval.
+7. **Nothing is silently changed in a locked node.** Changes that touch a lock become proposals. In ask mode the user approves them; in auto mode they apply immediately, are recorded as auto-approved, notify the user and can be reverted to the previous lock (D-28).
+8. **Higher-level agents show a plan before acting** by default (with optional auto mode per step or level). In auto mode, locked nodes don't ask first (D-28).
 9. **Creators bring their own API keys.** Never commit keys; read from `.env`.
 
 ## Code conventions
