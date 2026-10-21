@@ -49,6 +49,8 @@ Why: resumability (replay after a crash), lineage for free (trace any frame back
 
 Storage: an append-only `events` table (SQLite for v0.1, Postgres later) plus projection tables for fast reads.
 
+In code: `events.ts` defines the events, `state.ts` folds them into run state (`apply`, `replay`), and `recorder.ts` records live: each event is checked and applied *before* it is appended, so an event that can't happen (locking a missing version, a tool result with no call) never reaches the log. Payloads must be plain JSON values; anything JSON would silently change (`undefined`, `NaN`, dates) is refused, because replay would then differ from live state.
+
 ## 2. Two graphs: declared and discovered
 
 - The **definition graph** is static, from the recipe.
