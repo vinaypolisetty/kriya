@@ -16,7 +16,7 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | 4 | Fri Oct 16 | Storage ✅ | SQLite (`better-sqlite3`): append-only events; content-addressed blob store. Other tables added when first needed | Write and read a blob by hash |
 | 5 | Sat Oct 17 | Event log ✅ | Append-only events; rebuild state by replay; agent events included (D-26) | Replay == live state, at every event (a crash after any event loses nothing) |
 | 6 | Sun Oct 18 | Scheduler ✅ | Ready queue with fake executors; condition evaluator wired to edges; joins | A branch and a capped loop pass |
-| 7 | Mon Oct 19 | For-each and join ✅ | Map fan-out with stable keys; per-item loops; map outputs as ordered lists (D-41); wait-for-all joins. Map-to-map links by key: when a recipe first needs one | Part graph runs end to end with fakes |
+| 7 | Mon Oct 19 | For-each and join ✅ | Map fan-out with stable keys; per-item loops; map outputs as ordered lists (D-41); wait-for-all joins; [weekly notes](notes/week-01.md). Map-to-map links by key: when a recipe first needs one | Part graph runs end to end with fakes |
 
 (Days 1–3 were completed together on Oct 13.)
 
