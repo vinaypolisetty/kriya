@@ -46,6 +46,8 @@ export type NodeState = {
   costUsd: number;
   failure?: string;
   staleReason?: string;
+  /** For a map step: its items, in list order, and where they were read from. */
+  items?: { keys: string[]; source: string; version: string; path: string[] };
 };
 
 export type RunState = {
@@ -117,6 +119,13 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       const v = version(e, n, e.version);
       const { type: _t, node: _n, version: _v, ...verdict } = e;
       return next({ versions: { ...n.versions, [v.id]: { ...v, verdicts: [...v.verdicts, verdict] } } }, e.cost_usd);
+    }
+
+    case "MapExpanded": {
+      const src = state.nodes[e.source];
+      if (!src?.versions[e.version]) fail(e, `source ${e.source} @ ${e.version} doesn't exist`);
+      if (new Set(e.keys).size !== e.keys.length) fail(e, "two items share a key");
+      return next({ items: { keys: e.keys, source: e.source, version: e.version, path: e.path } });
     }
 
     case "FixChosen":
