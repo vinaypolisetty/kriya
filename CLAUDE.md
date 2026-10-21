@@ -36,6 +36,9 @@ packages/engine/src/
   validate.ts      semantic checks beyond the schema
   load.ts          YAML → graphs, problems with file:line:col
   cli-validate.ts  CLI entry for validation
+  events.ts        Zod union of engine events (the event log's types)
+  state.ts         run state as a pure fold over events: apply / replay
+  recorder.ts      live side: check + apply an event, then append it
 packages/engine/test/   vitest tests
 packages/store/src/
   blobs.ts         content-addressed blob store (sha256, write-once)
