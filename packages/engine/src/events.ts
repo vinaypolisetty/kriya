@@ -24,6 +24,8 @@ const Issue = z.object({ type: z.string(), where: z.string().optional(), what: z
 export const EngineEvent = z.discriminatedUnion("type", [
   on("RunStarted", { release: Hash, graph: z.string().min(1), inputs: z.record(z.unknown()).default({}) }),
   on("NodeReady", { node: NodeKey }),
+  /** The scheduler followed edge number `edge` of the graph (its index in `edges`). Counts toward `max_loops`. */
+  on("EdgeFollowed", { edge: z.number().int().nonnegative(), from: NodeKey, to: z.string().min(1) }),
   on("AttemptStarted", { node: NodeKey, attempt: Count }),
   on("CandidateProduced", {
     node: NodeKey,
