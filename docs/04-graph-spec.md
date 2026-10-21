@@ -147,7 +147,17 @@ Submission recorded in context as: `pick.action`, `pick.selected`, `pick.note`, 
   key: id                 # stable item key (default: id)
 ```
 
-The child graph sees the item as `item`. Child instances are keyed by `item.<key>` so they survive list regeneration.
+The child graph sees the item as `item`. Child instances are keyed by `item.<key>` so they survive list regeneration: the steps of shot P3-04 are `per_shot[P3-04].draw`, `per_shot[P3-04].pick`, …. Keys use letters, digits, `-` and `_`, and must be unique in the list.
+
+Each item moves on as soon as its own steps finish. The map step finishes when **every** item has; if any item didn't finish, the map fails and names the items, so nothing downstream runs on a partial set.
+
+**What later steps see** ([D-41](17-decisions.md)): for each output the child graph declares, one list in the order of the source list, with `null` where an item produced nothing. With `shot_recipe`'s `outputs: { panel, clip }`:
+
+```
+per_shot.panel   → [panel 1, panel 2, …, panel 13]
+per_shot.clip    → [clip, null, null, clip, …]    # still shots have no clip
+per_shot[P3-04].clip   → one item's output
+```
 
 ### `subgraph`: run a graph once (or `count` times)
 
