@@ -31,7 +31,7 @@ nodes:
     beside: [item.action, item.lines, item.characters]
     batch: true
     actions:
-      - { id: lock, needs: [selection] }
+      - { id: lock, needs: [selection], locks: true }
       - { id: edit, needs: [selection, note] }
       - { id: crop, needs: [selection, region] }
       - { id: retry, needs: [note] }

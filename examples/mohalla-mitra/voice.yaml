@@ -37,12 +37,12 @@ nodes:
     beside: [item.hinglish, item.caption_en]
     batch: true
     actions:
-      - { id: approve }
+      - { id: approve, locks: true }
       - { id: redo, needs: [note] }
 
 edges:
-  - { from: speak, to: too_long, when: "speak.seconds > 8" }
-  - { from: speak, to: listen, when: "speak.seconds <= 8" }
+  - { from: speak, to: too_long, when: "result.seconds > 8" }
+  - { from: speak, to: listen, when: "result.seconds <= 8" }
   - { from: too_long, to: listen }
   - { from: listen, to: speak, when: "action == 'redo'", max_loops: 4 }
   - { from: listen, to: END, when: "action == 'approve'" }

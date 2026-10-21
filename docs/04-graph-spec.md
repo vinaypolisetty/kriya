@@ -127,7 +127,7 @@ Agents may only call the tools listed. Each turn is recorded. (Decision: explici
   batch: true             # review all items of the map on one screen
   trust: ask_me           # or when_confident: an AI judge may decide when confident
   actions:                # buttons; each is a value of `action` that edges route on
-    - { id: lock,  needs: [selection] }
+    - { id: lock,  needs: [selection], locks: true }   # this button locks the picked version of `draw`
     - { id: edit,  needs: [selection, note] }
     - { id: crop,  needs: [selection, region] }
     - { id: retry, needs: [note] }
@@ -135,7 +135,18 @@ Agents may only call the tools listed. Each turn is recorded. (Decision: explici
 
 The screen is **generated** from `review` + `show` + `actions`; creators never lay it out. `needs` declares what the submission must include; the engine validates it before continuing.
 
-Submission recorded in context as: `pick.action`, `pick.selected`, `pick.note`, `pick.region`. Inside edges from the screen, `action` refers to the submitted button.
+Submission recorded in context as: `pick.action`, `pick.selected`, `pick.note`, `pick.region`. Inside edges from the screen, `action` refers to the submitted button. `pick.selected` is the shown field of the chosen version (with `show: draw.image`, the image itself), not a version id.
+
+**Who locks a step** ([D-42](17-decisions.md)):
+
+| Step | Locked by |
+|---|---|
+| `tool` | Itself, automatically (code output) |
+| `model` / `agent` with `trust: always` | Itself, automatically |
+| A step some screen `show`s | That screen, when a button with `locks: true` is pressed: the selected version, or the only candidate of the latest attempt |
+| Any other `ask_me` / `when_confident` step | A **generated approval** screen ("Approve 'Animate the shot'"). `when_confident` asks too until checkers exist |
+
+The creator's note on a locking button is kept as the lock's `why` (D-29).
 
 ### `map`: run a graph once per item
 
@@ -203,6 +214,7 @@ path    := name ('.' name)*
 ```
 
 - Paths read recorded data only: node outputs, screen submissions (`action`, `pick.note`), the current item, inherited context.
+- `<step>.<field>` always means that step's **locked** output. `result.<field>` means the candidate the edge's own source step **just made**, before anyone locks it: route on a fresh draft (`when: "result.seconds > 8"`) without waiting for review ([D-43](17-decisions.md)). `result` needs a single candidate: not on screens, maps or joins, or a step with `options` > 1.
 - Missing paths evaluate to `undefined` (never throw).
 - No function calls, assignment, clock or randomness. Parse errors are reported with the reason.
 
@@ -228,6 +240,8 @@ Implemented in `validate.ts`. Errors block publishing; warnings don't.
 | Field types must be primitives or declared types | error |
 | Conditions must parse | error |
 | `action == 'x'` on an edge from a screen must name one of its buttons | error |
+| `result` only on an edge from one model, agent or tool step that makes a single candidate | error |
+| A screen that `show`s a step with no `locks: true` button | warning |
 | Every cycle must pass through an edge with `max_loops` | error |
 | There must be at least one start node | error |
 | A screen button that no edge handles | warning |

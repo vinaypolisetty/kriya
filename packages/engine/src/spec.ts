@@ -81,6 +81,8 @@ export const ScreenAction = z
     id: Id,
     label: z.string().optional(),
     needs: z.array(z.enum(["selection", "note", "region"])).default([]),
+    /** Pressing this button locks the chosen version of the step the screen shows (D-42). */
+    locks: z.boolean().default(false),
   })
   .strict();
 

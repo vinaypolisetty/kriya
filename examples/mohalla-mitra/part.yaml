@@ -48,7 +48,7 @@ nodes:
     review: approve
     show: shot_list.shots
     actions:
-      - { id: approve }
+      - { id: approve, locks: true }
       - { id: redo, needs: [note] }
 
   - id: per_shot
@@ -81,7 +81,7 @@ nodes:
     review: approve
     show: assemble.reel
     actions:
-      - { id: approve }
+      - { id: approve, locks: true }
       - { id: fix, needs: [note] }
 
 edges:
