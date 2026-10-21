@@ -24,8 +24,16 @@ const Issue = z.object({ type: z.string(), where: z.string().optional(), what: z
 export const EngineEvent = z.discriminatedUnion("type", [
   on("RunStarted", { release: Hash, graph: z.string().min(1), inputs: z.record(z.unknown()).default({}) }),
   on("NodeReady", { node: NodeKey }),
-  /** The scheduler followed edge number `edge` of the graph (its index in `edges`). Counts toward `max_loops`. */
-  on("EdgeFollowed", { edge: z.number().int().nonnegative(), from: NodeKey, to: z.string().min(1) }),
+  /**
+   * The scheduler followed an edge. `edge` is its index in the graph's `edges`,
+   * prefixed inside a map item (`per_shot[P3-04].1`), so each item counts its own loops toward `max_loops`.
+   */
+  on("EdgeFollowed", { edge: z.string().min(1), from: NodeKey, to: z.string().min(1) }),
+  /**
+   * A for-each (`map`) step read its list: one child run per key, in list order.
+   * The items themselves stay in the source step's locked version (`source` @ `version`, at `path`).
+   */
+  on("MapExpanded", { node: NodeKey, keys: z.array(z.string()), source: NodeKey, version: z.string(), path: z.array(z.string()) }),
   on("AttemptStarted", { node: NodeKey, attempt: Count }),
   on("CandidateProduced", {
     node: NodeKey,

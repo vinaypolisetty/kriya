@@ -33,7 +33,7 @@ function fakes(
 function run(g: Graph, exec: Executors, inputs: Record<string, unknown> = {}) {
   const log = new SqliteEventLog(openDatabase(":memory:"));
   const rec = Recorder.start(log, "run1");
-  const s = new Scheduler(g, rec, exec);
+  const s = new Scheduler(g, rec, exec, graphs);
   s.start(RELEASE, inputs);
   const state = s.run();
   const events = readRun(log, "run1");
@@ -138,11 +138,102 @@ describe("determinism", () => {
   });
 });
 
-describe("not yet supported", () => {
-  it("says plainly that for-each steps can't run yet", () => {
-    const exec = fakes({}, { approve_shots: () => ({ action: "approve" }) });
+describe("for-each (map) and join: the whole Part", () => {
+  const shots = [
+    { id: "P3-01", animate: true, lines: [] },
+    { id: "P3-02", animate: false, lines: [] },
+    { id: "P3-03", animate: true, lines: [] },
+  ];
+  const lines = [
+    { id: "L1", speaker: "Mitra" },
+    { id: "L2", speaker: "Bheem" },
+  ];
+
+  const part = (overrides: { pick?: (c: StepContext) => Decision } = {}) =>
+    fakes(
+      {
+        shot_list: () => ({ shots, lines, hook: "Who will close the valve?" }),
+        draw: (c) => ({ image: `img:${(c.inputs.item as { id: string }).id}` }),
+        animate: (c) => ({ clip: `clip:${(c.inputs.item as { id: string }).id}` }),
+        speak: (c) => ({ audio: `wav:${(c.inputs.item as { id: string }).id}`, seconds: 4 }),
+        assemble: () => ({ reel: "reel.mp4" }),
+      },
+      {
+        approve_shots: () => ({ action: "approve" }),
+        pick: overrides.pick ?? (() => ({ action: "lock", selection: ["1.1"] })),
+        listen: () => ({ action: "approve", selection: ["1.1"] }),
+        watch: () => ({ action: "approve" }),
+      },
+    );
+
+  it("runs part_recipe end to end with fakes", () => {
+    const exec = part();
+    const { state } = run(graph("part_recipe"), exec, { story_pages: "pages 7–9", part_no: 3 });
+    expect(state.status).toBe("completed");
+    expect(exec.calls.filter((c) => c === "assemble#1")).toHaveLength(1);
+    expect(state.nodes.watch?.decisions[0]?.action).toBe("approve");
+  });
+
+  it("gives every item's steps a stable key", () => {
+    const { state } = run(graph("part_recipe"), part(), { story_pages: "…", part_no: 3 });
+    expect(state.nodes.per_shot?.items?.keys).toEqual(["P3-01", "P3-02", "P3-03"]);
+    expect(Object.keys(state.nodes)).toEqual(
+      expect.arrayContaining(["per_shot[P3-01].draw", "per_shot[P3-02].pick", "per_shot[P3-03].animate", "voices[L2].listen"]),
+    );
+    expect(state.nodes["per_shot[P3-02].animate"]).toBeUndefined(); // a still shot is never animated
+  });
+
+  it("collects map outputs as lists in shot-list order, null where an item made nothing", () => {
+    const { state } = run(graph("part_recipe"), part(), { story_pages: "…", part_no: 3 });
+    const out = state.nodes.per_shot!.versions["1.1"]!.output;
+    expect(out.clip).toEqual(["clip:P3-01", null, "clip:P3-03"]);
+    expect(out.panel).toEqual([["1.1"], ["1.1"], ["1.1"]]);
+    // `listen.selected` is the version ids picked on the screen; turning a pick into the
+    // picked output (the audio itself) is what locking does, on Day 8.
+    expect(state.nodes.voices!.versions["1.1"]!.output.audio).toEqual([["1.1"], ["1.1"]]);
+  });
+
+  it("each item counts its own loops", () => {
+    // Every shot is retried twice before locking: 3 shots × 2 retries, each well under max_loops 4.
+    const exec = part({ pick: (c) => ({ action: c.visit <= 2 ? "retry" : "lock", selection: ["1.1"] }) });
     const { state } = run(graph("part_recipe"), exec, { story_pages: "…", part_no: 3 });
-    expect(state.nodes.per_shot?.failure).toMatch(/'map' steps can't run yet/);
+    expect(state.status).toBe("completed");
+    expect(state.nodes["per_shot[P3-03].draw"]?.attempts).toBe(3);
+  });
+
+  it("names the items that didn't finish, and never assembles a partial set", () => {
+    const exec = part({ pick: (c) => ({ action: (c.inputs.item as { id: string }).id === "P3-02" ? "retry" : "lock", selection: ["1.1"] }) });
+    const { state } = run(graph("part_recipe"), exec, { story_pages: "…", part_no: 3 });
+    expect(state.nodes["per_shot[P3-02].pick"]?.status).toBe("failed");
+    expect(state.nodes["per_shot[P3-03].animate"]?.status).toBe("completed"); // the other items carry on
+    expect(state.nodes.per_shot?.failure).toBe("item P3-02 didn't finish");
+    expect(state.nodes.assemble).toBeUndefined();
     expect(state.status).toBe("failed");
+  });
+
+  it("is deterministic and replays exactly", () => {
+    const a = run(graph("part_recipe"), part(), { story_pages: "…", part_no: 3 });
+    const b = run(graph("part_recipe"), part(), { story_pages: "…", part_no: 3 });
+    expect(a.events).toEqual(b.events);
+    expect(replay(a.events)).toEqual(a.state);
+  });
+
+  describe("bad lists", () => {
+    const withShots = (list: unknown) =>
+      fakes({ shot_list: () => ({ shots: list, lines: [], hook: "" }) }, { approve_shots: () => ({ action: "approve" }) });
+    const failure = (list: unknown) =>
+      run(graph("part_recipe"), withShots(list), { story_pages: "…", part_no: 3 }).state.nodes.per_shot?.failure;
+
+    it("says when the list isn't a list", () => expect(failure("13 shots")).toBe("'shot_list.shots' isn't a list"));
+    it("says when an item has no key", () => expect(failure([{ id: "P3-01" }, { animate: true }])).toBe("item 2 of 'shot_list.shots' has no 'id'"));
+    it("says when two items share a key", () => expect(failure([{ id: "P3-01" }, { id: "P3-01" }])).toBe("two items in 'shot_list.shots' have the same id 'P3-01'"));
+    it("says when a key has odd characters", () => expect(failure([{ id: "P3 01" }])).toMatch(/can only use letters, digits/));
+  });
+
+  it("finishes straight away for an empty list", () => {
+    const exec = fakes({ shot_list: () => ({ shots: [], lines: [], hook: "" }), assemble: () => ({ reel: "r" }) }, { approve_shots: () => ({ action: "approve" }), watch: () => ({ action: "approve" }) });
+    const { state } = run(graph("part_recipe"), exec, { story_pages: "…", part_no: 3 });
+    expect(state.status).toBe("completed");
+    expect(state.nodes.per_shot!.versions["1.1"]!.output.clip).toEqual([]);
   });
 });
