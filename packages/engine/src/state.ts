@@ -36,6 +36,8 @@ export type Version = {
   instruction?: string;
   madeBy?: string;
   replayedFrom?: string;
+  /** One content hash per input it was made from; see `CandidateProduced.inputs`. */
+  inputs?: Record<string, string>;
 };
 
 export type NodeState = {
@@ -90,6 +92,10 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
     return { release: e.release, graph: e.graph, inputs: e.inputs, status: "running", nodes: {}, edges: {}, costUsd: 0 };
   }
   if (!state) fail(e, "it came before RunStarted");
+  if (e.type === "RunReopened") {
+    if (state.status === "running") fail(e, "the run is already open");
+    return { ...state, status: "running" };
+  }
   if (state.status !== "running") fail(e, `the run is already ${state.status}`);
 
   if (e.type === "RunCompleted") return { ...state, status: e.status };
@@ -125,6 +131,7 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       if (e.instruction !== undefined) v.instruction = e.instruction;
       if (e.made_by !== undefined) v.madeBy = e.made_by;
       if (e.replayed_from !== undefined) v.replayedFrom = e.replayed_from;
+      if (e.inputs !== undefined) v.inputs = e.inputs;
       return next({ status: "checking", versions: { ...n.versions, [id]: v } }, e.cost_usd);
     }
 
@@ -206,6 +213,12 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
     case "MarkedStale":
       if (!n.locked) fail(e, "only locked work can go stale");
       return next({ status: "stale", staleReason: e.reason });
+
+    case "MarkedFresh": {
+      if (n.status !== "stale") fail(e, "it isn't stale");
+      const { staleReason: _s, ...rest } = n;
+      return withNode(state, e.node, { ...rest, status: "completed" });
+    }
 
     case "NodeCompleted":
       return next({ status: "completed" });

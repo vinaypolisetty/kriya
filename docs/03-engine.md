@@ -159,6 +159,25 @@ hash( node spec version
 
 Examples: redoing Part 1's music marks music and assembly stale, not the 13 panels. A new `@Bheem · look` version marks only shots with Bheem stale; the creator chooses to rebuild or pin the old version.
 
+### How it works in v0.1 ([D-45](17-decisions.md))
+
+Each version records **what it was made from**, one content hash per input, rather than one opaque key, so a stale mark can say *what* changed:
+
+| Input | Hash of |
+|---|---|
+| `spec` | The step's settings (prompt, model, options, …), **not** its name or description: renaming never makes work stale (rule 4) |
+| `inputs` / `item` | The run's inputs, or this item of a map |
+| `uses:<ref>` | Each `uses` entry and each `{{ref}}` in the prompt, read from locked, non-stale outputs |
+| `after:<step>` | Each step an edge leads from (not loop-backs). From a screen, only the button pressed: its data is tracked through `uses` / `over` |
+| `over`, `item:<key>` | For a map: its list, and each item's outputs |
+
+The model version is part of `spec` when pinned there; provider-reported versions join the key with real adapters (Day 15).
+
+- **When a lock moves**, every settled, locked step is re-checked: inputs differ → `MarkedStale` with a plain reason ("its item changed", "'per_shot' changed"); inputs match again → `MarkedFresh`. Re-locking the original restores everything without redoing anything.
+- **Stale work leaves context**, like rejected candidates: later steps and map outputs don't see it.
+- **`rebuild()`** makes ready the *earliest* stale step of each recipe, and edges take it from there. A map runs again and **keeps unchanged items**: changed items redo only their stale steps, new items start, removed items are parked. Stale work the recipe no longer reaches (a shot that stopped being animated keeps its old clip) stays stale: parked, out of context, still in history.
+- **Editing a finished run reopens it** (`RunReopened`), so the change is on the record.
+
 ## 7. Scheduling and limits
 
 - Ready queue with **worker pools per provider**, each with its own concurrency limit.
