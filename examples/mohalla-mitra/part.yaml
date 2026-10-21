@@ -1,6 +1,7 @@
 # Part recipe: one Instagram Reel (3 pages of a 9-page story).
 graph: part_recipe
 level: part
+inherits: [series]   # reads the series' locked style, rules and cast
 description: Turn three story pages into a finished, reviewed Reel.
 
 inputs:

@@ -28,7 +28,7 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | 9 | Wed Oct 21 | Branches ✅: create, switch, park; `replay_change`; `refines` so edits and redos become new versions of the same step (D-44); screens can wait for an answer. Adopt moved to Day 14 | Branch tests pass; one instruction replayed onto two items; the pick screen shows the edited panel |
 | 10 | Thu Oct 22 | Cache keys and stale ✅ (spec + inputs + refs + item; per-input hashes, D-45); rebuild reuses unchanged items | Changing one shot marks only its work stale |
 | 11 | Fri Oct 23 | Durable waits ✅: tickets (`deliver`); atomic steps; idempotency keys; `recover()`; crash at every write (D-46) | Resume makes no duplicate calls |
-| 12 | Sat Oct 24 | Context and assets: inheritance, full/local/isolated, @mentions, overrides | Context tests pass |
+| 12 | Sat Oct 24 | Context and assets ✅: inheritance (`inherits`), full/local/isolated, facets with versions, blocking on missing facets, @mentions, removed defaults, overrides (D-47); reference validation (B-1, B-2) | Context tests pass |
 | 13 | Sun Oct 25 | CLI: `kriya init, run, status, inbox, decide, lock` | A full fake episode from the terminal |
 | 14 | Mon Oct 26 | Buffer + write-up: deterministic orchestration of non-deterministic models; `adopt` (two parents, from Day 9) | Draft saved; adopt tests pass |
 

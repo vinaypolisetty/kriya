@@ -4,6 +4,12 @@ import { openDatabase, SqliteEventLog } from "@kriya/store";
 import { loadDir, loadText } from "../src/load.js";
 import { Recorder, readRun, replay, Scheduler, type Decision, type Executors, type Graph, type StepContext } from "../src/index.js";
 
+/** The series' locked context the Mohalla Mitra recipes inherit. */
+const SERIES = { series: { style: "2D cartoon, flat colors", rules: "no real film songs", cast: ["Mitra", "Bheem"] } };
+
+/** A fake Library where every facet exists at v1. */
+const LIBRARY = { assets: { facet: (entity: string, facet: string) => ({ version: "v1", value: `${entity}:${facet}` }) } };
+
 const { graphs } = loadDir(resolve(__dirname, "../../../examples"));
 const example = (id: string) => graphs.find((g) => g.graph === id)!;
 const one = (yaml: string) => {
@@ -37,8 +43,8 @@ function fakes(
 
 function run(g: Graph, exec: Executors, inputs: Record<string, unknown> = {}) {
   const log = new SqliteEventLog(openDatabase(":memory:"));
-  const s = new Scheduler(g, Recorder.start(log, "run1"), exec, graphs);
-  s.start("a".repeat(64), inputs);
+  const s = new Scheduler(g, Recorder.start(log, "run1"), exec, graphs, LIBRARY);
+  s.start("a".repeat(64), inputs, SERIES);
   const state = s.run();
   return { state, events: readRun(log, "run1") };
 }

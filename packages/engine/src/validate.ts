@@ -165,6 +165,16 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
   // Outputs point at real nodes.
   Object.entries(g.outputs).forEach(([k, ref]) => checkRootRef(ref, ["outputs", k]));
 
+  // Every reference a step reads: uses, show, beside, {{refs}} in prompts (D-47).
+  g.nodes.forEach((n, i) => {
+    if ("uses" in n) n.uses.forEach((r, j) => checkRootRef(r, ["nodes", i, "uses", j]));
+    if (n.kind === "screen") {
+      if (n.show) checkRootRef(n.show, ["nodes", i, "show"]);
+      n.beside.forEach((r, j) => checkRootRef(r, ["nodes", i, "beside", j]));
+    }
+    if ("prompt" in n && n.prompt) for (const r of promptRefs(n.prompt)) checkRootRef(r, ["nodes", i, "prompt"]);
+  });
+
   return issues;
 
   /** `result` is the one candidate the edge's source step just made (D-43). */
@@ -182,11 +192,12 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
   }
 
   function checkRootRef(ref: string, path: Issue["path"]) {
-    const root = ref.split(/[.@]/)[0]!;
-    const builtins = ["item", "inputs", "series", "story", "part", "project", "assets", "run"];
-    if (!nodes.has(root) && !builtins.includes(root)) {
-      err(path, `'${ref}' refers to '${root}', which isn't a step${suggest(root, ids)}`);
+    const root = ref.split(/[.@[]/)[0]!;
+    if (nodes.has(root) || BUILTIN_SCOPES.includes(root) || g.inherits.includes(root)) return;
+    if (KNOWN_LEVELS.includes(root)) {
+      return err(path, `'${ref}' reads from '${root}', which this recipe doesn't inherit; add inherits: [${root}] to the recipe`);
     }
+    err(path, `'${ref}' refers to '${root}', which isn't a step or an inherited level${suggest(root, [...ids, ...g.inherits, ...BUILTIN_SCOPES])}`);
   }
 }
 
@@ -199,6 +210,16 @@ function safeLiterals(when: string): string[] {
 }
 
 /** Nodes with no incoming edge, ignoring loop-back edges. */
+/** Scopes every recipe can read without declaring them. */
+const BUILTIN_SCOPES = ["item", "inputs", "run", "assets"];
+/** Common level names, to give a better hint when one is used without `inherits`. */
+const KNOWN_LEVELS = ["project", "series", "story", "episode", "part", "season", "channel", "watchlist", "quarter"];
+
+/** `{{ref}}` placeholders in a prompt. */
+export function promptRefs(prompt: string): string[] {
+  return [...prompt.matchAll(/\{\{\s*([A-Za-z_][\w.@]*)\s*\}\}/g)].map((m) => m[1]!);
+}
+
 export function startNodes(g: Graph): string[] {
   const incoming = new Set<string>();
   for (const e of g.edges) if (e.max_loops === undefined && e.to !== END) incoming.add(e.to);

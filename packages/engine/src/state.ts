@@ -10,6 +10,7 @@
 import { versionId, type EngineEvent, type EventOf } from "./events.js";
 
 export type NodeStatus =
+  | "blocked"
   | "ready"
   | "running"
   | "checking"
@@ -56,6 +57,10 @@ export type NodeState = {
   /** The branch new versions go on, and every branch with the version it started from. */
   branch: string;
   branches: Record<string, { from?: string }>;
+  /** Mentions and removed defaults the creator saved on this step. */
+  mentions: { ref: string; note?: string }[];
+  removed: string[];
+  blockedReason?: string;
   /** For a map step: its items, in list order, and where they were read from. */
   items?: { keys: string[]; source: string; version: string; path: string[] };
 };
@@ -68,6 +73,10 @@ export type RunState = {
   nodes: Record<string, NodeState>;
   /** How many times each edge (by index) has been followed. */
   edges: Record<string, number>;
+  /** Locked context inherited from higher levels, by level. */
+  context: Record<string, Record<string, unknown>>;
+  /** Facet overrides: scope (a step key, or `run`) → `Entity.facet` → value. */
+  overrides: Record<string, Record<string, unknown>>;
   costUsd: number;
 };
 
@@ -83,13 +92,15 @@ const newNode = (): NodeState => ({
   costUsd: 0,
   branch: "main",
   branches: { main: {} },
+  mentions: [],
+  removed: [],
 });
 
 /** Applies one event and returns the next state. The input state is not modified. */
 export function apply(state: RunState | undefined, e: EngineEvent): RunState {
   if (e.type === "RunStarted") {
     if (state) fail(e, "the run has already started");
-    return { release: e.release, graph: e.graph, inputs: e.inputs, status: "running", nodes: {}, edges: {}, costUsd: 0 };
+    return { release: e.release, graph: e.graph, inputs: e.inputs, status: "running", nodes: {}, edges: {}, context: e.context, overrides: {}, costUsd: 0 };
   }
   if (!state) fail(e, "it came before RunStarted");
   if (e.type === "RunReopened") {
@@ -99,6 +110,11 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
   if (state.status !== "running") fail(e, `the run is already ${state.status}`);
 
   if (e.type === "RunCompleted") return { ...state, status: e.status };
+  if (e.type === "ContextUpdated") return { ...state, context: { ...state.context, [e.level]: e.values } };
+  if (e.type === "OverrideSet") {
+    const scope = { ...(state.overrides[e.scope] ?? {}), [`${e.entity}.${e.facet}`]: e.value };
+    return { ...state, overrides: { ...state.overrides, [e.scope]: scope } };
+  }
 
   if (e.type === "EdgeFollowed") {
     const from = state.nodes[e.from];
@@ -156,6 +172,18 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
     case "BranchSwitched":
       if (!n.branches[e.branch]) fail(e, `there's no branch called '${e.branch}'`);
       return next({ branch: e.branch });
+
+    case "NodeBlocked":
+      return next({ status: "blocked", blockedReason: e.reason });
+
+    case "MentionAdded": {
+      const m: { ref: string; note?: string } = { ref: e.ref };
+      if (e.note !== undefined) m.note = e.note;
+      return next({ mentions: [...n.mentions.filter((x) => x.ref !== e.ref), m] });
+    }
+
+    case "DefaultRemoved":
+      return next({ removed: n.removed.includes(e.ref) ? n.removed : [...n.removed, e.ref] });
 
     case "FixChosen":
       return next({ status: "fixing" });

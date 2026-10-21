@@ -74,6 +74,19 @@ Anything locked, at any level:
 
 Defaults are per action (generate → full, edit → local); the recipe author can override per node and the user can switch per action.
 
+### In v0.1 ([D-47](17-decisions.md))
+
+| Mode | The step receives |
+|---|---|
+| `full` | Its `uses` and prompt `{{refs}}` (minus defaults removed with ✕), facets included, plus mentions and the version it starts from |
+| `local` | Only the version it edits, plus mentions |
+| `isolated` | Only mentions |
+
+- Facet references: `item.characters@look` (each named entity's look), `@Mitra.voice` (one facet, typically as a mention). They resolve **step override > episode (`run`) override > Library**, and every version keeps the facet versions it used.
+- A missing facet **blocks** the step ("@Tiwari has no look yet; add it to the Library"); other items carry on, and `unblock()` retries once it exists.
+- The fingerprint behind stale tracking covers only what the step received, so a local edit doesn't go stale when the series style changes, and a new `@Bheem · look` stales only Bheem's shots.
+- Inherited context (`series.style`) is recorded when the run starts; changing it later (`updateContext`) stales exactly the work that read it.
+
 ### Why local matters
 
 When changing one detail about one person, pulling in every character sheet and the style line does harm: it caused the duplicate-character problem in Part 2 (the edit had too much to work with and added copies). A local edit:

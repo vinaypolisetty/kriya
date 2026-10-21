@@ -9,7 +9,7 @@ const h = (c: string) => c.repeat(64);
 
 /** A small Part run touching every event type: a model step with a fix loop, a human pick, an agent, staleness. */
 const SCRIPT: EngineEvent[] = [
-  { type: "RunStarted", release: h("a"), graph: "part_recipe", inputs: { part_no: 3 } },
+  { type: "RunStarted", release: h("a"), graph: "part_recipe", inputs: { part_no: 3 }, context: {} },
   { type: "NodeReady", node: "shot_list" },
   { type: "AttemptStarted", node: "shot_list", attempt: 1 },
   { type: "CandidateProduced", node: "shot_list", attempt: 1, candidate: 1, output: { shots: ["P3-01", "P3-02"] }, parents: [], model: "claude@2026-09", cost_usd: 0.04 },
