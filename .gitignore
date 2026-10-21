@@ -8,3 +8,6 @@ coverage/
 .DS_Store
 *.sqlite
 *.db
+
+# Local run data: events database and media blobs
+.kriya/

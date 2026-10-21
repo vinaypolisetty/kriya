@@ -9,7 +9,7 @@
 | Repo | pnpm monorepo: `engine`, `cli`, `web`, `adapters`, `examples` | One install, shared types |
 | Schemas | Zod | One definition → validation, form generation, LLM tool definitions |
 | Recipes | YAML (`yaml` package with line numbers) | Readable, diffable; errors point at lines |
-| Database | SQLite via Drizzle (Postgres optional) | Zero setup for anyone who clones it |
+| Database | SQLite via `better-sqlite3`, plain SQL ([D-40](17-decisions.md)) | Zero setup for anyone who clones it; an append-only log needs no ORM |
 | Media | Local folder, content-addressed | Simple; S3/R2 adapter later |
 | Keys | `.env` | Users bring their own |
 | Job queue | In-process scheduler over the SQLite event log | Enough for one user |
