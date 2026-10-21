@@ -16,6 +16,7 @@
  * re-running a map with reuse of unchanged items (Day 10), `subgraph` steps.
  */
 import { END, type Graph, type Node, type ScreenNode } from "./spec.js";
+import { createHash } from "node:crypto";
 import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
 import type { Recorder } from "./recorder.js";
@@ -128,13 +129,33 @@ export class Scheduler {
    * Every step instance in a fixed order: the recipe's steps as declared, each
    * expanded map followed by its items in list order. All derived from recorded state.
    */
-  private instances(ctx = this.root(), out: Instance[] = []): Instance[] {
+  private instances(ctx = this.root(), out: Instance[] = [], current = false): Instance[] {
     for (const node of ctx.graph.nodes) {
       const key = ctx.prefix + node.id;
       out.push({ key, node, ctx });
-      if (node.kind === "map") for (const child of this.children(key, node.graph)) this.instances(child, out);
+      if (node.kind === "map") {
+        const kids = current ? this.currentChildren(key, node, ctx) : this.children(key, node.graph);
+        for (const child of kids) this.instances(child, out, current);
+      }
     }
     return out;
+  }
+
+  /**
+   * A map's items as its list reads *now* (the source's current lock), for
+   * stale checks before the map runs again. Items no longer in the list are
+   * left out: they're parked.
+   */
+  private currentChildren(mapKey: string, node: Extract<Node, { kind: "map" }>, ctx: Context): Context[] {
+    const graph = this.graphs.get(node.graph);
+    const [root, ...path] = node.over.split(".");
+    const src = this.rec.state.nodes[ctx.prefix + root];
+    const list = graph && src?.locked ? this.readList(ctx.prefix + root, src.locked.version, path) : undefined;
+    if (!graph || !list) return this.children(mapKey, node.graph);
+    return list.flatMap((item) => {
+      const k = item != null && typeof item === "object" ? (item as Record<string, unknown>)[node.key] : undefined;
+      return typeof k === "string" || typeof k === "number" ? [{ prefix: `${mapKey}[${k}].`, graph, inputs: { item } }] : [];
+    });
   }
 
   /** The item contexts of an expanded map step. */
@@ -193,6 +214,7 @@ export class Scheduler {
     if (target !== key) this.rec.record({ type: "AttemptStarted", node: target, attempt: this.rec.state.nodes[target]!.attempts + 1 });
     const attempt = this.rec.state.nodes[target]!.attempts;
     const sc = this.context(key, node, ctx, n.attempts + 1, target, parent, instruction);
+    const inputs = this.inputsOf(key, node, ctx);
     const outputs = this.exec.produce(node, sc);
     if (outputs.length === 0) return this.fail(key, "it produced no output");
     outputs.forEach((output, i) =>
@@ -204,6 +226,7 @@ export class Scheduler {
         output,
         parents: parent ? [parent] : [],
         cost_usd: 0,
+        inputs,
         ...(instruction ? { instruction } : {}),
         ...(target !== key ? { made_by: key } : {}),
       }),
@@ -307,7 +330,46 @@ export class Scheduler {
   lock(key: string, version: string, why?: string): void {
     const n = this.rec.state.nodes[key];
     if (!n?.versions[version]) throw new Error(`'${key}' has no version ${version}`);
+    this.reopen(`'${key}' was locked to version ${version}`);
     this.rec.record({ type: "Locked", node: key, version, by: "human", ...(why ? { why } : {}) });
+    this.refreshStale();
+  }
+
+  /** Adds a version the creator wrote or edited by hand (e.g. a corrected shot list). Returns its id. */
+  writeVersion(key: string, output: Record<string, unknown>, instruction?: string): string {
+    const n = this.rec.state.nodes[key];
+    if (!n) throw new Error(`there's no step '${key}' in this run`);
+    this.reopen(`'${key}' got a new version`);
+    const attempt = n.attempts + 1;
+    this.rec.record({ type: "AttemptStarted", node: key, attempt });
+    const parents = n.locked ? [n.locked.version] : [];
+    this.rec.record({ type: "CandidateProduced", node: key, attempt, candidate: 1, output, parents, cost_usd: 0, ...(instruction ? { instruction } : {}) });
+    this.rec.record({ type: "NodeCompleted", node: key });
+    return versionId(attempt, 1);
+  }
+
+  /** Stale work right now, in run order, with the reason (what a rebuild would redo). */
+  stale(): { key: string; reason: string }[] {
+    return this.instances(this.root(), [], true)
+      .map((x) => ({ key: x.key, n: this.rec.state.nodes[x.key] }))
+      .filter((x) => x.n?.status === "stale")
+      .map((x) => ({ key: x.key, reason: x.n!.staleReason! }));
+  }
+
+  /**
+   * Re-runs stale work: the earliest stale step of each recipe is made ready,
+   * and edges take it from there. A map runs again and keeps unchanged items.
+   * Stale work the recipe no longer reaches stays stale (parked). Call `run()` after.
+   */
+  rebuild(): string[] {
+    this.refreshStale();
+    const all = this.instances(this.root(), [], true);
+    const staleMaps = all.filter((x) => x.node.kind === "map" && this.status(x.key) === "stale").map((x) => x.key);
+    return this.readyEarliestStale(all.filter((x) => !staleMaps.some((m) => x.key.startsWith(`${m}[`))));
+  }
+
+  private reopen(reason: string): void {
+    if (this.rec.state.status !== "running") this.rec.record({ type: "RunReopened", reason });
   }
 
   /** Branches off from a version: later versions of this step go on the new branch. */
@@ -351,6 +413,7 @@ export class Scheduler {
       this.rec.record({ type: "AttemptStarted", node: target, attempt: t.attempts + 1 });
       const attempt = this.rec.state.nodes[target]!.attempts;
       const visit = this.rec.state.nodes[stepKey]!.attempts;
+      const inputs = this.inputsOf(stepKey, step, inst.ctx);
       const outputs = this.exec.produce(step, this.context(stepKey, step, inst.ctx, visit, target, parent, v.instruction));
       made[target] = outputs.map((output, i) => {
         this.rec.record({
@@ -363,6 +426,7 @@ export class Scheduler {
           cost_usd: 0,
           instruction: v.instruction!,
           replayed_from: `${sourceKey}@${version}`,
+          inputs,
           ...(stepKey !== target ? { made_by: stepKey } : {}),
         });
         return versionId(attempt, i + 1);
@@ -372,6 +436,89 @@ export class Scheduler {
       if (stepKey !== target) this.rec.record({ type: "NodeCompleted", node: stepKey });
     }
     return made;
+  }
+
+  // ── Cache keys and stale (docs/03-engine.md §6) ─────────────────────────
+
+  /**
+   * What a step reads, one content hash per input: its settings (not its
+   * label), the run inputs or its item, each `uses` and `{{ref}}` in its prompt
+   * (locked, non-stale outputs only), the steps that lead to it (not loop-backs),
+   * a map's list, and for a map each item's outputs.
+   */
+  private inputsOf(key: string, node: Node, ctx: Context): Record<string, string> {
+    const { name: _n, description: _d, ...spec } = node;
+    const out: Record<string, string> = { spec: hash(spec) };
+    if (ctx.prefix === "") out.inputs = hash(ctx.inputs);
+    else out.item = hash(ctx.inputs.item ?? null);
+    const scope = this.scope(ctx);
+    const read = (ref: string) => evaluate(parseCondition(ref), scope) ?? null;
+    const refs = new Set<string>("uses" in node ? node.uses.filter((r) => !r.includes("@")) : []);
+    if ("prompt" in node && node.prompt) for (const m of node.prompt.matchAll(/\{\{\s*([A-Za-z_][\w.]*)\s*\}\}/g)) refs.add(m[1]!);
+    for (const r of refs) out[`uses:${r}`] = hash(read(r));
+    for (const e of ctx.graph.edges) {
+      if (e.to !== node.id || e.max_loops !== undefined) continue;
+      for (const s of Array.isArray(e.from) ? e.from : [e.from]) {
+        // From a screen only the button pressed counts: its data flows through `uses` and `over`, tracked there.
+        const isScreen = ctx.graph.nodes.find((x) => x.id === s)?.kind === "screen";
+        const v = scope[s] as { action?: unknown } | undefined;
+        out[`after:${s}`] = hash(isScreen ? (v?.action ?? null) : (v ?? null));
+      }
+    }
+    if (node.kind === "map") {
+      out.over = hash(read(node.over));
+      const child = this.graphs.get(node.graph);
+      if (child) {
+        for (const c of this.children(key, node.graph)) {
+          const s = this.scope(c);
+          const values = Object.fromEntries(Object.entries(child.outputs).map(([k, ref]) => [k, evaluate(parseCondition(ref), s) ?? null]));
+          out[`item:${c.prefix.slice(key.length + 1, -2)}`] = hash(values);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Marks locked work whose inputs changed as stale, and stale work whose inputs
+   * match again as fresh (re-locking the original restores everything, D-05).
+   */
+  private refreshStale(): void {
+    for (let pass = 0; pass < 50; pass++) {
+      let changed = false;
+      for (const { key, node, ctx } of this.instances(this.root(), [], true)) {
+        const n = this.rec.state.nodes[key];
+        // Only settled work is checked; a step that's running right now will record fresh inputs.
+        if (!n?.locked || node.kind === "screen" || ACTIVE.includes(n.status)) continue;
+        const v = n.versions[n.locked.version];
+        if (!v?.inputs) continue;
+        const makerId = v.madeBy ? v.madeBy.slice(ctx.prefix.length) : node.id;
+        const maker = ctx.graph.nodes.find((x) => x.id === makerId) ?? node;
+        const now = this.inputsOf(ctx.prefix + maker.id, maker, ctx);
+        const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k]);
+        if (diff.length > 0 && n.status !== "stale") {
+          this.rec.record({ type: "MarkedStale", node: key, reason: describe(diff, node) });
+          changed = true;
+        } else if (diff.length === 0 && n.status === "stale") {
+          this.rec.record({ type: "MarkedFresh", node: key });
+          changed = true;
+        }
+      }
+      if (!changed) return;
+    }
+  }
+
+  /** Makes ready each stale step that no other stale step in its recipe leads to. */
+  private readyEarliestStale(list: Instance[]): string[] {
+    const stale = list.filter((x) => this.status(x.key) === "stale");
+    const ready: string[] = [];
+    for (const x of stale) {
+      const reachedByOther = stale.some((o) => o !== x && o.ctx.prefix === x.ctx.prefix && reaches(x.ctx.graph, o.node.id, x.node.id));
+      if (reachedByOther) continue;
+      this.rec.record({ type: "NodeReady", node: x.key });
+      ready.push(x.key);
+    }
+    return ready;
   }
 
   /** What a screen shows: the latest attempt's candidates of the shown step, with the shown field. */
@@ -437,7 +584,7 @@ export class Scheduler {
   /** Starts a map: reads its list and makes each item's first steps ready. */
   private expand(key: string, node: Extract<Node, { kind: "map" }>, ctx: Context): void {
     const n = this.rec.state.nodes[key]!;
-    if (n.attempts > 0) return this.fail(key, "running a for-each step a second time isn't supported yet (coming with stale tracking)");
+    const again = n.attempts > 0;
     const child = this.graphs.get(node.graph);
     if (!child) return this.fail(key, `it runs recipe '${node.graph}', which isn't loaded`);
 
@@ -458,9 +605,20 @@ export class Scheduler {
       keys.push(s);
     }
 
-    this.rec.record({ type: "AttemptStarted", node: key, attempt: 1 });
+    this.rec.record({ type: "AttemptStarted", node: key, attempt: n.attempts + 1 });
     this.rec.record({ type: "MapExpanded", node: key, keys, source: sourceKey, version: locked.version, path });
-    for (const k of keys) for (const id of startNodes(child)) this.rec.record({ type: "NodeReady", node: `${key}[${k}].${id}` });
+    for (const k of keys) {
+      const prefix = `${key}[${k}].`;
+      const seen = again && Object.keys(this.rec.state.nodes).some((s) => s.startsWith(prefix));
+      if (!seen) {
+        for (const id of startNodes(child)) this.rec.record({ type: "NodeReady", node: prefix + id });
+      } else {
+        // An item from before: unchanged work is kept; only its stale steps run again (D-35).
+        this.refreshStale();
+        const c = this.children(key, node.graph).find((x) => x.prefix === prefix)!;
+        this.readyEarliestStale(this.instances(c, [], true));
+      }
+    }
   }
 
   /**
@@ -484,8 +642,10 @@ export class Scheduler {
       for (const [name, ref] of Object.entries(child.outputs)) {
         output[name] = items.map((c) => evaluate(parseCondition(ref), this.scope(c)) ?? null);
       }
-      this.rec.record({ type: "CandidateProduced", node: key, attempt: 1, candidate: 1, output, parents: [], cost_usd: 0 });
-      this.rec.record({ type: "Locked", node: key, version: versionId(1, 1), by: "auto" });
+      const attempt = this.rec.state.nodes[key]!.attempts;
+      const inputs = this.inputsOf(key, node, ctx);
+      this.rec.record({ type: "CandidateProduced", node: key, attempt, candidate: 1, output, parents: [], cost_usd: 0, inputs });
+      this.rec.record({ type: "Locked", node: key, version: versionId(attempt, 1), by: "auto" });
       this.complete(key, ctx);
       return true;
     }
@@ -571,7 +731,7 @@ export class Scheduler {
     const scope: Record<string, unknown> = {};
     for (const node of ctx.graph.nodes) {
       const n = s.nodes[ctx.prefix + node.id];
-      if (!n) continue;
+      if (!n || n.status === "stale") continue; // stale work is out of context, like rejected candidates
       if (node.kind === "screen") {
         const d = n.decisions.at(-1);
         if (d) scope[node.id] = { action: d.action, selected: this.selected(ctx, node, d), note: d.note };
@@ -616,3 +776,53 @@ export class Scheduler {
 function clean<T extends object>(o: T): T {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 }
+
+/** Content hash of a JSON value, with object keys sorted so the same data always hashes the same. */
+function hash(value: unknown): string {
+  return createHash("sha256").update(canonical(value)).digest("hex");
+}
+
+function canonical(v: unknown): string {
+  if (v === undefined || v === null) return "null";
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/** Whether `to` can be reached from `from` along edges, not counting loop-backs. */
+function reaches(g: Graph, from: string, to: string): boolean {
+  const seen = new Set([from]);
+  const queue = [from];
+  while (queue.length) {
+    const at = queue.shift()!;
+    for (const e of g.edges) {
+      if (e.max_loops !== undefined || e.to === END) continue;
+      if (!(Array.isArray(e.from) ? e.from : [e.from]).includes(at) || seen.has(e.to)) continue;
+      if (e.to === to) return true;
+      seen.add(e.to);
+      queue.push(e.to);
+    }
+  }
+  return false;
+}
+
+/** A plain reason for staleness from the inputs that changed. */
+function describe(changed: string[], node: Node): string {
+  // "its item changed" already covers item.action, item.place, …
+  const covered = (k: string) =>
+    (changed.includes("item") && k.startsWith("uses:item.")) || (changed.includes("inputs") && k.startsWith("uses:inputs."));
+  const parts = changed.filter((k) => !covered(k)).map((k) => {
+    if (k === "spec") return "its settings changed";
+    if (k === "item") return "its item changed";
+    if (k === "inputs") return "the run's inputs changed";
+    if (k === "over") return `'${(node as { over?: string }).over}' changed`;
+    const [kind, name] = [k.slice(0, k.indexOf(":")), k.slice(k.indexOf(":") + 1)];
+    if (kind === "item") return `item ${name} changed`;
+    return `'${name}' changed`;
+  });
+  return [...new Set(parts)].join("; ");
+}
+

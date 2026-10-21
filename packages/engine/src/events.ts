@@ -54,6 +54,11 @@ export const EngineEvent = z.discriminatedUnion("type", [
     made_by: NodeKey.optional(),
     /** Set by `replay_change`: the version whose instruction was re-applied, as `node@version`. */
     replayed_from: z.string().optional(),
+    /**
+     * What this version was made from, one content hash per input (`spec`, `item`, `uses:pick.selected`,
+     * `after:pick`, `over`). If any changes later, the version is stale (docs/03-engine.md §6).
+     */
+    inputs: z.record(Hash).optional(),
   }),
   on("VerdictRecorded", {
     node: NodeKey,
@@ -101,9 +106,13 @@ export const EngineEvent = z.discriminatedUnion("type", [
   on("Locked", { node: NodeKey, version: z.string(), by: z.enum(["human", "auto"]), why: z.string().optional() }),
   on("Unlocked", { node: NodeKey }),
   on("MarkedStale", { node: NodeKey, reason: z.string().min(1) }),
+  /** Its inputs match again (e.g. the original upstream version was re-locked): the work is valid again. */
+  on("MarkedFresh", { node: NodeKey }),
   on("NodeCompleted", { node: NodeKey }),
   on("NodeFailed", { node: NodeKey, reason: z.string().min(1) }),
   on("RunCompleted", { status: z.enum(["completed", "failed", "cancelled"]) }),
+  /** A finished run is opened again because the creator changed something in it. */
+  on("RunReopened", { reason: z.string().min(1) }),
 ]);
 
 export type EngineEvent = z.infer<typeof EngineEvent>;
