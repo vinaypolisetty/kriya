@@ -40,6 +40,7 @@ nodes:
     kind: model
     name: Edit the image
     capability: image.edit
+    refines: draw        # the edit becomes the next version of the panel, so 'pick' shows it
     context: local
     prompt: |
       Edit the first image. Keep everything exactly the same.
@@ -52,6 +53,7 @@ nodes:
     kind: tool
     name: Crop
     tool: crop
+    refines: draw
     out:
       image: image
 

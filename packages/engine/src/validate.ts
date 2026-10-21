@@ -110,6 +110,21 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
     }
   });
 
+  // refines: points at a step in this recipe whose outputs it can stand in for (D-44).
+  g.nodes.forEach((n, i) => {
+    if (!("refines" in n) || n.refines === undefined) return;
+    const t = nodes.get(n.refines);
+    if (!t) return err(["nodes", i, "refines"], `refines '${n.refines}', which isn't a step${suggest(n.refines, ids)}`);
+    if (t.id === n.id) return err(["nodes", i, "refines"], "a step can't refine itself");
+    if (t.kind !== "model" && t.kind !== "agent" && t.kind !== "tool") return err(["nodes", i, "refines"], `'${t.id}' is a ${t.kind} step; only model, agent and tool steps make versions`);
+    if ("refines" in t && t.refines) return err(["nodes", i, "refines"], `'${t.id}' refines '${t.refines}' itself; refine '${t.refines}' directly`);
+    for (const [field, type] of Object.entries("out" in n ? n.out : {})) {
+      const want = t.out[field];
+      if (want === undefined) err(["nodes", i, "out", field], `'${t.id}' has no output '${field}', so '${n.id}' can't make a version of it${suggest(field, Object.keys(t.out))}`);
+      else if (want !== type) err(["nodes", i, "out", field], `'${field}' is ${type} here but ${want} in '${t.id}'`);
+    }
+  });
+
   // A screen that shows a step should have a button that locks it (D-42).
   g.nodes.forEach((n, i) => {
     if (n.kind !== "screen" || !n.show) return;

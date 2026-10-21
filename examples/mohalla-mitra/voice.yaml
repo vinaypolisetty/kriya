@@ -23,6 +23,7 @@ nodes:
     kind: model
     name: Redo faster
     capability: audio.speech
+    refines: speak       # the faster take becomes the next version of the line, so 'listen' plays it
     prompt: "{{item.hinglish}} (speak 20% faster)"
     uses: [item.hinglish, item.emotion, item.speaker@voice]
     out:

@@ -31,6 +31,11 @@ export type Version = {
   output: Record<string, unknown>;
   model?: string;
   verdicts: Verdict[];
+  /** The path this version was made on (`main` unless the creator branched off). */
+  branch: string;
+  instruction?: string;
+  madeBy?: string;
+  replayedFrom?: string;
 };
 
 export type NodeState = {
@@ -46,6 +51,9 @@ export type NodeState = {
   costUsd: number;
   failure?: string;
   staleReason?: string;
+  /** The branch new versions go on, and every branch with the version it started from. */
+  branch: string;
+  branches: Record<string, { from?: string }>;
   /** For a map step: its items, in list order, and where they were read from. */
   items?: { keys: string[]; source: string; version: string; path: string[] };
 };
@@ -71,6 +79,8 @@ const newNode = (): NodeState => ({
   turns: 0,
   openCalls: [],
   costUsd: 0,
+  branch: "main",
+  branches: { main: {} },
 });
 
 /** Applies one event and returns the next state. The input state is not modified. */
@@ -110,8 +120,11 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       const id = versionId(e.attempt, e.candidate);
       if (n.versions[id]) fail(e, `version ${id} already exists`);
       for (const p of e.parents) if (!n.versions[p]) fail(e, `parent version ${p} doesn't exist`);
-      const v: Version = { id, attempt: e.attempt, candidate: e.candidate, parents: e.parents, output: e.output, verdicts: [] };
+      const v: Version = { id, attempt: e.attempt, candidate: e.candidate, parents: e.parents, output: e.output, verdicts: [], branch: n.branch };
       if (e.model !== undefined) v.model = e.model;
+      if (e.instruction !== undefined) v.instruction = e.instruction;
+      if (e.made_by !== undefined) v.madeBy = e.made_by;
+      if (e.replayed_from !== undefined) v.replayedFrom = e.replayed_from;
       return next({ status: "checking", versions: { ...n.versions, [id]: v } }, e.cost_usd);
     }
 
@@ -127,6 +140,15 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       if (new Set(e.keys).size !== e.keys.length) fail(e, "two items share a key");
       return next({ items: { keys: e.keys, source: e.source, version: e.version, path: e.path } });
     }
+
+    case "BranchCreated":
+      if (n.branches[e.branch]) fail(e, `there's already a branch called '${e.branch}'`);
+      version(e, n, e.from);
+      return next({ branches: { ...n.branches, [e.branch]: { from: e.from } } });
+
+    case "BranchSwitched":
+      if (!n.branches[e.branch]) fail(e, `there's no branch called '${e.branch}'`);
+      return next({ branch: e.branch });
 
     case "FixChosen":
       return next({ status: "fixing" });
