@@ -23,9 +23,9 @@ These docs record the full design as of October 2026: what was decided, why, and
 | 17 | [Decisions](17-decisions.md) | Decision log with reasons |
 | 18 | [Open questions](18-open-questions.md) | What is still undecided |
 | 19 | [Glossary](19-glossary.md) | Every term in one place |
+| — | [Getting started in VS Code](getting-started-vscode.md) | Install, open, test, push to GitHub, use Claude Code |
 
 Weekly build notes: [notes/](notes/) ([week 1](notes/week-01.md)).
-| — | [Getting started in VS Code](getting-started-vscode.md) | Install, open, test, push to GitHub, use Claude Code |
 
 Related artifacts kept outside the repo:
 - *Orchestrator: Spec & User Journey* (Claude doc): the first written spec and the Part 3 user journey
