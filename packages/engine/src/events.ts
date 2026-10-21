@@ -6,7 +6,7 @@
  * model, agent, checker or human produced is stored here the first time and
  * replayed afterwards, never generated again (design rule 1).
  *
- * Branch events (BranchCreated, BranchSwitched, Adopted) arrive on Day 9.
+ * `Adopted` (merging two versions) comes later (D-30: replay first).
  */
 import { z } from "zod";
 
@@ -48,6 +48,12 @@ export const EngineEvent = z.discriminatedUnion("type", [
     model: z.string().optional(),
     seed: z.number().int().optional(),
     cost_usd: Usd.default(0),
+    /** The instruction behind this version, e.g. the note "add the gamcha". `replay_change` re-applies it. */
+    instruction: z.string().optional(),
+    /** The step that made it, when another step refines this one (`edit` refines `draw`). */
+    made_by: NodeKey.optional(),
+    /** Set by `replay_change`: the version whose instruction was re-applied, as `node@version`. */
+    replayed_from: z.string().optional(),
   }),
   on("VerdictRecorded", {
     node: NodeKey,
@@ -90,6 +96,8 @@ export const EngineEvent = z.discriminatedUnion("type", [
     model: z.string().min(1),
     cost_usd: Usd,
   }),
+  on("BranchCreated", { node: NodeKey, branch: z.string().regex(/^[a-z][a-z0-9_-]*$/, "a branch name uses lowercase letters, digits, - and _"), from: z.string() }),
+  on("BranchSwitched", { node: NodeKey, branch: z.string().min(1) }),
   on("Locked", { node: NodeKey, version: z.string(), by: z.enum(["human", "auto"]), why: z.string().optional() }),
   on("Unlocked", { node: NodeKey }),
   on("MarkedStale", { node: NodeKey, reason: z.string().min(1) }),

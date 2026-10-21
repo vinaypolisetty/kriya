@@ -141,12 +141,27 @@ Submission recorded in context as: `pick.action`, `pick.selected`, `pick.note`, 
 
 | Step | Locked by |
 |---|---|
-| `tool` | Itself, automatically (code output) |
+| `tool` no screen shows | Itself, automatically (code output) |
 | `model` / `agent` with `trust: always` | Itself, automatically |
-| A step some screen `show`s | That screen, when a button with `locks: true` is pressed: the selected version, or the only candidate of the latest attempt |
+| A step some screen `show`s (even a tool) | That screen, when a button with `locks: true` is pressed: the selected version, or the only candidate of the latest attempt |
 | Any other `ask_me` / `when_confident` step | A **generated approval** screen ("Approve 'Animate the shot'"). `when_confident` asks too until checkers exist |
 
 The creator's note on a locking button is kept as the lock's `why` (D-29).
+
+### `refines`: make versions of another step
+
+A `model`, `agent` or `tool` step can **refine** another step in the same recipe: its output becomes that step's next version instead of its own ([D-44](17-decisions.md)).
+
+```yaml
+- id: edit
+  kind: model
+  capability: image.edit
+  refines: draw          # the edited panel is draw's version 2.1, parent 1.3
+```
+
+The new version records its parent (what the reviewing screen last selected, else the locked or newest version), the instruction (that screen's note, e.g. "add the gamcha"), and which step made it. A screen showing `draw` then shows the edit. The refining step's outputs must be outputs of the refined step, with the same types.
+
+The executor gets `parent` (the version it starts from) and `instruction`. The same two fields drive `replay_change`, which re-applies a version's instruction onto other items ("the same gamcha fix on every shot with Bheem").
 
 ### `map`: run a graph once per item
 

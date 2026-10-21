@@ -39,6 +39,8 @@ export const ModelNode = z
   .object({
     ...Base,
     kind: z.literal("model"),
+    /** This step's outputs are new versions of another step (`edit` refines `draw`), D-44. */
+    refines: Id.optional(),
     capability: z.string().regex(/^[a-z]+(\.[a-z_]+)+$/, "a capability looks like image.generate"),
     model: z.string().optional(),
     prompt: z.string().optional(),
@@ -54,6 +56,8 @@ export const AgentNode = z
   .object({
     ...Base,
     kind: z.literal("agent"),
+    /** This step's outputs are new versions of another step (`edit` refines `draw`), D-44. */
+    refines: Id.optional(),
     goal: z.string().min(1),
     tools: z.array(z.string()).min(1),
     uses: z.array(Ref).default([]),
@@ -70,6 +74,8 @@ export const ToolNode = z
   .object({
     ...Base,
     kind: z.literal("tool"),
+    /** This step's outputs are new versions of another step (`edit` refines `draw`), D-44. */
+    refines: Id.optional(),
     tool: z.string().min(1),
     args: z.record(z.string(), z.unknown()).default({}),
     out: Fields.default({}),

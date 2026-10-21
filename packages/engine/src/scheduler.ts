@@ -34,6 +34,12 @@ export type StepContext = {
    * candidates (rule 3). Library facets (`@look`) arrive on Day 12.
    */
   uses: Record<string, unknown>;
+  /** For an edit or a replayed change: the version it starts from. */
+  parent?: { version: string; output: Record<string, unknown> };
+  /** For an edit or a replayed change: what to change, e.g. "add the gamcha". */
+  instruction?: string;
+  /** For a screen: the candidates on show (latest attempt of the step it shows), with the shown field. */
+  shows?: { version: string; value: unknown }[];
 };
 
 export type Decision = { action: string; selection?: string[]; note?: string };
@@ -42,13 +48,29 @@ export type Decision = { action: string; selection?: string[]; note?: string };
 export interface Executors {
   /** model, tool and agent steps: one output per candidate. */
   produce(node: Node, ctx: StepContext): Record<string, unknown>[];
-  /** screen steps: what the human chose. */
-  decide(node: ScreenNode, ctx: StepContext): Decision;
+  /** screen steps: what the human chose, or undefined if there's no answer yet (the step waits; see `answer`). */
+  decide(node: ScreenNode, ctx: StepContext): Decision | undefined;
 }
 
 /** One recipe being run: the top level, or one item of a map. */
 type Context = { prefix: string; graph: Graph; inputs: Record<string, unknown> };
 type Instance = { key: string; node: Node; ctx: Context };
+type Producer = Extract<Node, { kind: "model" | "tool" | "agent" }>;
+
+const isProducer = (n: Node): n is Producer => n.kind === "model" || n.kind === "tool" || n.kind === "agent";
+
+/** The generated approval screen for a step no screen shows (D-42). */
+const approvalScreen = (node: Producer): ScreenNode => ({
+  id: node.id,
+  kind: "screen",
+  name: `Approve '${node.name ?? node.id}'`,
+  review: "approve",
+  show: node.refines ?? node.id,
+  beside: [],
+  actions: [{ id: "approve", needs: [], locks: true }],
+  trust: "ask_me",
+  batch: false,
+});
 
 const ACTIVE: NodeStatus[] = ["ready", "running", "checking", "fixing", "waiting_external", "awaiting_human"];
 const ITEM_KEY = /^[A-Za-z0-9_-]+$/;
@@ -82,6 +104,10 @@ export class Scheduler {
       if (this.settleMaps(all)) continue;
       const next = all.find((x) => this.status(x.key) === "ready");
       if (!next) {
+        // Waiting for a person (or, later, a provider): the run stays open; `answer` continues it.
+        if (Object.values(this.rec.state.nodes).some((n) => n.status === "awaiting_human" || n.status === "waiting_external")) {
+          return this.rec.state;
+        }
         const top = this.root();
         const failed = Object.values(this.rec.state.nodes).some((n) => n.status === "failed");
         this.rec.record({ type: "RunCompleted", status: this.endReached(top) && !failed ? "completed" : "failed" });
@@ -133,83 +159,239 @@ export class Scheduler {
   // ── Running one step ────────────────────────────────────────────────────
 
   private step({ key, node, ctx }: Instance): void {
-    const n = this.rec.state.nodes[key]!;
-    // Derived from recorded state, never kept in memory, so a resumed run counts the same.
-    const visit = (node.kind === "screen" ? n.decisions.length : n.attempts) + 1;
-    const sc: StepContext = { visit, inputs: ctx.inputs, key, uses: this.resolveUses(node, ctx) };
-
     switch (node.kind) {
       case "model":
       case "tool":
-      case "agent": {
-        const attempt = n.attempts + 1;
-        this.rec.record({ type: "AttemptStarted", node: key, attempt });
-        const outputs = this.exec.produce(node, sc);
-        if (outputs.length === 0) return this.fail(key, "it produced no output");
-        outputs.forEach((output, i) =>
-          this.rec.record({ type: "CandidateProduced", node: key, attempt, candidate: i + 1, output, parents: [], cost_usd: 0 }),
-        );
-        // Who locks it (D-42): code output and `trust: always` lock themselves; a step a
-        // screen shows waits for that screen; anything else asks on a generated approval.
-        if (node.kind === "tool" || node.trust === "always") {
-          this.rec.record({ type: "Locked", node: key, version: versionId(attempt, 1), by: "auto" });
-        } else if (!this.reviewer(node.id, ctx)) {
-          if (!this.approve(key, node, ctx, attempt)) return;
-        }
-        break;
-      }
-      case "screen": {
-        const ticket = `${key}:${visit}`;
-        this.rec.record({ type: "Suspended", node: key, ticket, kind: "human" });
-        const d = this.exec.decide(node, sc);
-        const button = node.actions.find((a) => a.id === d.action);
-        if (!button) throw new Error(`step '${key}' has no button '${d.action}'`);
-        this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
-        this.rec.record({ type: "Resumed", node: key, ticket });
-        if (button.locks && node.show && !this.lockShown(key, node, ctx, d)) return;
-        break;
-      }
+      case "agent":
+        return this.produce(key, node, ctx);
+      case "screen":
+        return this.show(key, node, ctx);
       case "map":
         return this.expand(key, node, ctx);
       case "subgraph":
         return this.fail(key, "'subgraph' steps can't run yet (coming in a later update)");
     }
+  }
+
+  /**
+   * Runs a model, tool or agent step. Its candidates go into its own version
+   * tree, or into the tree of the step it `refines` (D-44), so a screen showing
+   * that step sees the edit. Then the lock policy decides who locks (D-42).
+   */
+  private produce(key: string, node: Producer, ctx: Context): void {
+    const n = this.rec.state.nodes[key]!;
+    const target = node.refines ? ctx.prefix + node.refines : key;
+    let parent: string | undefined;
+    let instruction: string | undefined;
+    if (node.refines) {
+      const t = this.rec.state.nodes[target];
+      if (!t || Object.keys(t.versions).length === 0) return this.fail(key, `there's no '${node.refines}' yet to refine`);
+      ({ parent, instruction } = this.refineSource(ctx, node.refines));
+    }
+
+    this.rec.record({ type: "AttemptStarted", node: key, attempt: n.attempts + 1 });
+    if (target !== key) this.rec.record({ type: "AttemptStarted", node: target, attempt: this.rec.state.nodes[target]!.attempts + 1 });
+    const attempt = this.rec.state.nodes[target]!.attempts;
+    const sc = this.context(key, node, ctx, n.attempts + 1, target, parent, instruction);
+    const outputs = this.exec.produce(node, sc);
+    if (outputs.length === 0) return this.fail(key, "it produced no output");
+    outputs.forEach((output, i) =>
+      this.rec.record({
+        type: "CandidateProduced",
+        node: target,
+        attempt,
+        candidate: i + 1,
+        output,
+        parents: parent ? [parent] : [],
+        cost_usd: 0,
+        ...(instruction ? { instruction } : {}),
+        ...(target !== key ? { made_by: key } : {}),
+      }),
+    );
+
+    // Who locks it (D-42): a step a screen shows waits for that screen, even a tool;
+    // otherwise code output and `trust: always` lock themselves; anything else asks.
+    const targetId = node.refines ?? node.id;
+    if (!this.reviewer(targetId, ctx)) {
+      if (node.kind === "tool" || node.trust === "always") {
+        this.rec.record({ type: "Locked", node: target, version: versionId(attempt, 1), by: "auto" });
+      } else {
+        return this.askApproval(key, node, ctx);
+      }
+    }
+    this.finishProduce(key, node, ctx);
+  }
+
+  private finishProduce(key: string, node: Producer, ctx: Context): void {
+    if (node.refines) this.rec.record({ type: "NodeCompleted", node: ctx.prefix + node.refines });
     this.complete(key, ctx);
+  }
+
+  /** Where a refining step starts from: what the reviewing screen last selected, else the locked or newest version. */
+  private refineSource(ctx: Context, targetId: string): { parent: string; instruction?: string } {
+    const t = this.rec.state.nodes[ctx.prefix + targetId]!;
+    const screen = this.reviewer(targetId, ctx);
+    const d = screen ? this.rec.state.nodes[ctx.prefix + screen.id]?.decisions.at(-1) : undefined;
+    const parent = d?.selection?.[0] ?? t.locked?.version ?? Object.keys(t.versions).at(-1)!;
+    return d?.note ? { parent, instruction: d.note } : { parent };
+  }
+
+  /** A screen step: asks, and continues now if the answer is already there. */
+  private show(key: string, node: ScreenNode, ctx: Context): void {
+    const n = this.rec.state.nodes[key]!;
+    const visit = n.decisions.length + 1;
+    this.rec.record({ type: "Suspended", node: key, ticket: `${key}:${visit}`, kind: "human" });
+    const d = this.exec.decide(node, { ...this.context(key, node, ctx, visit), shows: this.onShow(ctx, node.show) });
+    if (d) this.finishScreen(key, node, ctx, d);
+  }
+
+  private finishScreen(key: string, node: ScreenNode, ctx: Context, d: Decision): void {
+    const button = node.actions.find((a) => a.id === d.action);
+    if (!button) throw new Error(`step '${key}' has no button '${d.action}'`);
+    this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
+    this.rec.record({ type: "Resumed", node: key, ticket: this.rec.state.nodes[key]!.ticket! });
+    if (button.locks && node.show && !this.lockShown(key, node, ctx, d)) return;
+    this.complete(key, ctx);
+  }
+
+  /**
+   * Asks for approval of a step no screen shows, on a generated screen (D-42).
+   * `when_confident` asks too until checkers exist (Day 20).
+   */
+  private askApproval(key: string, node: Producer, ctx: Context): void {
+    const n = this.rec.state.nodes[key]!;
+    const visit = n.decisions.length + 1;
+    this.rec.record({ type: "Suspended", node: key, ticket: `${key}:approve:${visit}`, kind: "human" });
+    const screen = approvalScreen(node);
+    const d = this.exec.decide(screen, { ...this.context(key, node, ctx, visit), shows: this.onShow(ctx, screen.show) });
+    if (d) this.finishApproval(key, node, ctx, d);
+  }
+
+  private finishApproval(key: string, node: Producer, ctx: Context, d: Decision): void {
+    if (d.action !== "approve") throw new Error(`the approval for '${key}' only has an 'approve' button, not '${d.action}'`);
+    this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
+    this.rec.record({ type: "Resumed", node: key, ticket: this.rec.state.nodes[key]!.ticket! });
+    const target = node.refines ? ctx.prefix + node.refines : key;
+    const version = this.chooseVersion(target, d, this.rec.state.nodes[target]!.attempts, key);
+    if (!version) return;
+    this.rec.record({ type: "Locked", node: target, version, by: "human", ...(d.note ? { why: d.note } : {}) });
+    this.finishProduce(key, node, ctx);
+  }
+
+  private context(
+    key: string,
+    node: Node,
+    ctx: Context,
+    visit: number,
+    target?: string,
+    parent?: string,
+    instruction?: string,
+  ): StepContext {
+    const sc: StepContext = { visit, inputs: ctx.inputs, key, uses: this.resolveUses(node, ctx) };
+    if (parent && target) sc.parent = { version: parent, output: this.rec.state.nodes[target]!.versions[parent]!.output };
+    if (instruction) sc.instruction = instruction;
+    return sc;
+  }
+
+  // ── Things the creator does mid-run ─────────────────────────────────────
+
+  /** Answers a step that is waiting for a human: a screen or a generated approval. Call `run()` after. */
+  answer(key: string, d: Decision): void {
+    const inst = this.instances().find((x) => x.key === key);
+    if (!inst || this.status(key) !== "awaiting_human") throw new Error(`step '${key}' isn't waiting for an answer`);
+    if (inst.node.kind === "screen") this.finishScreen(key, inst.node, inst.ctx, d);
+    else if (isProducer(inst.node)) this.finishApproval(key, inst.node, inst.ctx, d);
+  }
+
+  /** Locks a version directly (the creator's call, not a screen's). */
+  lock(key: string, version: string, why?: string): void {
+    const n = this.rec.state.nodes[key];
+    if (!n?.versions[version]) throw new Error(`'${key}' has no version ${version}`);
+    this.rec.record({ type: "Locked", node: key, version, by: "human", ...(why ? { why } : {}) });
+  }
+
+  /** Branches off from a version: later versions of this step go on the new branch. */
+  branch(key: string, name: string, from: string): void {
+    this.rec.record({ type: "BranchCreated", node: key, branch: name, from });
+    this.rec.record({ type: "BranchSwitched", node: key, branch: name });
+  }
+
+  switchBranch(key: string, name: string): void {
+    this.rec.record({ type: "BranchSwitched", node: key, branch: name });
+  }
+
+  /**
+   * Re-applies the instruction behind one version onto other instances of the
+   * same step, e.g. the gamcha fix on P3-04's panel onto every shot with Bheem
+   * (D-30). Each gets a new candidate from its own locked (or newest) version;
+   * nothing is locked. Returns the new version ids by key.
+   */
+  replayChange(sourceKey: string, version: string, onto: string[]): Record<string, string[]> {
+    const v = this.rec.state.nodes[sourceKey]?.versions[version];
+    if (!v) throw new Error(`'${sourceKey}' has no version ${version}`);
+    if (!v.instruction) throw new Error(`version ${version} of '${sourceKey}' wasn't made from an instruction, so there's nothing to replay`);
+    const stepId = (v.madeBy ?? sourceKey).split(".").at(-1)!;
+    const all = this.instances();
+    const made: Record<string, string[]> = {};
+
+    for (const target of onto) {
+      const inst = all.find((x) => x.key === target);
+      const t = this.rec.state.nodes[target];
+      if (!inst || !t || Object.keys(t.versions).length === 0) throw new Error(`'${target}' has nothing yet to replay onto`);
+      const step = inst.ctx.graph.nodes.find((n) => n.id === stepId);
+      if (!step || !isProducer(step)) throw new Error(`'${target}' has no step '${stepId}' to replay with`);
+      const stepKey = inst.ctx.prefix + stepId;
+      const parent = t.locked?.version ?? Object.keys(t.versions).at(-1)!;
+
+      const s = this.rec.state.nodes[stepKey];
+      if (stepKey !== target) {
+        if (!s) this.rec.record({ type: "NodeReady", node: stepKey });
+        this.rec.record({ type: "AttemptStarted", node: stepKey, attempt: (this.rec.state.nodes[stepKey]?.attempts ?? 0) + 1 });
+      }
+      this.rec.record({ type: "AttemptStarted", node: target, attempt: t.attempts + 1 });
+      const attempt = this.rec.state.nodes[target]!.attempts;
+      const visit = this.rec.state.nodes[stepKey]!.attempts;
+      const outputs = this.exec.produce(step, this.context(stepKey, step, inst.ctx, visit, target, parent, v.instruction));
+      made[target] = outputs.map((output, i) => {
+        this.rec.record({
+          type: "CandidateProduced",
+          node: target,
+          attempt,
+          candidate: i + 1,
+          output,
+          parents: [parent],
+          cost_usd: 0,
+          instruction: v.instruction!,
+          replayed_from: `${sourceKey}@${version}`,
+          ...(stepKey !== target ? { made_by: stepKey } : {}),
+        });
+        return versionId(attempt, i + 1);
+      });
+      // Back to rest: the new candidates wait to be locked; nothing downstream moves.
+      this.rec.record({ type: "NodeCompleted", node: target });
+      if (stepKey !== target) this.rec.record({ type: "NodeCompleted", node: stepKey });
+    }
+    return made;
+  }
+
+  /** What a screen shows: the latest attempt's candidates of the shown step, with the shown field. */
+  private onShow(ctx: Context, show: string | undefined): { version: string; value: unknown }[] {
+    if (!show) return [];
+    const [root, ...path] = show.split(".");
+    const t = this.rec.state.nodes[ctx.prefix + root];
+    if (!t) return [];
+    return Object.values(t.versions)
+      .filter((v) => v.attempt === t.attempts)
+      .map((v) => {
+        let value: unknown = v.output;
+        for (const k of path) value = value != null && typeof value === "object" ? (value as Record<string, unknown>)[k] : undefined;
+        return { version: v.id, value };
+      });
   }
 
   /** The screen in this recipe that shows a step, if any. */
   private reviewer(stepId: string, ctx: Context): ScreenNode | undefined {
     return ctx.graph.nodes.find((n): n is ScreenNode => n.kind === "screen" && n.show?.split(".")[0] === stepId);
-  }
-
-  /**
-   * Asks for approval of a step no screen shows, on a generated screen (D-42).
-   * `when_confident` asks too until checkers exist (Day 20). Returns false if it failed.
-   */
-  private approve(key: string, node: Node, ctx: Context, attempt: number): boolean {
-    const n = this.rec.state.nodes[key]!;
-    const screen: ScreenNode = {
-      id: node.id,
-      kind: "screen",
-      name: `Approve '${node.name ?? node.id}'`,
-      review: "approve",
-      show: node.id,
-      beside: [],
-      actions: [{ id: "approve", needs: [], locks: true }],
-      trust: "ask_me",
-      batch: false,
-    };
-    const visit = n.decisions.length + 1;
-    const ticket = `${key}:approve:${visit}`;
-    this.rec.record({ type: "Suspended", node: key, ticket, kind: "human" });
-    const d = this.exec.decide(screen, { visit, inputs: ctx.inputs, key, uses: {} });
-    if (d.action !== "approve") throw new Error(`the approval for '${key}' only has an 'approve' button, not '${d.action}'`);
-    this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
-    this.rec.record({ type: "Resumed", node: key, ticket });
-    const version = this.chooseVersion(key, d, attempt);
-    if (!version) return false;
-    this.rec.record({ type: "Locked", node: key, version, by: "human", ...(d.note ? { why: d.note } : {}) });
-    return true;
   }
 
   /** A locking button on a screen locks the chosen version of the step it shows. */
@@ -403,7 +585,10 @@ export class Scheduler {
       const from = s.nodes[fromKey];
       scope.action = from?.decisions.at(-1)?.action;
       // D-43: an edge may read the candidate its source step just made as `result`.
-      scope.result = from ? Object.values(from.versions).at(-1)?.output : undefined;
+      const id = fromKey.slice(ctx.prefix.length);
+      const node = ctx.graph.nodes.find((n) => n.id === id);
+      const made = node && "refines" in node && node.refines ? s.nodes[ctx.prefix + node.refines] : from;
+      scope.result = made ? Object.values(made.versions).at(-1)?.output : undefined;
     }
     return scope;
   }
