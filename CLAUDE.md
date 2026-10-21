@@ -39,6 +39,7 @@ packages/engine/src/
   events.ts        Zod union of engine events (the event log's types)
   state.ts         run state as a pure fold over events: apply / replay
   recorder.ts      live side: check + apply an event, then append it
+  scheduler.ts     which step runs next: edges, conditions, loop limits, joins
 packages/engine/test/   vitest tests
 packages/store/src/
   blobs.ts         content-addressed blob store (sha256, write-once)

@@ -15,7 +15,7 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | 3 | Thu Oct 15 | Mohalla Mitra recipes in YAML ✅ | Part/shot/voice recipes; loader with readable errors | Recipes load; broken ones give readable errors |
 | 4 | Fri Oct 16 | Storage ✅ | SQLite (`better-sqlite3`): append-only events; content-addressed blob store. Other tables added when first needed | Write and read a blob by hash |
 | 5 | Sat Oct 17 | Event log ✅ | Append-only events; rebuild state by replay; agent events included (D-26) | Replay == live state, at every event (a crash after any event loses nothing) |
-| 6 | Sun Oct 18 | Scheduler | Ready queue with fake executors; condition evaluator wired to edges ✅ (evaluator exists) | A branch and a capped loop pass |
+| 6 | Sun Oct 18 | Scheduler ✅ | Ready queue with fake executors; condition evaluator wired to edges; joins | A branch and a capped loop pass |
 | 7 | Mon Oct 19 | For-each and join | Map fan-out with stable keys; item-level streaming between maps (D-34); wait-for-all joins; weekly notes | Part graph runs end to end with fakes |
 
 (Days 1–3 were completed together on Oct 13.)
