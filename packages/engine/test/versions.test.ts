@@ -54,7 +54,7 @@ describe("edits become new versions of the step they refine (D-44)", () => {
   const shot = { item: { id: "P3-04", animate: false } };
 
   it("the edited panel is draw's next version, with its parent and instruction", () => {
-    const exec = fakes({ draw: panels, edit: edited }, { pick: (c) => (c.visit === 1 ? { action: "edit", selection: ["1.3"], note: "add the gamcha" } : { action: "lock" }) });
+    const exec = fakes({ draw: panels, edit: edited }, { pick: (c) => (c.visit === 1 ? { action: "edit", selection: ["1.3"], note: "add the gamcha" } : { action: "lock", selection: [c.shows!.at(-1)!.version] }) });
     const { rec } = start(example("shot_recipe"), exec, shot);
     const draw = rec.state.nodes.draw!;
     expect(draw.versions["2.1"]).toMatchObject({ parents: ["1.3"], instruction: "add the gamcha", madeBy: "edit", output: { image: "img:P3-04:a1c3+add the gamcha" } });
@@ -63,7 +63,7 @@ describe("edits become new versions of the step they refine (D-44)", () => {
   });
 
   it("the pick screen shows the edited panel the second time", () => {
-    const exec = fakes({ draw: panels, edit: edited }, { pick: (c) => (c.visit === 1 ? { action: "edit", selection: ["1.3"], note: "add the gamcha" } : { action: "lock" }) });
+    const exec = fakes({ draw: panels, edit: edited }, { pick: (c) => (c.visit === 1 ? { action: "edit", selection: ["1.3"], note: "add the gamcha" } : { action: "lock", selection: [c.shows!.at(-1)!.version] }) });
     start(example("shot_recipe"), exec, shot);
     const [first, second] = exec.calls["screen:pick"]!;
     expect(first!.shows!.map((s) => s.version)).toEqual(["1.1", "1.2", "1.3"]);
@@ -71,7 +71,7 @@ describe("edits become new versions of the step they refine (D-44)", () => {
   });
 
   it("the edit step gets the panel it starts from and the instruction", () => {
-    const exec = fakes({ draw: panels, edit: edited }, { pick: (c) => (c.visit === 1 ? { action: "edit", selection: ["1.2"], note: "warmer light" } : { action: "lock" }) });
+    const exec = fakes({ draw: panels, edit: edited }, { pick: (c) => (c.visit === 1 ? { action: "edit", selection: ["1.2"], note: "warmer light" } : { action: "lock", selection: [c.shows!.at(-1)!.version] }) });
     start(example("shot_recipe"), exec, shot);
     const ctx = exec.calls.edit![0]!;
     expect(ctx.parent).toEqual({ version: "1.2", output: { image: "img:P3-04:a1c2" } });
@@ -123,7 +123,7 @@ describe("replay_change (D-30)", () => {
       { shot_list: () => [{ shots, lines: [], hook: "" }], draw: panels, edit: edited },
       {
         approve_shots: () => ({ action: "approve" }),
-        pick: (c) => (id(c) !== "P3-01" ? undefined : c.visit === 1 ? { action: "edit", selection: ["1.1"], note: "add the gamcha" } : { action: "lock" }),
+        pick: (c) => (id(c) !== "P3-01" ? undefined : c.visit === 1 ? { action: "edit", selection: ["1.1"], note: "add the gamcha" } : { action: "lock", selection: [c.shows!.at(-1)!.version] }),
       },
     );
     return { exec, ...start(example("part_recipe"), exec, { story_pages: "…", part_no: 3 }) };

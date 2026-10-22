@@ -1,0 +1,29 @@
+{
+  "name": "@kriya/cli",
+  "version": "0.0.1",
+  "description": "The kriya command line: init, run, status, inbox, decide, lock.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "kriya": "./src/main.ts"
+  },
+  "exports": {
+    ".": "./src/commands.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kriya/engine": "workspace:*",
+    "@kriya/store": "workspace:*",
+    "yaml": "^2.9.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

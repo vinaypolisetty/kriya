@@ -23,6 +23,7 @@ pnpm install
 pnpm test                 # vitest, all packages
 pnpm typecheck            # tsc --noEmit, all packages
 pnpm validate:examples    # validate every recipe in examples/
+bin/kriya help            # the CLI (docs/cli.md)
 ```
 
 Run all three before considering a change done. CI runs the same three.
@@ -45,11 +46,16 @@ packages/store/src/
   blobs.ts         content-addressed blob store (sha256, write-once)
   events.ts        append-only event log on SQLite (better-sqlite3), schema migrations
   index.ts         openStore(dir): .kriya/kriya.db + .kriya/blobs/
+packages/cli/src/
+  commands.ts      init, run, status, inbox, decide, lock (each a fresh process over .kriya/)
+  project.ts       kriya.yaml + recipes folder
+  fake.ts          fake models and Library for keyless runs
+bin/kriya          runs the CLI from this checkout in your current folder
 examples/mohalla-mitra/ reference recipes (part, shot, voice)
 docs/                   design docs (numbered)
 ```
 
-Planned packages (not created yet): `cli`, `web` (review inbox), `adapters` (Replicate, Anthropic).
+Planned packages (not created yet): `web` (review inbox), `adapters` (Replicate, Anthropic).
 
 Local run data lives in `.kriya/` at the project root (gitignored): `kriya.db` and `blobs/`.
 

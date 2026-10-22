@@ -33,6 +33,28 @@ describe("schema errors", () => {
   });
 });
 
+describe("schema errors in plain words (Q-18)", () => {
+  it("a misspelled setting gets the nearest real one, reported once", () => {
+    const e = errors(minimal(`nodes:\n  - { id: a, kind: model, capabilty: llm.write }\n`));
+    expect(e.map((p) => p.message)).toEqual(["'capabilty' isn't a setting for a model step. Did you mean 'capability'?"]);
+  });
+
+  it("a misspelled kind lists the kinds", () => {
+    const [p] = errors(minimal(`nodes:\n  - { id: a, kind: modle }\n`));
+    expect(p?.message).toBe("'modle' isn't a kind of step. Use one of: model, agent, tool, screen, map, subgraph. Did you mean 'model'?");
+  });
+
+  it("a missing setting says what needs it", () => {
+    const [p] = errors(minimal(`nodes:\n  - { id: a, kind: tool }\n`));
+    expect(p?.message).toBe("'tool' is missing: a tool step needs it");
+  });
+
+  it("works for edges and buttons too", () => {
+    expect(errors(minimal(`nodes:\n  - { id: a, kind: tool, tool: t }\nedges:\n  - { from: a, to: END, wen: "x" }\n`))[0]?.message).toBe("'wen' isn't a setting for an edge. Did you mean 'when'?");
+    expect(errors(minimal(`nodes:\n  - { id: s, kind: screen, review: approve, actions: [{ id: ok, lock: true }] }\n`))[0]?.message).toBe("'lock' isn't a setting for a button. Did you mean 'locks'?");
+  });
+});
+
 describe("graph checks", () => {
   const tool = (id: string) => `  - { id: ${id}, kind: tool, tool: t }\n`;
 

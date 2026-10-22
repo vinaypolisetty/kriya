@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the kriya CLI from this checkout, in the folder you're in.
+# Add this folder to your PATH, or: alias kriya="$HOME/path/to/kriya/bin/kriya"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$REPO/node_modules/.bin/tsx" "$REPO/packages/cli/src/main.ts" "$@"

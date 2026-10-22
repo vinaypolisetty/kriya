@@ -265,7 +265,7 @@ function cyclesWithoutLimit(g: Graph): string[][] {
   return found;
 }
 
-function suggest(word: string, options: string[]): string {
+export function suggest(word: string, options: string[]): string {
   let best: string | undefined;
   let bestD = Infinity;
   for (const o of options) {

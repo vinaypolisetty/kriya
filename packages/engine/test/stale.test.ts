@@ -140,6 +140,17 @@ describe("changing one shot marks only its work stale", () => {
   });
 });
 
+describe("moving a lock by hand", () => {
+  it("a picked panel follows a lock you move later, so the work after it goes stale", () => {
+    const { s, rec } = finishedPart();
+    const draw = "per_shot[P3-01].draw";
+    const extra = s.writeVersion(draw, { image: "img:P3-01:redrawn" }, "redrawn by hand");
+    s.lock(draw, extra);
+    expect(rec.state.nodes[draw]?.locked?.version).toBe(extra);
+    expect(s.stale().map((x) => x.key)).toEqual(["per_shot", "assemble"]);
+  });
+});
+
 describe("what counts as a change", () => {
   it("renaming a step's label doesn't make it stale (rule 4)", () => {
     const { s, rec } = finishedPart();

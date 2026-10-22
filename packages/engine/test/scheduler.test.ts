@@ -78,7 +78,7 @@ describe("voice recipe: a capped loop", () => {
   });
 
   it("stops at max_loops instead of looping forever", () => {
-    const exec = fakes({ speak: () => ({ seconds: 5 }) }, { listen: () => ({ action: "redo" }) });
+    const exec = fakes({ speak: () => ({ seconds: 5 }) }, { listen: () => ({ action: "redo", note: "warmer" }) });
     const { state, path } = run(graph("voice_recipe"), exec);
     expect(path.filter((p) => p === "listen→speak")).toHaveLength(4); // max_loops: 4
     expect(state.nodes.speak?.attempts).toBe(5);
@@ -133,14 +133,14 @@ edges:
 
 describe("determinism", () => {
   it("the same recipe and the same recorded results take the same path, event for event", () => {
-    const make = () => fakes({ speak: (c) => ({ seconds: c.visit === 1 ? 9 : 5 }), too_long: () => ({ seconds: 7 }) }, { listen: (c) => ({ action: c.visit < 2 ? "redo" : "approve" }) });
+    const make = () => fakes({ speak: (c) => ({ seconds: c.visit === 1 ? 9 : 5 }), too_long: () => ({ seconds: 7 }) }, { listen: (c) => ({ action: c.visit < 2 ? "redo" : "approve", note: "again" }) });
     const a = run(graph("voice_recipe"), make());
     const b = run(graph("voice_recipe"), make());
     expect(a.events).toEqual(b.events);
   });
 
   it("the final state is exactly what replaying the log gives", () => {
-    const exec = fakes({}, { pick: (c) => ({ action: ["retry", "edit", "lock"][c.visit - 1]!, note: "n" }) });
+    const exec = fakes({}, { pick: (c) => ({ action: ["retry", "edit", "lock"][c.visit - 1]!, note: "n", selection: ["1.1"] }) });
     const { state, events } = run(graph("shot_recipe"), exec, { item: { id: "P3-01", animate: true } });
     expect(replay(events)).toEqual(state);
   });
@@ -202,14 +202,14 @@ describe("for-each (map) and join: the whole Part", () => {
 
   it("each item counts its own loops", () => {
     // Every shot is retried twice before locking: 3 shots × 2 retries, each well under max_loops 4.
-    const exec = part({ pick: (c) => ({ action: c.visit <= 2 ? "retry" : "lock", selection: ["1.1"] }) });
+    const exec = part({ pick: (c) => ({ action: c.visit <= 2 ? "retry" : "lock", selection: ["1.1"], note: "again" }) });
     const { state } = run(graph("part_recipe"), exec, { story_pages: "…", part_no: 3 });
     expect(state.status).toBe("completed");
     expect(state.nodes["per_shot[P3-03].draw"]?.attempts).toBe(3);
   });
 
   it("names the items that didn't finish, and never assembles a partial set", () => {
-    const exec = part({ pick: (c) => ({ action: (c.inputs.item as { id: string }).id === "P3-02" ? "retry" : "lock", selection: ["1.1"] }) });
+    const exec = part({ pick: (c) => ({ action: (c.inputs.item as { id: string }).id === "P3-02" ? "retry" : "lock", selection: ["1.1"], note: "again" }) });
     const { state } = run(graph("part_recipe"), exec, { story_pages: "…", part_no: 3 });
     expect(state.nodes["per_shot[P3-02].pick"]?.status).toBe("failed");
     expect(state.nodes["per_shot[P3-03].animate"]?.status).toBe("completed"); // the other items carry on
