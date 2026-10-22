@@ -29,7 +29,7 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | 10 | Thu Oct 22 | Cache keys and stale ✅ (spec + inputs + refs + item; per-input hashes, D-45); rebuild reuses unchanged items | Changing one shot marks only its work stale |
 | 11 | Fri Oct 23 | Durable waits ✅: tickets (`deliver`); atomic steps; idempotency keys; `recover()`; crash at every write (D-46) | Resume makes no duplicate calls |
 | 12 | Sat Oct 24 | Context and assets ✅: inheritance (`inherits`), full/local/isolated, facets with versions, blocking on missing facets, @mentions, removed defaults, overrides (D-47); reference validation (B-1, B-2) | Context tests pass |
-| 13 | Sun Oct 25 | CLI: `kriya init, run, status, inbox, decide, lock` | A full fake episode from the terminal |
+| 13 | Sun Oct 25 | CLI ✅: `kriya init, run, status, inbox, decide, lock` ([docs/cli.md](cli.md)); plain schema errors (Q-18) | A full fake episode from the terminal |
 | 14 | Mon Oct 26 | Buffer + write-up: deterministic orchestration of non-deterministic models; `adopt` (two parents, from Day 9) | Draft saved; adopt tests pass |
 
 ### Week 3 · Real models and the Library (Oct 27–Nov 2)

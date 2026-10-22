@@ -1,0 +1,68 @@
+/**
+ * A kriya project on disk:
+ *
+ *   kriya.yaml   project settings: which models, the inherited context, the Library
+ *   recipes/     the recipe files (the source of truth, D-33)
+ *   .kriya/      run data: the event log and media (gitignored)
+ */
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { parse } from "yaml";
+import { z } from "zod";
+import { loadDir, type Graph, type Problem } from "@kriya/engine";
+
+export const ProjectFile = z
+  .object({
+    name: z.string().min(1),
+    /** Only `fake` until real providers arrive (Day 15). */
+    models: z.literal("fake").default("fake"),
+    recipes: z.string().default("recipes"),
+    /** Locked context from higher levels, by level, e.g. `series: { style: … }` (D-47). */
+    context: z.record(z.record(z.unknown())).default({}),
+    /** Asset facets, `Entity.facet: value`, until the Library (Day 18). */
+    library: z.record(z.unknown()).default({}),
+  })
+  .strict();
+export type ProjectFile = z.infer<typeof ProjectFile>;
+
+export type Project = {
+  root: string;
+  settings: ProjectFile;
+  graphs: Graph[];
+  problems: Problem[];
+  /** Content hash of the recipes, so a run knows which recipes it started with. */
+  release: string;
+};
+
+/** Finds kriya.yaml in `from` or a folder above it. */
+export function findRoot(from: string): string | undefined {
+  let dir = resolve(from);
+  for (;;) {
+    if (existsSync(join(dir, "kriya.yaml"))) return dir;
+    const up = dirname(dir);
+    if (up === dir) return undefined;
+    dir = up;
+  }
+}
+
+export function loadProject(from: string): Project {
+  const root = findRoot(from);
+  if (!root) throw new UserError("there's no kriya.yaml here or in any folder above. Start a project with: kriya init <folder>");
+  const raw = parse(readFileSync(join(root, "kriya.yaml"), "utf8")) ?? {};
+  const parsed = ProjectFile.safeParse(raw);
+  if (!parsed.success) {
+    const i = parsed.error.issues[0]!;
+    throw new UserError(`kriya.yaml: ${i.path.join(".") || "(top)"}: ${i.message}`);
+  }
+  const dir = join(root, parsed.data.recipes);
+  if (!existsSync(dir)) throw new UserError(`the recipes folder '${parsed.data.recipes}' doesn't exist`);
+  const { graphs, problems } = loadDir(dir);
+  const release = createHash("sha256")
+    .update(JSON.stringify([...graphs].sort((a, b) => a.graph.localeCompare(b.graph))))
+    .digest("hex");
+  return { root, settings: parsed.data, graphs, problems, release };
+}
+
+/** An error meant for the person at the terminal: printed as-is, no stack trace. */
+export class UserError extends Error {}

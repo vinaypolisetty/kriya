@@ -20,6 +20,8 @@ export interface EventLog {
   read(runId: string, afterSeq?: number): StoredEvent[];
   /** Appends several events atomically: all of them or none. */
   appendMany(runId: string, events: { type: string; payload: unknown }[]): void;
+  /** Every run in the log, oldest first. */
+  runs(): string[];
 }
 
 const SCHEMA_VERSION = 1;
@@ -83,6 +85,11 @@ export class SqliteEventLog implements EventLog {
     this.db.transaction(() => {
       for (const e of events) this.append(runId, e.type, e.payload);
     })();
+  }
+
+  /** Every run in the log, oldest first. */
+  runs(): string[] {
+    return (this.db.prepare("SELECT run_id, MIN(seq) AS first FROM events GROUP BY run_id ORDER BY first").all() as { run_id: string }[]).map((r) => r.run_id);
   }
 
   read(runId: string, afterSeq = 0): StoredEvent[] {

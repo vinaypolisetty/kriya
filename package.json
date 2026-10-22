@@ -4,10 +4,15 @@
   "description": "A durable orchestration engine for multi-step creative and production pipelines with humans in the loop.",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.28.0",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "validate:examples": "pnpm --filter @kriya/engine exec tsx src/cli-validate.ts ../../examples"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
   }
 }

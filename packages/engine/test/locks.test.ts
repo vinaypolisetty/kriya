@@ -69,7 +69,7 @@ describe("locking from a screen", () => {
   });
 
   it("an approve with no selection locks the only candidate of the latest attempt", () => {
-    const exec = fakes({ speak: (c) => [{ audio: `wav${c.visit}`, seconds: 5 }] }, { listen: (c) => ({ action: c.visit < 3 ? "redo" : "approve" }) });
+    const exec = fakes({ speak: (c) => [{ audio: `wav${c.visit}`, seconds: 5 }] }, { listen: (c) => ({ action: c.visit < 3 ? "redo" : "approve", note: "again" }) });
     const { state } = run(example("voice_recipe"), exec, { item: { id: "L1" } });
     expect(state.nodes.speak?.locked?.version).toBe("3.1");
   });
@@ -151,7 +151,7 @@ edges:
   });
 
   it("after a redo, context moves to the newly locked version", () => {
-    const exec = fakes({ speak: (c) => [{ audio: `take${c.visit}`, seconds: 5 }] }, { listen: (c) => ({ action: c.visit === 1 ? "redo" : "approve" }) });
+    const exec = fakes({ speak: (c) => [{ audio: `take${c.visit}`, seconds: 5 }] }, { listen: (c) => ({ action: c.visit === 1 ? "redo" : "approve", note: "again" }) });
     const { state } = run(example("voice_recipe"), exec, { item: { id: "L1" } });
     const s = state.nodes.speak!;
     expect(s.versions[s.locked!.version]?.output.audio).toBe("take2");

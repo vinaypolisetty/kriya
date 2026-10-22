@@ -47,7 +47,16 @@ export type StepContext = {
   assets?: Record<string, string>;
 };
 
-export type Decision = { action: string; selection?: string[]; note?: string };
+export type Decision = { action: string; selection?: string[]; note?: string; region?: unknown };
+
+/** One thing waiting on a person: a screen, or a generated approval. */
+export type InboxItem = {
+  key: string;
+  title: string;
+  review: ScreenNode["review"];
+  shows: { version: string; value: unknown }[];
+  buttons: { id: string; label?: string; needs: ("selection" | "note" | "region")[]; locks: boolean }[];
+};
 
 /** Runs steps. Day 6–7 use fakes; real adapters implement the same shape. */
 export interface Executors {
@@ -334,7 +343,9 @@ export class Scheduler {
 
   private finishScreen(key: string, node: ScreenNode, ctx: Context, d: Decision): void {
     const button = node.actions.find((a) => a.id === d.action);
-    if (!button) throw new Error(`step '${key}' has no button '${d.action}'`);
+    if (!button) throw new Error(`step '${key}' has no button '${d.action}' (it has: ${node.actions.map((a) => a.id).join(", ")})`);
+    const missing = button.needs.filter((n) => (n === "selection" ? !d.selection?.length : n === "note" ? !d.note : d.region === undefined));
+    if (missing.length > 0) throw new Error(`the '${d.action}' button needs ${missing.map((m) => (m === "selection" ? "a pick" : `a ${m}`)).join(" and ")}`);
     this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
     this.rec.record({ type: "Resumed", node: key, ticket: this.rec.state.nodes[key]!.ticket! });
     if (button.locks && node.show && !this.lockShown(key, node, ctx, d)) return;
@@ -447,6 +458,27 @@ export class Scheduler {
   }
 
   // ── Things the creator does mid-run ─────────────────────────────────────
+
+  /** Every step that has started, in recipe order (each map's items grouped under it). */
+  steps(): string[] {
+    return this.instances().map((x) => x.key).filter((k) => this.rec.state.nodes[k]);
+  }
+
+  /** Everything waiting on a person right now, in run order. */
+  inbox(): InboxItem[] {
+    return this.instances().flatMap(({ key, node, ctx }) => {
+      if (this.status(key) !== "awaiting_human") return [];
+      const screen = node.kind === "screen" ? node : isProducer(node) ? approvalScreen(node) : undefined;
+      if (!screen) return [];
+      return [{
+        key,
+        title: screen.name ?? screen.id,
+        review: screen.review,
+        shows: this.onShow(ctx, screen.show),
+        buttons: screen.actions.map((a) => ({ id: a.id, ...(a.label ? { label: a.label } : {}), needs: a.needs, locks: a.locks })),
+      }];
+    });
+  }
 
   /** Answers a step that is waiting for a human: a screen or a generated approval. Call `run()` after. */
   answer(key: string, d: Decision): void {
@@ -1014,12 +1046,14 @@ export class Scheduler {
    * A screen's `selected`: the shown field (`show: draw.image` → the image) of
    * the version the decision chose: the selected one, or the one it locked.
    */
-  private selected(ctx: Context, screen: ScreenNode, d: { selection?: string[] | undefined }): unknown {
+  private selected(ctx: Context, screen: ScreenNode, d: { action?: string; selection?: string[] | undefined }): unknown {
     if (!screen.show) return d.selection;
     const [root, ...path] = screen.show.split(".");
     const t = this.rec.state.nodes[ctx.prefix + root];
     if (!t || t.status === "stale") return undefined; // stale work is out of context
-    const ids = d.selection && d.selection.length > 0 ? d.selection : t.locked ? [t.locked.version] : [];
+    // A locking button's pick is whatever is locked *now*: if the creator moved the lock later, that wins.
+    const locking = screen.actions.find((a) => a.id === d.action)?.locks;
+    const ids = locking && t.locked ? [t.locked.version] : d.selection && d.selection.length > 0 ? d.selection : t.locked ? [t.locked.version] : [];
     const values = ids.map((id) => {
       let v: unknown = t.versions[id]?.output;
       for (const k of path) v = v != null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
