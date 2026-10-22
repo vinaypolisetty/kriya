@@ -4,7 +4,7 @@
  * nothing), does one thing, and exits. Written as functions so tests can call
  * them directly.
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -18,7 +18,7 @@ export type IO = { out: (line: string) => void; err: (line: string) => void; cwd
 
 const HELP = `kriya: run recipes with people in the loop
 
-  kriya init <folder> [--example mohalla-mitra]   start a project
+  kriya init <folder> [--example <name>]          start a project (examples: kriya init --examples)
   kriya run <recipe> [--input name=value]… [--id name]
                                                   start a run (fake models, no cost)
   kriya status [run]                              your runs, or one run's steps
@@ -76,14 +76,23 @@ const EXAMPLE_CONTEXT: Record<string, ProjectContext> = {
 };
 type ProjectContext = Record<string, Record<string, unknown>>;
 
+/** The example projects that ship with kriya: one folder each under examples/. */
+function examples(): string[] {
+  return readdirSync(EXAMPLES).filter((d) => statSync(join(EXAMPLES, d)).isDirectory()).sort();
+}
+
 function init(args: string[], io: IO): number {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { example: { type: "string" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { example: { type: "string" }, examples: { type: "boolean" } } });
+  if (values.examples) {
+    io.out(`Examples: ${examples().join(", ")}`);
+    return 0;
+  }
   const folder = positionals[0];
   if (!folder) throw new UserError("say which folder to create: kriya init <folder>");
   const root = resolve(io.cwd, folder);
   if (existsSync(join(root, "kriya.yaml"))) throw new UserError(`'${folder}' already has a kriya.yaml`);
   const example = values.example;
-  if (example && !existsSync(join(EXAMPLES, example))) throw new UserError(`there's no example called '${example}'. Try: mohalla-mitra`);
+  if (example && !examples().includes(example)) throw new UserError(`there's no example called '${example}'. Examples: ${examples().join(", ")}`);
 
   mkdirSync(join(root, "recipes"), { recursive: true });
   if (example) cpSync(join(EXAMPLES, example), join(root, "recipes"), { recursive: true });
