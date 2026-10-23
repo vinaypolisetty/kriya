@@ -590,3 +590,159 @@ describe("file tools: each agent step has its own workspace (D-52)", () => {
     });
   });
 });
+
+// ── Day 15: model calls as jobs (real providers are async) ───────────────
+
+/**
+ * A provider whose turns are slow: each turn returns a ticket and is answered
+ * later, like an HTTP call in flight. Jobs are keyed by idempotency key, so
+ * asking again (after a crash) returns the same ticket; `lost()` drops the
+ * in-flight answers, like a process that died mid-request.
+ */
+class AsyncModel extends Model {
+  readonly inFlight = new Map<string, AgentReply>();
+  submissions = 0;
+  async(): Executors {
+    const sync = this.executors();
+    return {
+      ...sync,
+      turn: (node, ctx, history) => {
+        this.submissions++;
+        const r = sync.turn!(node, ctx, history) as Exclude<ReturnType<NonNullable<Executors["turn"]>>, Pending>;
+        this.inFlight.set(`turn:${ctx.idempotencyKey}`, r.reply);
+        return new Pending(`turn:${ctx.idempotencyKey}`);
+      },
+    };
+  }
+  /** Delivers every finished turn, then runs; until nothing is in flight. */
+  settle(s: Scheduler, rec: Recorder) {
+    s.run();
+    for (let i = 0; i < 20 && rec.state.nodes.analyst?.ticketKind === "model_job"; i++) {
+      const ticket = rec.state.nodes.analyst.ticket!;
+      const reply = this.inFlight.get(ticket)!;
+      this.inFlight.delete(ticket);
+      s.deliverTurn(ticket, { reply, tokens: { input: 100, output: 20 }, model: "fake-claude-2026-10-01", cost_usd: 0.01 });
+      s.run();
+    }
+  }
+}
+
+describe("model calls as jobs (D-53)", () => {
+  it("an agent whose turns answer later runs to the same result as one that answers at once", () => {
+    const sync = run(recipe(), new Model(researcher));
+    const model = new AsyncModel(researcher);
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(recipe(), rec, model.async(), [], { tools: tools(), blobs: memoryBlobs() });
+    s.start(RELEASE, INPUTS);
+    s.run();
+    expect(rec.state.nodes.analyst).toMatchObject({ status: "waiting_external", ticketKind: "model_job", ticket: "turn:run1/analyst#1/t1" });
+    model.settle(s, rec);
+    expect(rec.state.nodes.analyst!.versions["1.1"]!.output).toEqual(sync.rec.state.nodes.analyst!.versions["1.1"]!.output);
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+
+  it("a crash while a turn is in flight: the restarted process asks again under the same key, with nothing new recorded", () => {
+    const model = new AsyncModel(researcher);
+    const t = tools();
+    const blobs = memoryBlobs();
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(recipe(), rec, model.async(), [], { tools: t, blobs });
+    s.start(RELEASE, INPUTS);
+    s.run();
+    const before = readRun(log, "run1").length;
+    model.inFlight.clear(); // the process died; its HTTP request died with it
+
+    const r2 = Recorder.resume(log, "run1");
+    const s2 = new Scheduler(recipe(), r2, model.async(), [], { tools: t, blobs });
+    s2.recover();
+    expect(readRun(log, "run1")).toHaveLength(before);
+    expect([...model.inFlight.keys()]).toEqual(["turn:run1/analyst#1/t1"]);
+    model.settle(s2, r2);
+    expect(r2.state.status).toBe("completed");
+  });
+
+  it("a crash at any write, with every turn answering later: same result, same log, every turn paid once", () => {
+    const attempt = (crashAt: number) => {
+      const model = new AsyncModel(researcher);
+      const t = tools();
+      const blobs = memoryBlobs();
+      const db = new SqliteEventLog(openDatabase(":memory:"));
+      const log = new CrashingLog(db, crashAt);
+      const rec = Recorder.start(log, "run1");
+      const s = new Scheduler(recipe(), rec, model.async(), [], { tools: t, blobs });
+      let crashed = false;
+      try {
+        s.start(RELEASE, INPUTS);
+        model.settle(s, rec);
+      } catch (e) {
+        if (!(e instanceof Crash)) throw e;
+        crashed = true;
+      }
+      let state = crashed ? undefined : rec.state;
+      if (crashed) {
+        model.inFlight.clear();
+        const fresh = db.read("run1").length === 0;
+        const r2 = fresh ? Recorder.start(db, "run1") : Recorder.resume(db, "run1");
+        const s2 = new Scheduler(recipe(), r2, model.async(), [], { tools: t, blobs });
+        if (fresh) s2.start(RELEASE, INPUTS);
+        else s2.recover();
+        model.settle(s2, r2);
+        state = r2.state;
+      }
+      return { crashed, state: state!, writes: log.writes, events: readRun(db, "run1"), paid: [...model.paid.keys()] };
+    };
+    const base = attempt(Number.POSITIVE_INFINITY);
+    expect(base.state.status).toBe("completed");
+    for (let k = 1; k <= base.writes; k++) {
+      const r = attempt(k);
+      expect(r.crashed, `write ${k}`).toBe(true);
+      expect(r.state, `state after a crash at write ${k}`).toEqual(base.state);
+      expect(r.events, `log after a crash at write ${k}`).toEqual(base.events);
+      expect(r.paid, `paid turns after a crash at write ${k}`).toEqual(base.paid);
+    }
+  });
+
+  it("a job that fails for good fails the step with the reason", () => {
+    const model = new AsyncModel(researcher);
+    const rec = Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run1");
+    const s = new Scheduler(recipe(), rec, model.async(), [], { tools: tools(), blobs: memoryBlobs() });
+    s.start(RELEASE, INPUTS);
+    s.run();
+    s.failJob("turn:run1/analyst#1/t1", "Claude declined this request (cyber)");
+    s.run();
+    expect(rec.state.nodes.analyst).toMatchObject({ status: "failed", failure: "Claude declined this request (cyber)" });
+    expect(() => s.failJob("nope", "x")).toThrow("no step is waiting on ticket 'nope'");
+  });
+});
+
+describe("clearing old results when the context fills up (D-39 step 2)", () => {
+  it("once a turn uses 70% of the window, results older than the last 6 turns become stubs; answers and notes stay", () => {
+    let turnNo = 0;
+    const model = new Model((h) => {
+      if (h.length === 0) return { calls: [{ tool: "ask_human", args: { question: "City?" } }, { tool: "note", args: { key: "k", text: "v" } }, { tool: "search", args: { q: "0" } }] };
+      if (h.length < 9) return { calls: [{ tool: "search", args: { q: String(h.length) } }] };
+      return { final: { report: "done" } };
+    });
+    const exec = model.executors();
+    const big: Executors = {
+      ...exec,
+      // Turn 8 reports 750 of a 1,000-token window: over 70%.
+      turn: (node, ctx, history) => ({ ...(exec.turn!(node, ctx, history) as object), tokens: { input: ++turnNo === 8 ? 750 : 100, output: 10 }, context_window: 1000 }) as never,
+    };
+    const rec = Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run1");
+    const s = new Scheduler(recipe("    max_turns: 12\n"), rec, big, [], { tools: tools(), blobs: memoryBlobs() });
+    s.start(RELEASE, INPUTS);
+    s.run();
+
+    const before = model.histories[7]!; // what turn 8 saw: nothing cleared yet
+    expect(before[0]!.results[2]!.result).toEqual({ url: "https://example.org/tankers" });
+    const after = model.histories[8]!; // turn 9 sees turns 1–2 cleared (8 − 6)
+    expect(after[0]!.results[0]!.result).toEqual({ answer: "Pune" });
+    expect(after[0]!.results[1]!.result).toEqual({ saved: "k" });
+    expect(after[0]!.results[2]!.result).toMatchObject({ cleared: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(after[1]!.results[0]!.result).toMatchObject({ cleared: expect.any(String) });
+    expect(after[2]!.results[0]!.result).toEqual({ url: "https://example.org/tankers" });
+  });
+});

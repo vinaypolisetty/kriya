@@ -46,6 +46,9 @@ export type AgentStep = {
   turn: number;
   response: unknown;
   cost: number;
+  /** Input tokens the provider reported for this turn, and the model's context window. */
+  tokensIn: number;
+  window?: number;
   /** `ok` and `result` (a content hash) are set once the tool returns. */
   calls: { call: number; tool: string; args: unknown; ok?: boolean; result?: string }[];
 };
@@ -56,6 +59,8 @@ export type NodeState = {
   versions: Record<string, Version>;
   locked?: { version: string; by: "human" | "auto"; why?: string };
   ticket?: string;
+  /** What the ticket waits on: a person, a model job, a tool job, … */
+  ticketKind?: string;
   decisions: Omit<EventOf<"HumanDecision">, "type" | "node">[];
   turns: number;
   /** Agent tool calls waiting for a result, as "turn.call". */
@@ -202,11 +207,11 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
 
     case "Suspended":
       if (n.ticket) fail(e, `step is already waiting on ticket ${n.ticket}`);
-      return next({ status: e.kind === "human" ? "awaiting_human" : "waiting_external", ticket: e.ticket });
+      return next({ status: e.kind === "human" ? "awaiting_human" : "waiting_external", ticket: e.ticket, ticketKind: e.kind });
 
     case "Resumed": {
       if (n.ticket !== e.ticket) fail(e, `step isn't waiting on ticket ${e.ticket}`);
-      const { ticket: _t, ...rest } = n;
+      const { ticket: _t, ticketKind: _k, ...rest } = n;
       return withNode(state, e.node, { ...rest, status: "running" });
     }
 
@@ -217,7 +222,7 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
 
     case "AgentTurn":
       if (e.turn !== n.turns + 1) fail(e, `expected turn ${n.turns + 1}, got ${e.turn}`);
-      return next({ status: "running", turns: e.turn, history: [...n.history, { turn: e.turn, response: e.response, cost: e.cost_usd, calls: [] }] }, e.cost_usd);
+      return next({ status: "running", turns: e.turn, history: [...n.history, { turn: e.turn, response: e.response, cost: e.cost_usd, tokensIn: e.tokens.input, ...(e.context_window ? { window: e.context_window } : {}), calls: [] }] }, e.cost_usd);
 
     case "ToolCalled": {
       const call = `${e.turn}.${e.call}`;

@@ -109,6 +109,8 @@ export const EngineEvent = z.discriminatedUnion("type", [
     tokens: z.object({ input: z.number().int().nonnegative(), output: z.number().int().nonnegative() }).strict(),
     model: z.string().min(1),
     cost_usd: Usd,
+    /** The model's context window in tokens, so clearing decisions replay exactly (D-39 step 2). */
+    context_window: z.number().int().positive().optional(),
   }),
   on("ToolCalled", { node: NodeKey, turn: Count, call: Count, tool: z.string().min(1), args: z.unknown() }),
   on("ToolResult", { node: NodeKey, turn: Count, call: Count, ok: z.boolean(), result: Hash }),

@@ -77,11 +77,15 @@ export interface Executors {
    * records the reply, runs the tools, and decides whether there's another turn.
    * `history` is this attempt's earlier turns, rebuilt from the log on resume.
    */
-  turn?(node: AgentNode, ctx: StepContext, history: AgentHistory): AgentTurnResult;
+  turn?(node: AgentNode, ctx: StepContext, history: AgentHistory): AgentTurnResult | Pending;
 }
 
-/** What an agent asks for on one turn: tools to call (in order), or its final output. */
-export type AgentReply = { calls: { tool: string; args?: unknown }[] } | { final: Record<string, unknown> };
+/**
+ * What an agent asks for on one turn: tools to call (in order), or its final
+ * output. `raw` is the provider's own reply (e.g. Claude's content blocks),
+ * recorded so the next turn can send the conversation back exactly.
+ */
+export type AgentReply = ({ calls: { tool: string; args?: unknown }[] } | { final: Record<string, unknown> }) & { raw?: unknown };
 
 export type AgentTurnResult = {
   reply: AgentReply;
@@ -89,6 +93,8 @@ export type AgentTurnResult = {
   /** Exact provider model version (rule 6). */
   model: string;
   cost_usd: number;
+  /** The model's context window, when known: clearing starts at 70% of it (D-39 step 2). */
+  context_window?: number;
 };
 
 /** An agent's earlier turns in this attempt, with what each tool returned. */
@@ -103,9 +109,18 @@ export type AgentHistory = { turn: number; reply: AgentReply; results: { call: n
  */
 export interface Tools {
   call(tool: string, args: unknown, ctx: { key: string; idempotencyKey: string }): unknown;
+  /** What a model is told about a tool: a description and a JSON Schema for its arguments. */
+  describe?(tool: string): ToolSpec | undefined;
 }
 
-/** What a slow tool returns: the agent waits on this ticket until `deliverTool`. */
+export type ToolSpec = { description: string; input_schema: Record<string, unknown> };
+
+/**
+ * What a slow call returns instead of its result: a model job, an agent turn or
+ * a tool. The step waits on the ticket until it's delivered (`deliver`,
+ * `deliverTurn`, `deliverTool`) or fails (`failJob`). Asking again with the same
+ * idempotency key must give back the same ticket.
+ */
 export class Pending {
   constructor(readonly ticket: string) {}
 }
@@ -120,9 +135,40 @@ export const BUILT_IN_TOOLS = ["ask_human", "recall", "note", "write_file", "rea
 /** A workspace path: relative, with no `..`, like `drafts/part3.md`. */
 const FILE_PATH = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
 
+/** What the built-in tools take, for models that need a schema. */
+export const BUILT_IN_TOOL_SPECS: Record<(typeof BUILT_IN_TOOLS)[number], ToolSpec> = {
+  ask_human: {
+    description: "Ask the person running this step a question and wait for their answer. Use it when you need a decision or a fact only they have.",
+    input_schema: { type: "object", properties: { question: { type: "string" } }, required: ["question"], additionalProperties: false },
+  },
+  recall: {
+    description: "Read back a large earlier tool result by its hash, in pieces of up to 8,000 characters.",
+    input_schema: { type: "object", properties: { hash: { type: "string" }, from: { type: "integer" }, to: { type: "integer" } }, required: ["hash"], additionalProperties: false },
+  },
+  note: {
+    description: "Save a working note under a key. Your notes are shown to you on every later turn; a new note replaces the old one for the same key.",
+    input_schema: { type: "object", properties: { key: { type: "string" }, text: { type: "string" } }, required: ["key", "text"], additionalProperties: false },
+  },
+  write_file: {
+    description: "Write a text file in your workspace (replaces it if it exists). Paths are relative, like drafts/part3.md.",
+    input_schema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" } }, required: ["path", "text"], additionalProperties: false },
+  },
+  read_file: {
+    description: "Read a file from your workspace, in pieces of up to 8,000 characters.",
+    input_schema: { type: "object", properties: { path: { type: "string" }, from: { type: "integer" }, to: { type: "integer" } }, required: ["path"], additionalProperties: false },
+  },
+  list_files: {
+    description: "List the files in your workspace with their sizes.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+};
+
 /** A tool result longer than this (about 2k tokens) reaches the agent as a preview it can `recall`. */
 export const OFFLOAD_CHARS = 8000;
 const PREVIEW_CHARS = 400;
+/** Clearing (D-39 step 2): once a turn uses 70% of the context window, older results become stubs; the last 6 turns stay. */
+const CLEAR_AT = 0.7;
+const KEEP_TURNS = 6;
 
 /** Content-addressed storage for tool results (the store's blob folder, or memory in tests). */
 export interface Blobs {
@@ -359,11 +405,7 @@ export class Scheduler {
    */
   private call(key: string, node: Producer, ctx: Context): void {
     if (node.kind === "agent") return this.agent(key, node, ctx);
-    const n = this.rec.state.nodes[key]!;
-    const target = node.refines ? ctx.prefix + node.refines : key;
-    const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
-    const sc = this.context(key, node, ctx, n.attempts, target, parent, instruction);
-    sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}`;
+    const sc = this.produceRequest(key, node, ctx);
     const result = this.external(() => this.exec.produce(node, sc));
     if (!Array.isArray(result)) {
       this.rec.record({ type: "Suspended", node: key, ticket: result.ticket, kind: "model_job" });
@@ -405,18 +447,34 @@ export class Scheduler {
       if (used >= node.max_turns) return this.fail(key, `it used all ${node.max_turns} of its turns without finishing; raise max_turns or narrow the goal`);
       if (node.budget && spent >= node.budget.usd) return this.fail(key, `it spent $${spent.toFixed(2)} of its $${node.budget.usd.toFixed(2)} budget without finishing`);
 
-      const sc = this.context(key, node, ctx, n.attempts);
-      sc.idempotencyKey = `${base}/t${used + 1}`;
-      const notes = this.agentNotes(key);
-      if (Object.keys(notes).length > 0) sc.notes = notes;
-      const history = this.agentHistory(key);
+      const { sc, history } = this.turnRequest(key, node, ctx);
       const r = this.external(() => turn(node, sc, history));
-      const t = this.rec.state.nodes[key]!.turns + 1;
-      this.rec.record({ type: "AgentTurn", node: key, turn: t, response: r.reply, tokens: r.tokens, model: r.model, cost_usd: r.cost_usd });
-      if (isFinal(r.reply)) continue; // accepted at the top of the loop
-      if (!Array.isArray(r.reply.calls) || r.reply.calls.length === 0) return this.fail(key, "the agent answered with neither a tool call nor a final answer");
-      r.reply.calls.forEach((c, i) => this.rec.record({ type: "ToolCalled", node: key, turn: t, call: i + 1, tool: c.tool, args: c.args ?? null }));
+      if (r instanceof Pending) return void this.rec.record({ type: "Suspended", node: key, ticket: r.ticket, kind: "model_job" });
+      if (!this.recordTurn(key, r)) return;
     }
+  }
+
+  /** What the next turn is asked with: the same every time for the same recorded state, so a resubmission matches. */
+  private turnRequest(key: string, node: AgentNode, ctx: Context): { sc: StepContext; history: AgentHistory } {
+    const n = this.rec.state.nodes[key]!;
+    const sc = this.context(key, node, ctx, n.attempts);
+    sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}/t${n.history.length + 1}`;
+    const notes = this.agentNotes(key);
+    if (Object.keys(notes).length > 0) sc.notes = notes;
+    return { sc, history: this.agentHistory(key) };
+  }
+
+  /** Records one turn's reply and the tool calls it asks for. False if the step failed. */
+  private recordTurn(key: string, r: AgentTurnResult): boolean {
+    const t = this.rec.state.nodes[key]!.turns + 1;
+    this.rec.record({ type: "AgentTurn", node: key, turn: t, response: r.reply, tokens: r.tokens, model: r.model, cost_usd: r.cost_usd, ...(r.context_window ? { context_window: r.context_window } : {}) });
+    if (isFinal(r.reply)) return true; // accepted at the top of the loop
+    if (!Array.isArray(r.reply.calls) || r.reply.calls.length === 0) {
+      this.fail(key, "the agent answered with neither a tool call nor a final answer");
+      return false;
+    }
+    r.reply.calls.forEach((c, i) => this.rec.record({ type: "ToolCalled", node: key, turn: t, call: i + 1, tool: c.tool, args: c.args ?? null }));
+    return true;
   }
 
   /**
@@ -469,12 +527,22 @@ export class Scheduler {
    * A large result arrives as a preview with its hash, for `recall` (D-39 step 1).
    */
   private agentHistory(key: string): AgentHistory {
+    // Clearing (D-39 step 2), in batches: each time a turn reached 70% of the context window,
+    // results older than the last 6 turns became stubs. Decided from recorded token counts only.
+    let clearedUpTo = 0;
+    for (const h of this.rec.state.nodes[key]!.history) {
+      if (h.window && h.tokensIn >= CLEAR_AT * h.window) clearedUpTo = h.turn - KEEP_TURNS;
+    }
     return this.rec.state.nodes[key]!.history.map((h) => ({
       turn: h.turn,
       reply: h.response as AgentReply,
       results: h.calls
         .filter((c) => c.ok !== undefined)
         .map((c) => {
+          // Your answers and the agent's own notes are never cleared.
+          if (h.turn <= clearedUpTo && c.tool !== "ask_human" && c.tool !== "note") {
+            return { call: c.call, tool: c.tool, ok: c.ok!, result: { cleared: c.result!, note: "cleared to save context; recall it by hash if you need it" } };
+          }
           const value = this.blobs.get(c.result!);
           const text = JSON.stringify(value);
           const result = c.tool !== "recall" && c.tool !== "read_file" && text.length > OFFLOAD_CHARS ? { offloaded: c.result!, size: text.length, preview: text.slice(0, PREVIEW_CHARS) } : value;
@@ -537,6 +605,16 @@ export class Scheduler {
     this.rec.record({ type: "Resumed", node: key, ticket: this.rec.state.nodes[key]!.ticket! });
     this.rec.record({ type: "ToolResult", node: key, turn: q.turn, call: q.call, ok: true, result: this.blobs.put({ answer: d.note }) });
     this.agent(key, node, ctx);
+  }
+
+  /** What a model or tool step is asked with: the same every time for the same recorded state. */
+  private produceRequest(key: string, node: Producer, ctx: Context): StepContext {
+    const n = this.rec.state.nodes[key]!;
+    const target = node.refines ? ctx.prefix + node.refines : key;
+    const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
+    const sc = this.context(key, node, ctx, n.attempts, target, parent, instruction);
+    sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}`;
+    return sc;
   }
 
   /** Records a call's outputs as candidates and applies the lock policy. */
@@ -667,8 +745,8 @@ export class Scheduler {
   /** A provider job finished: continues the step waiting on its ticket. Call `run()` after. */
   deliver(ticket: string, outputs: Record<string, unknown>[]): void {
     this.atomic(() => {
-      const inst = this.instances().find((x) => this.rec.state.nodes[x.key]?.ticket === ticket && this.status(x.key) === "waiting_external");
-      if (!inst || !isProducer(inst.node)) throw new Error(`no step is waiting on ticket '${ticket}'`);
+      const inst = this.waitingOn(ticket);
+      if (!inst || !isProducer(inst.node) || inst.node.kind === "agent") throw new Error(`no step is waiting on ticket '${ticket}'`);
       this.rec.record({ type: "Resumed", node: inst.key, ticket });
       this.accept(inst.key, inst.node, inst.ctx, outputs);
     });
@@ -677,8 +755,8 @@ export class Scheduler {
   /** A slow tool an agent called has finished: records its result and the agent carries on. Call `run()` after. */
   deliverTool(ticket: string, result: unknown, error?: string): void {
     this.atomic(() => {
-      const inst = this.instances().find((x) => this.rec.state.nodes[x.key]?.ticket === ticket && this.status(x.key) === "waiting_external");
-      if (!inst || inst.node.kind !== "agent") throw new Error(`no agent is waiting on ticket '${ticket}'`);
+      const inst = this.waitingOn(ticket);
+      if (!inst || inst.node.kind !== "agent" || this.rec.state.nodes[inst.key]!.ticketKind !== "tool_job") throw new Error(`no agent is waiting on ticket '${ticket}'`);
       const n = this.rec.state.nodes[inst.key]!;
       const last = n.history.at(-1)!;
       const c = last.calls.find((x) => x.ok === undefined)!;
@@ -689,11 +767,70 @@ export class Scheduler {
     });
   }
 
+  /** A model call for an agent's turn has finished: records the turn and the agent carries on. Call `run()` after. */
+  deliverTurn(ticket: string, result: AgentTurnResult): void {
+    this.atomic(() => {
+      const inst = this.waitingOn(ticket);
+      if (!inst || inst.node.kind !== "agent") throw new Error(`no agent is waiting on ticket '${ticket}'`);
+      this.rec.record({ type: "Resumed", node: inst.key, ticket });
+      if (this.recordTurn(inst.key, result)) this.agent(inst.key, inst.node, inst.ctx);
+    });
+  }
+
+  /** A slow job failed for good (the provider refused, or gave up): the step fails with the reason. Call `run()` after. */
+  failJob(ticket: string, reason: string): void {
+    this.atomic(() => {
+      const inst = this.waitingOn(ticket);
+      if (!inst) throw new Error(`no step is waiting on ticket '${ticket}'`);
+      this.rec.record({ type: "Resumed", node: inst.key, ticket });
+      this.fail(inst.key, reason);
+    });
+  }
+
+  private waitingOn(ticket: string): Instance | undefined {
+    return this.instances().find((x) => this.rec.state.nodes[x.key]?.ticket === ticket && this.status(x.key) === "waiting_external");
+  }
+
+  /**
+   * Starts slow jobs again after a restart, with the same idempotency key, so a
+   * provider that kept the job hands back the same ticket and one that lost it
+   * (an in-process request) starts it again. Nothing is recorded unless the job
+   * answers straight away.
+   */
+  private resubmit(key: string, node: Producer, ctx: Context, kind: string | undefined): void {
+    const n = this.rec.state.nodes[key]!;
+    const ticket = n.ticket!;
+    if (node.kind === "agent" && kind === "model_job") {
+      const { sc, history } = this.turnRequest(key, node, ctx);
+      const r = this.external(() => this.exec.turn!(node, sc, history));
+      if (!(r instanceof Pending)) {
+        this.rec.record({ type: "Resumed", node: key, ticket });
+        if (this.recordTurn(key, r)) this.agent(key, node, ctx);
+      }
+    } else if (node.kind === "agent" && kind === "tool_job") {
+      const last = n.history.at(-1)!;
+      const c = last.calls.find((x) => x.ok === undefined)!;
+      const { ok, result } = this.runTool(key, node, c, `${this.rec.runId}/${key}#${n.attempts}/t${last.turn}.c${c.call}`);
+      if (!(result instanceof Pending)) {
+        this.rec.record({ type: "Resumed", node: key, ticket });
+        this.rec.record({ type: "ToolResult", node: key, turn: last.turn, call: c.call, ok, result: this.blobs.put(result) });
+        this.agent(key, node, ctx);
+      }
+    } else if (kind === "model_job") {
+      const r = this.external(() => this.exec.produce(node, this.produceRequest(key, node, ctx)));
+      if (Array.isArray(r)) {
+        this.rec.record({ type: "Resumed", node: key, ticket });
+        this.accept(key, node, ctx, r);
+      }
+    }
+  }
+
   /**
    * After a restart (`Recorder.resume` + a new Scheduler): asks again for every
    * outside call that was in flight. A model call is repeated with the same
    * idempotency key, so the provider returns the job it already ran; screens
-   * are simply shown again. Jobs waiting on a ticket keep waiting. Then `run()`.
+   * are simply shown again; slow jobs are submitted again under the same key
+   * (see `resubmit`). Then `run()`.
    */
   recover(): void {
     this.atomic(() => {
@@ -701,6 +838,7 @@ export class Scheduler {
         const n = this.rec.state.nodes[key];
         if (!n) continue;
         if (isProducer(node) && n.status === "running") this.call(key, node, ctx);
+        else if (isProducer(node) && n.status === "waiting_external") this.resubmit(key, node, ctx, n.ticketKind);
         else if (node.kind === "screen" && n.status === "awaiting_human") this.ask(key, node, ctx);
         else if (node.kind === "agent" && this.openQuestion(key)) this.askAgent(key, node, ctx);
         else if (isProducer(node) && n.status === "awaiting_human") this.askAgain(key, node, ctx);
