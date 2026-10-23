@@ -150,6 +150,36 @@ edges:
   });
 });
 
+describe("an agent asks you a question from the terminal (Day 14b)", () => {
+  it("the question waits in the inbox; kriya decide reply --note answers it, in a later process", () => {
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "recipes", "brief.yaml"),
+      `graph: brief
+level: part
+nodes:
+  - id: writer
+    kind: agent
+    goal: Write the episode brief
+    tools: [ask_human]
+    out: { brief: text }
+edges:
+  - { from: writer, to: END }
+`,
+    );
+    expect(kriya(cwd, "run", "brief").out).toContain("1 waiting on you");
+    const inbox = kriya(cwd, "inbox").out;
+    expect(inbox).toContain("brief-1 · writer: writer asks: Anything I should know before I start? (Write the episode brief)");
+    expect(inbox).toContain("buttons: reply (--note)");
+
+    const r = kriya(cwd, "decide", "1", "reply", "--note", "Part 3 is set in Pune");
+    expect(r.code, r.err).toBe(0);
+    expect(kriya(cwd, "inbox").out).toContain("writer: Approve 'writer'");
+    kriya(cwd, "decide", "1", "approve");
+    expect(kriya(cwd, "status", "brief-1").out.split("\n")[0]).toBe("brief-1 · brief · completed");
+  });
+});
+
 describe("plain errors", () => {
   it("outside a project", () => {
     const r = kriya(mkdtempSync(join(tmpdir(), "kriya-none-")), "status");

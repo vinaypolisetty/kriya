@@ -14,7 +14,10 @@ import {
   type Executors,
   type Graph,
   type RunState,
+  type StepContext,
   type Tools,
+  Pending,
+  OFFLOAD_CHARS,
 } from "../src/index.js";
 
 const RELEASE = "a".repeat(64);
@@ -52,15 +55,22 @@ class Model {
   readonly paid = new Map<string, AgentReply>();
   asked = 0;
   readonly histories: AgentHistory[] = [];
+  readonly contexts: StepContext[] = [];
+  /** How a person answers an `ask_human` question: right away, or not yet (answer later with `s.answer`). */
+  human: "answers" | "waits" = "answers";
   constructor(private readonly script: (h: AgentHistory) => AgentReply, private readonly costPerTurn = 0.01) {}
 
   executors(): Executors {
     return {
       produce: () => [{ done: true }],
-      decide: () => ({ action: "approve" }),
+      decide: (screen) => {
+        if (!screen.actions.some((a) => a.id === "reply")) return { action: "approve" };
+        return this.human === "answers" ? { action: "reply", note: "Pune" } : undefined;
+      },
       turn: (_node, ctx, history) => {
         this.asked++;
         this.histories.push(history);
+        this.contexts.push(ctx);
         const key = ctx.idempotencyKey!;
         if (!this.paid.has(key)) this.paid.set(key, this.script(history));
         return { reply: this.paid.get(key)!, tokens: { input: 100, output: 20 }, model: "fake-claude-2026-10-01", cost_usd: this.costPerTurn };
@@ -164,7 +174,7 @@ describe("tools an agent can't use, and tools that fail", () => {
       call: 1,
       tool: "delete_everything",
       ok: false,
-      result: { error: "'delete_everything' isn't one of this step's tools (search, fetch, count_words)" },
+      result: { error: "'delete_everything' isn't one of this step's tools (search, fetch, count_words, ask_human, recall, note)" },
     });
     expect(rec.state.nodes.analyst!.locked?.version).toBe("1.1");
   });
@@ -290,6 +300,228 @@ describe("crash and resume mid-agent", () => {
       const r = attempt(k);
       const asked = r.model.asked - base.model.asked;
       expect(asked, `extra model calls after a crash at write ${k}`).toBeLessThanOrEqual(1); // only the call in flight
+    }
+  });
+});
+
+// ── Day 14b: agents that wait and remember ───────────────────────────────
+
+describe("ask_human: an agent asks you and waits (D-26)", () => {
+  const asker = (h: AgentHistory): AgentReply =>
+    h.length === 0 ? { calls: [{ tool: "ask_human", args: { question: "Which city is Part 3 set in?" } }] } : { final: { report: `Set in ${(h[0]!.results[0]!.result as { answer: string }).answer}` } };
+
+  it("the question waits in the inbox; your reply is the tool's result and the agent carries on", () => {
+    const model = new Model(asker);
+    model.human = "waits";
+    const { s, rec } = run(recipe(), model);
+    expect(rec.state.nodes.analyst!.status).toBe("awaiting_human");
+    expect(rec.state.status).toBe("running");
+    expect(s.inbox()).toEqual([
+      { key: "analyst", title: "analyst asks: Which city is Part 3 set in?", review: "edit_text", shows: [], buttons: [{ id: "reply", needs: ["note"], locks: false }] },
+    ]);
+
+    s.answer("analyst", { action: "reply", note: "Pune" });
+    s.run();
+    expect(rec.state.nodes.analyst!.versions["1.1"]!.output).toEqual({ report: "Set in Pune" });
+    expect(rec.state.status).toBe("completed");
+    expect(model.asked).toBe(2);
+  });
+
+  it("a question you've already answered on the screen doesn't wait", () => {
+    const { rec } = run(recipe(), new Model(asker));
+    expect(rec.state.nodes.analyst!.versions["1.1"]!.output).toEqual({ report: "Set in Pune" });
+  });
+
+  it("is a built-in: the step doesn't have to list it", () => {
+    const model = new Model(asker);
+    model.human = "waits";
+    const { rec } = run(recipe(), model);
+    expect(rec.state.nodes.analyst!.status).toBe("awaiting_human");
+  });
+
+  it("an answer without a note is refused plainly", () => {
+    const model = new Model(asker);
+    model.human = "waits";
+    const { s } = run(recipe(), model);
+    expect(() => s.answer("analyst", { action: "approve" })).toThrow(`'analyst' asked you: "Which city is Part 3 set in?". Answer with 'reply' and your answer as the note`);
+  });
+
+  it("waits across a restart (the next morning) without asking the model again", () => {
+    const model = new Model(asker);
+    model.human = "waits";
+    const t = tools();
+    const blobs = memoryBlobs();
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(recipe(), rec, model.executors(), [], { tools: t, blobs });
+    s.start(RELEASE, INPUTS);
+    s.run();
+
+    const resumed = Recorder.resume(log, "run1");
+    const s2 = new Scheduler(recipe(), resumed, model.executors(), [], { tools: t, blobs });
+    s2.recover();
+    s2.run();
+    expect(resumed.state.nodes.analyst!.status).toBe("awaiting_human");
+    s2.answer("analyst", { action: "reply", note: "Pune" });
+    s2.run();
+    expect(resumed.state.status).toBe("completed");
+    expect(model.asked).toBe(2);
+    expect(replay(readRun(log, "run1"))).toEqual(resumed.state);
+  });
+});
+
+describe("slow tools wait on a ticket", () => {
+  const slow = (): Tools & { started: string[] } => {
+    const started: string[] = [];
+    return { started, call: (_tool, _args, ctx) => (started.push(ctx.idempotencyKey), new Pending(`job:${ctx.idempotencyKey}`)) };
+  };
+  const fetcher = (h: AgentHistory): AgentReply => (h.length === 0 ? { calls: [{ tool: "fetch", args: { url: "https://example.org/long" } }] } : { final: { report: JSON.stringify(h[0]!.results[0]) } });
+
+  it("the agent waits until the job is delivered, then sees its result", () => {
+    const t = slow();
+    const model = new Model(fetcher);
+    const { s, rec } = run(recipe(), model, t);
+    expect(rec.state.nodes.analyst).toMatchObject({ status: "waiting_external", ticket: "job:run1/analyst#1/t1.c1" });
+    expect(model.asked).toBe(1);
+
+    s.deliverTool("job:run1/analyst#1/t1.c1", { text: "the long page" });
+    s.run();
+    expect(rec.state.nodes.analyst!.versions["1.1"]!.output).toEqual({ report: JSON.stringify({ call: 1, tool: "fetch", ok: true, result: { text: "the long page" } }) });
+    expect(t.started).toHaveLength(1);
+  });
+
+  it("a job that failed reaches the agent as an error", () => {
+    const { s, rec } = run(recipe(), new Model(fetcher), slow());
+    s.deliverTool("job:run1/analyst#1/t1.c1", undefined, "the page timed out");
+    s.run();
+    expect(rec.state.nodes.analyst!.versions["1.1"]!.output.report).toContain('"ok":false,"result":{"error":"the page timed out"}');
+  });
+
+  it("says plainly when no agent waits on a ticket", () => {
+    const { s } = run(recipe(), new Model(fetcher), slow());
+    expect(() => s.deliverTool("nope", {})).toThrow("no agent is waiting on ticket 'nope'");
+  });
+});
+
+describe("agent memory: offload, recall and notes (D-39 steps 1 and 3)", () => {
+  const big = "tanker ".repeat(3000); // 21,000 characters
+  const reader: Tools = { call: () => ({ text: big }) };
+
+  it("a large result reaches the agent as a preview with its hash; recall reads it back in pieces", () => {
+    const model = new Model((h) => {
+      if (h.length === 0) return { calls: [{ tool: "fetch", args: { url: "x" } }] };
+      const r = h[0]!.results[0]!.result as { offloaded: string; size: number; preview: string };
+      if (h.length === 1) return { calls: [{ tool: "recall", args: { hash: r.offloaded, from: 8000 } }] };
+      return { final: { report: "read it" } };
+    });
+    run(recipe(), model, reader);
+    const first = model.histories[1]![0]!.results[0]!.result as { offloaded: string; size: number; preview: string };
+    expect(first).toMatchObject({ offloaded: expect.stringMatching(/^[0-9a-f]{64}$/), size: JSON.stringify({ text: big }).length });
+    expect(first.preview).toHaveLength(400);
+
+    const recalled = model.histories[2]![1]!.results[0]!.result as { from: number; to: number; size: number; text: string };
+    expect(recalled).toMatchObject({ from: 8000, to: 8000 + OFFLOAD_CHARS });
+    expect(recalled.text).toBe(JSON.stringify({ text: big }).slice(8000, 8000 + OFFLOAD_CHARS));
+  });
+
+  it("recall only reads results from this step's own history", () => {
+    const model = new Model((h) => (h.length === 0 ? { calls: [{ tool: "recall", args: { hash: "f".repeat(64) } }] } : { final: { report: "ok" } }));
+    run(recipe(), model);
+    expect(model.histories[1]![0]!.results[0]).toMatchObject({ ok: false, result: { error: `there's no result ${"f".repeat(64)} in this step's history` } });
+  });
+
+  it("notes are in every later turn's context; the latest note for a key wins", () => {
+    const model = new Model((h) => {
+      if (h.length === 0) return { calls: [{ tool: "note", args: { key: "plan", text: "search, then fetch" } }, { tool: "note", args: { key: "city", text: "Pune" } }] };
+      if (h.length === 1) return { calls: [{ tool: "note", args: { key: "plan", text: "fetch only" } }] };
+      return { final: { report: "done" } };
+    });
+    run(recipe(), model);
+    expect(model.contexts[0]!.notes).toBeUndefined();
+    expect(model.contexts[1]!.notes).toEqual({ plan: "search, then fetch", city: "Pune" });
+    expect(model.contexts[2]!.notes).toEqual({ plan: "fetch only", city: "Pune" });
+  });
+
+  it("a note without a key and text is refused, and not kept", () => {
+    const model = new Model((h) => (h.length === 0 ? { calls: [{ tool: "note", args: { text: "no key" } }] } : { final: { report: "ok" } }));
+    run(recipe(), model);
+    expect(model.histories[1]![0]!.results[0]!.ok).toBe(false);
+    expect(model.contexts[1]!.notes).toBeUndefined();
+  });
+});
+
+describe("crash and resume: an agent that asks you and waits on a slow tool", () => {
+  /** Ask a question, take a note, fetch slowly, then answer. The person answers on the screen. */
+  const script = (h: AgentHistory): AgentReply => {
+    if (h.length === 0) return { calls: [{ tool: "ask_human", args: { question: "Which city?" } }, { tool: "note", args: { key: "city", text: "asked" } }] };
+    if (h.length === 1) return { calls: [{ tool: "fetch", args: { url: "https://example.org" } }] };
+    return { final: { report: `${(h[0]!.results[0]!.result as { answer: string }).answer}: ${JSON.stringify(h[1]!.results[0]!.result)}` } };
+  };
+
+  /** A provider whose slow jobs outlive the crash; each job is keyed, so starting it again is the same job. */
+  class SlowTools implements Tools {
+    readonly jobs = new Set<string>();
+    call(_tool: string, _args: unknown, ctx: { idempotencyKey: string }) {
+      this.jobs.add(ctx.idempotencyKey);
+      return new Pending(`job:${ctx.idempotencyKey}`);
+    }
+  }
+
+  function drive(s: Scheduler, rec: Recorder) {
+    for (let i = 0; i < 10; i++) {
+      s.run();
+      const n = rec.state.nodes.analyst;
+      if (n?.status !== "waiting_external") return;
+      s.deliverTool(n.ticket!, { text: "page" });
+    }
+  }
+
+  function attempt(crashAt: number) {
+    const model = new Model(script);
+    const t = new SlowTools();
+    const blobs = memoryBlobs();
+    const db = new SqliteEventLog(openDatabase(":memory:"));
+    const log = new CrashingLog(db, crashAt);
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(recipe(), rec, model.executors(), [], { tools: t, blobs });
+    let crashed = false;
+    try {
+      s.start(RELEASE, INPUTS);
+      drive(s, rec);
+    } catch (e) {
+      if (!(e instanceof Crash)) throw e;
+      crashed = true;
+    }
+    let state: RunState | undefined;
+    if (!crashed) state = rec.state;
+    else {
+      const fresh = db.read("run1").length === 0;
+      const r2 = fresh ? Recorder.start(db, "run1") : Recorder.resume(db, "run1");
+      const s2 = new Scheduler(recipe(), r2, model.executors(), [], { tools: t, blobs });
+      if (fresh) s2.start(RELEASE, INPUTS);
+      else s2.recover();
+      drive(s2, r2);
+      state = r2.state;
+    }
+    return { crashed, state: state!, model, jobs: t.jobs, writes: log.writes, events: readRun(db, "run1") };
+  }
+
+  const base = attempt(Number.POSITIVE_INFINITY);
+
+  it("the uninterrupted run asks, notes, waits for the job and finishes", () => {
+    expect(base.state.status).toBe("completed");
+    expect(base.state.nodes.analyst!.versions["1.1"]!.output).toEqual({ report: 'Pune: {"text":"page"}' });
+    expect(base.events.filter((e) => e.type === "Suspended").map((e) => e.kind)).toEqual(["human", "tool_job"]);
+  });
+
+  it("a crash at any write, then resume: same result, same log, every turn paid once, one job", () => {
+    for (let k = 1; k <= base.writes; k++) {
+      const r = attempt(k);
+      expect(r.crashed, `write ${k}`).toBe(true);
+      expect(r.state, `state after a crash at write ${k}`).toEqual(base.state);
+      expect(r.events, `log after a crash at write ${k}`).toEqual(base.events);
+      expect([...r.model.paid.keys()], `paid turns after a crash at write ${k}`).toEqual([...base.model.paid.keys()]);
+      expect([...r.jobs], `jobs after a crash at write ${k}`).toEqual([...base.jobs]);
     }
   });
 });

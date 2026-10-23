@@ -47,6 +47,8 @@ export type StepContext = {
   idempotencyKey?: string;
   /** Asset facet versions in what it received, `Entity.facet` → version. */
   assets?: Record<string, string>;
+  /** For an agent: its working notes (`note` tool), latest per key, always in its prompt (D-39). */
+  notes?: Record<string, string>;
 };
 
 export type Decision = { action: string; selection?: string[]; note?: string; region?: unknown };
@@ -94,13 +96,29 @@ export type AgentHistory = { turn: number; reply: AgentReply; results: { call: n
 
 /**
  * The tools agents can call. Throw to report a failure: the agent is told and
- * carries on. A tool with side effects (post, send, pay) must use
- * `idempotencyKey`, because a crash after it ran but before its result was
+ * carries on. A slow tool returns `new Pending(ticket)` and the agent waits for
+ * `deliverTool(ticket, result)`. A tool with side effects (post, send, pay) must
+ * use `idempotencyKey`, because a crash after it ran but before its result was
  * recorded runs it again with the same key.
  */
 export interface Tools {
   call(tool: string, args: unknown, ctx: { key: string; idempotencyKey: string }): unknown;
 }
+
+/** What a slow tool returns: the agent waits on this ticket until `deliverTool`. */
+export class Pending {
+  constructor(readonly ticket: string) {}
+}
+
+/**
+ * Tools every agent has, run by the engine itself (D-39): `ask_human` asks you
+ * and waits, `recall` reads back a large result, `note` keeps working memory.
+ */
+export const BUILT_IN_TOOLS = ["ask_human", "recall", "note"] as const;
+
+/** A tool result longer than this (about 2k tokens) reaches the agent as a preview it can `recall`. */
+export const OFFLOAD_CHARS = 8000;
+const PREVIEW_CHARS = 400;
 
 /** Content-addressed storage for tool results (the store's blob folder, or memory in tests). */
 export interface Blobs {
@@ -143,6 +161,18 @@ type Producer = Extract<Node, { kind: "model" | "tool" | "agent" }>;
 const isFinal = (r: unknown): r is { final: Record<string, unknown> } => r != null && typeof r === "object" && "final" in r;
 
 const isProducer = (n: Node): n is Producer => n.kind === "model" || n.kind === "tool" || n.kind === "agent";
+
+/** The screen for an agent's `ask_human`: the question, answered with a note. */
+const questionScreen = (node: AgentNode, question: string): ScreenNode => ({
+  id: node.id,
+  kind: "screen",
+  name: `${node.name ?? node.id} asks: ${question}`,
+  review: "edit_text",
+  beside: [],
+  actions: [{ id: "reply", needs: ["note"], locks: false }],
+  trust: "ask_me",
+  batch: false,
+});
 
 /** The generated approval screen for a step no screen shows (D-42). */
 const approvalScreen = (node: Producer): ScreenNode => ({
@@ -354,18 +384,15 @@ export class Scheduler {
       const last = n.history.at(-1);
       if (last && isFinal(last.response)) return this.accept(key, node, ctx, [last.response.final]);
 
+      // The last turn's calls, in order. A question or a slow tool pauses the agent right there.
       for (const c of last?.calls.filter((x) => x.ok === undefined) ?? []) {
-        const idempotencyKey = `${base}/t${last!.turn}.c${c.call}`;
-        // Only the tool's own failure goes back to the agent; a failed write before the call is a crash.
-        const { ok, result } = !node.tools.includes(c.tool)
-          ? { ok: false, result: { error: `'${c.tool}' isn't one of this step's tools (${node.tools.join(", ")})` } }
-          : this.external(() => {
-              try {
-                return { ok: true, result: this.tools.call(c.tool, c.args, { key, idempotencyKey }) };
-              } catch (err) {
-                return { ok: false, result: { error: err instanceof Error ? err.message : String(err) } };
-              }
-            });
+        const ticket = `${key}:t${last!.turn}.c${c.call}`;
+        if (c.tool === "ask_human") {
+          this.rec.record({ type: "Suspended", node: key, ticket, kind: "human" });
+          return this.askAgent(key, node, ctx);
+        }
+        const { ok, result } = this.runTool(key, node, c, `${base}/t${last!.turn}.c${c.call}`);
+        if (result instanceof Pending) return void this.rec.record({ type: "Suspended", node: key, ticket: result.ticket, kind: "tool_job" });
         this.rec.record({ type: "ToolResult", node: key, turn: last!.turn, call: c.call, ok, result: this.blobs.put(result) });
       }
 
@@ -376,6 +403,8 @@ export class Scheduler {
 
       const sc = this.context(key, node, ctx, n.attempts);
       sc.idempotencyKey = `${base}/t${used + 1}`;
+      const notes = this.agentNotes(key);
+      if (Object.keys(notes).length > 0) sc.notes = notes;
       const history = this.agentHistory(key);
       const r = this.external(() => turn(node, sc, history));
       const t = this.rec.state.nodes[key]!.turns + 1;
@@ -386,13 +415,92 @@ export class Scheduler {
     }
   }
 
-  /** This attempt's turns as the agent sees them, results read back by hash. */
+  /**
+   * One tool call: a built-in, or the step's own tools. Only the tool's own
+   * failure goes back to the agent; a failed write before the call is a crash.
+   */
+  private runTool(key: string, node: AgentNode, c: { tool: string; args: unknown }, idempotencyKey: string): { ok: boolean; result: unknown } {
+    const failed = (error: string) => ({ ok: false, result: { error } });
+    const args = (c.args ?? {}) as Record<string, unknown>;
+    if (c.tool === "recall") {
+      const h = this.rec.state.nodes[key]!.history.flatMap((x) => x.calls).find((x) => x.result === args.hash);
+      if (!h) return failed(`there's no result ${String(args.hash)} in this step's history`);
+      const text = JSON.stringify(this.blobs.get(h.result!));
+      const from = Math.max(0, Number(args.from ?? 0) || 0);
+      const to = Math.min(text.length, from + OFFLOAD_CHARS, Number(args.to ?? text.length) || text.length);
+      return { ok: true, result: { hash: args.hash, from, to, size: text.length, text: text.slice(from, to) } };
+    }
+    if (c.tool === "note") {
+      if (typeof args.key !== "string" || typeof args.text !== "string") return failed("note needs a key and a text, e.g. { key: 'plan', text: '…' }");
+      return { ok: true, result: { saved: args.key } };
+    }
+    if (!node.tools.includes(c.tool)) return failed(`'${c.tool}' isn't one of this step's tools (${[...node.tools, ...BUILT_IN_TOOLS].join(", ")})`);
+    return this.external(() => {
+      try {
+        return { ok: true, result: this.tools.call(c.tool, c.args, { key, idempotencyKey }) };
+      } catch (err) {
+        return failed(err instanceof Error ? err.message : String(err));
+      }
+    });
+  }
+
+  /**
+   * This attempt's turns as the agent sees them, results read back by hash.
+   * A large result arrives as a preview with its hash, for `recall` (D-39 step 1).
+   */
   private agentHistory(key: string): AgentHistory {
     return this.rec.state.nodes[key]!.history.map((h) => ({
       turn: h.turn,
       reply: h.response as AgentReply,
-      results: h.calls.map((c) => ({ call: c.call, tool: c.tool, ok: c.ok!, result: this.blobs.get(c.result!) })),
+      results: h.calls
+        .filter((c) => c.ok !== undefined)
+        .map((c) => {
+          const value = this.blobs.get(c.result!);
+          const text = JSON.stringify(value);
+          const result = c.tool !== "recall" && text.length > OFFLOAD_CHARS ? { offloaded: c.result!, size: text.length, preview: text.slice(0, PREVIEW_CHARS) } : value;
+          return { call: c.call, tool: c.tool, ok: c.ok!, result };
+        }),
     }));
+  }
+
+  /** The agent's working notes: the latest successful `note` per key, in this attempt. */
+  private agentNotes(key: string): Record<string, string> {
+    const notes: Record<string, string> = {};
+    for (const h of this.rec.state.nodes[key]!.history) {
+      for (const c of h.calls) {
+        const a = c.args as { key?: unknown; text?: unknown } | null;
+        if (c.tool === "note" && c.ok && typeof a?.key === "string" && typeof a.text === "string") notes[a.key] = a.text;
+      }
+    }
+    return notes;
+  }
+
+  /** The `ask_human` call the agent is waiting on, if any. */
+  private openQuestion(key: string): { turn: number; call: number; question: string } | undefined {
+    const n = this.rec.state.nodes[key];
+    const last = n?.history.at(-1);
+    const c = last?.calls.find((x) => x.ok === undefined);
+    if (!n || n.status !== "awaiting_human" || !last || c?.tool !== "ask_human") return undefined;
+    const q = (c.args as { question?: unknown } | null)?.question;
+    return { turn: last.turn, call: c.call, question: typeof q === "string" ? q : JSON.stringify(c.args) };
+  }
+
+  /** Puts the agent's question in front of the person (again, after a crash), and carries on if they've answered. */
+  private askAgent(key: string, node: AgentNode, ctx: Context): void {
+    const q = this.openQuestion(key)!;
+    const screen = questionScreen(node, q.question);
+    const visit = this.rec.state.nodes[key]!.decisions.length + 1;
+    const d = this.external(() => this.exec.decide(screen, { ...this.context(key, node, ctx, visit), shows: [] }));
+    if (d) this.finishQuestion(key, node, ctx, d);
+  }
+
+  private finishQuestion(key: string, node: AgentNode, ctx: Context, d: Decision): void {
+    const q = this.openQuestion(key)!;
+    if (d.action !== "reply" || !d.note?.trim()) throw new Error(`'${key}' asked you: "${q.question}". Answer with 'reply' and your answer as the note`);
+    this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
+    this.rec.record({ type: "Resumed", node: key, ticket: this.rec.state.nodes[key]!.ticket! });
+    this.rec.record({ type: "ToolResult", node: key, turn: q.turn, call: q.call, ok: true, result: this.blobs.put({ answer: d.note }) });
+    this.agent(key, node, ctx);
   }
 
   /** Records a call's outputs as candidates and applies the lock policy. */
@@ -530,6 +638,21 @@ export class Scheduler {
     });
   }
 
+  /** A slow tool an agent called has finished: records its result and the agent carries on. Call `run()` after. */
+  deliverTool(ticket: string, result: unknown, error?: string): void {
+    this.atomic(() => {
+      const inst = this.instances().find((x) => this.rec.state.nodes[x.key]?.ticket === ticket && this.status(x.key) === "waiting_external");
+      if (!inst || inst.node.kind !== "agent") throw new Error(`no agent is waiting on ticket '${ticket}'`);
+      const n = this.rec.state.nodes[inst.key]!;
+      const last = n.history.at(-1)!;
+      const c = last.calls.find((x) => x.ok === undefined)!;
+      this.rec.record({ type: "Resumed", node: inst.key, ticket });
+      const ok = error === undefined;
+      this.rec.record({ type: "ToolResult", node: inst.key, turn: last.turn, call: c.call, ok, result: this.blobs.put(ok ? result : { error }) });
+      this.agent(inst.key, inst.node, inst.ctx);
+    });
+  }
+
   /**
    * After a restart (`Recorder.resume` + a new Scheduler): asks again for every
    * outside call that was in flight. A model call is repeated with the same
@@ -543,6 +666,7 @@ export class Scheduler {
         if (!n) continue;
         if (isProducer(node) && n.status === "running") this.call(key, node, ctx);
         else if (node.kind === "screen" && n.status === "awaiting_human") this.ask(key, node, ctx);
+        else if (node.kind === "agent" && this.openQuestion(key)) this.askAgent(key, node, ctx);
         else if (isProducer(node) && n.status === "awaiting_human") this.askAgain(key, node, ctx);
       }
     });
@@ -588,7 +712,8 @@ export class Scheduler {
   inbox(): InboxItem[] {
     return this.instances().flatMap(({ key, node, ctx }) => {
       if (this.status(key) !== "awaiting_human") return [];
-      const screen = node.kind === "screen" ? node : isProducer(node) ? approvalScreen(node) : undefined;
+      const q = node.kind === "agent" ? this.openQuestion(key) : undefined;
+      const screen = node.kind === "screen" ? node : q && node.kind === "agent" ? questionScreen(node, q.question) : isProducer(node) ? approvalScreen(node) : undefined;
       if (!screen) return [];
       return [{
         key,
@@ -606,6 +731,7 @@ export class Scheduler {
     const inst = this.instances().find((x) => x.key === key);
     if (!inst || this.status(key) !== "awaiting_human") throw new Error(`step '${key}' isn't waiting for an answer`);
     if (inst.node.kind === "screen") this.finishScreen(key, inst.node, inst.ctx, d);
+    else if (inst.node.kind === "agent" && this.openQuestion(key)) this.finishQuestion(key, inst.node, inst.ctx, d);
     else if (isProducer(inst.node)) this.finishApproval(key, inst.node, inst.ctx, d);
     });
   }
