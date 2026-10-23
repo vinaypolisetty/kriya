@@ -254,6 +254,10 @@ interface Blobs { put(value: unknown): string; get(hash: string): unknown }     
 - `max_turns` and `budget.usd` are checked before each turn. The budget can be overshot by one turn's cost until real adapters reserve before spending (§7).
 - Keys: `run/step#attempt/tN` for turn N, `…/tN.cM` for its Mth tool call.
 - The current attempt's turns live in run state (`history`), folded from events; results are read back from blobs by hash.
+- **Built-in tools** every agent has, unlisted ([D-51](17-decisions.md)): `ask_human { question }` suspends the step like a screen (inbox item with a `reply` button that needs a note; the reply is the tool's result), `recall { hash, from?, to? }` reads back up to 8,000 characters of a result from *this step's* history, and `note { key, text }` keeps working memory, passed to every later turn as `ctx.notes` (latest per key).
+- **Slow tools** return `new Pending(ticket)`; the step waits (`Suspended`, kind `tool_job`) until `deliverTool(ticket, result, error?)`.
+- **Offload**: a result over 8,000 characters (about 2k tokens) reaches the agent as `{ offloaded: hash, size, preview }`. Nothing is lost; `recall` reads it back.
+- **Clear and summarize** (ladder steps 2 and 4) wait for real adapters: both trigger on how full the model's context is, which only a provider reports.
 
 One agent run through the engine:
 

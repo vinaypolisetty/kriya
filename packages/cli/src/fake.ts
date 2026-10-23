@@ -23,7 +23,9 @@ export function fakeExecutors(graphs: Graph[]): Executors {
     // A fake agent calls its first tool once, then answers with made-up outputs.
     turn(node, ctx, history) {
       const usage = { tokens: { input: 0, output: 0 }, model: "fake", cost_usd: 0 };
-      if (history.length === 0) return { reply: { calls: [{ tool: node.tools[0]!, args: { goal: node.goal } }] }, ...usage };
+      const tool = node.tools[0]!;
+      const args = tool === "ask_human" ? { question: `Anything I should know before I start? (${node.goal})` } : { goal: node.goal };
+      if (history.length === 0) return { reply: { calls: [{ tool, args }] }, ...usage };
       const [final] = exec.produce(node, ctx) as Record<string, unknown>[];
       return { reply: { final: final! }, ...usage };
     },

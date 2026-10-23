@@ -39,6 +39,6 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 ## How it behaves
 
 - **Every command is its own process.** Runs live in `.kriya/kriya.db`; close the terminal mid-episode and carry on tomorrow. Each command replays the run and calls `recover()` first, so a crash never loses work or pays twice (D-46).
-- **Models are fake** (`models: fake` in `kriya.yaml`) until real providers arrive on Day 15: made-up outputs from each step's declared types, no keys, no cost. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`.
+- **Models are fake** (`models: fake` in `kriya.yaml`) until real providers arrive on Day 15: made-up outputs from each step's declared types, no keys, no cost. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
 - **`kriya.yaml`** holds the project's name, the inherited context (e.g. `series: { style, rules, cast }`) and, until the Library (Day 18), facet values as `Entity.facet: value`.
 - **Errors are plain words**, including recipe problems ("'capabilty' isn't a setting for a model step. Did you mean 'capability'?").
