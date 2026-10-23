@@ -4,11 +4,11 @@
  * `out` types, so the recipe's own conditions and maps still work.
  */
 import { createHash } from "node:crypto";
-import type { Assets, Executors, Graph, Node, StepContext } from "@kriya/engine";
+import type { Assets, Executors, Graph, Node, StepContext, Tools } from "@kriya/engine";
 
 export function fakeExecutors(graphs: Graph[]): Executors {
   const graphOf = (node: Node) => graphs.find((g) => g.nodes.includes(node));
-  return {
+  const exec: Executors = {
     produce(node, ctx) {
       const out = "out" in node ? node.out : {};
       const n = node.kind === "model" ? node.options : 1;
@@ -20,7 +20,20 @@ export function fakeExecutors(graphs: Graph[]): Executors {
     },
     // People answer through `kriya decide`: every screen waits.
     decide: () => undefined,
+    // A fake agent calls its first tool once, then answers with made-up outputs.
+    turn(node, ctx, history) {
+      const usage = { tokens: { input: 0, output: 0 }, model: "fake", cost_usd: 0 };
+      if (history.length === 0) return { reply: { calls: [{ tool: node.tools[0]!, args: { goal: node.goal } }] }, ...usage };
+      const [final] = exec.produce(node, ctx) as Record<string, unknown>[];
+      return { reply: { final: final! }, ...usage };
+    },
   };
+  return exec;
+}
+
+/** Tools that do nothing but say what they were asked (fake mode; real tools arrive on Day 19). */
+export function fakeTools(): Tools {
+  return { call: (tool, args) => ({ fake: true, tool, args: args ?? null }) };
 }
 
 function fakeValue(type: string, field: string, types: Graph["types"], ctx: StepContext, candidate: number, index = 1): unknown {

@@ -41,6 +41,15 @@ export type Version = {
   inputs?: Record<string, string>;
 };
 
+/** One agent turn of the current attempt: the model's reply, its cost, and the tool calls it asked for. */
+export type AgentStep = {
+  turn: number;
+  response: unknown;
+  cost: number;
+  /** `ok` and `result` (a content hash) are set once the tool returns. */
+  calls: { call: number; tool: string; args: unknown; ok?: boolean; result?: string }[];
+};
+
 export type NodeState = {
   status: NodeStatus;
   attempts: number;
@@ -51,6 +60,8 @@ export type NodeState = {
   turns: number;
   /** Agent tool calls waiting for a result, as "turn.call". */
   openCalls: string[];
+  /** An agent's turns in the current attempt, rebuilt from events on replay (D-26). */
+  history: AgentStep[];
   costUsd: number;
   failure?: string;
   staleReason?: string;
@@ -89,6 +100,7 @@ const newNode = (): NodeState => ({
   decisions: [],
   turns: 0,
   openCalls: [],
+  history: [],
   costUsd: 0,
   branch: "main",
   branches: { main: {} },
@@ -135,7 +147,7 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
   switch (e.type) {
     case "AttemptStarted":
       if (e.attempt !== n.attempts + 1) fail(e, `expected attempt ${n.attempts + 1}, got ${e.attempt}`);
-      return next({ status: "running", attempts: e.attempt });
+      return next({ status: "running", attempts: e.attempt, history: [] });
 
     case "CandidateProduced": {
       if (e.attempt !== n.attempts) fail(e, `attempt ${e.attempt} was never started`);
@@ -205,19 +217,23 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
 
     case "AgentTurn":
       if (e.turn !== n.turns + 1) fail(e, `expected turn ${n.turns + 1}, got ${e.turn}`);
-      return next({ status: "running", turns: e.turn }, e.cost_usd);
+      return next({ status: "running", turns: e.turn, history: [...n.history, { turn: e.turn, response: e.response, cost: e.cost_usd, calls: [] }] }, e.cost_usd);
 
     case "ToolCalled": {
       const call = `${e.turn}.${e.call}`;
       if (e.turn !== n.turns) fail(e, `turn ${e.turn} hasn't happened`);
       if (n.openCalls.includes(call)) fail(e, `tool call ${call} was already made`);
-      return next({ openCalls: [...n.openCalls, call] });
+      const last = n.history.at(-1);
+      if (!last || last.turn !== e.turn) fail(e, `turn ${e.turn} isn't part of this attempt`);
+      const step = { ...last, calls: [...last.calls, { call: e.call, tool: e.tool, args: e.args }] };
+      return next({ openCalls: [...n.openCalls, call], history: [...n.history.slice(0, -1), step] });
     }
 
     case "ToolResult": {
       const call = `${e.turn}.${e.call}`;
       if (!n.openCalls.includes(call)) fail(e, `tool call ${call} was never made, or already returned`);
-      return next({ openCalls: n.openCalls.filter((c) => c !== call) });
+      const history = n.history.map((h) => (h.turn !== e.turn ? h : { ...h, calls: h.calls.map((c) => (c.call === e.call ? { ...c, ok: e.ok, result: e.result } : c)) }));
+      return next({ openCalls: n.openCalls.filter((c) => c !== call), history });
     }
 
     case "HistoryCompacted":

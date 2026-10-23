@@ -9,9 +9,9 @@ import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stringify } from "yaml";
-import { formatProblems, Recorder, Scheduler, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
+import { formatProblems, Recorder, Scheduler, type Blobs, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
 import { openStore, type Store } from "@kriya/store";
-import { fakeExecutors, projectAssets } from "./fake.js";
+import { fakeExecutors, fakeTools, projectAssets } from "./fake.js";
 import { loadProject, UserError, type Project } from "./project.js";
 
 export type IO = { out: (line: string) => void; err: (line: string) => void; cwd: string };
@@ -127,7 +127,7 @@ function run(args: string[], io: IO): number {
     const id = values.id ?? `${recipe}-${runs.filter((r) => r.startsWith(`${recipe}-`)).length + 1}`;
     if (runs.includes(id)) throw new UserError(`there's already a run called '${id}'`);
     const rec = Recorder.start(store.events, id);
-    const s = scheduler(project, graph.graph, rec);
+    const s = scheduler(project, graph.graph, rec, store);
     s.start(project.release, inputs, project.settings.context);
     s.run();
     io.out(`✓ Started ${id} (${recipe})`);
@@ -345,12 +345,26 @@ function checkedProject(io: IO): Project {
   return project;
 }
 
-function scheduler(project: Project, graphId: string, rec: Recorder): Scheduler {
+function scheduler(project: Project, graphId: string, rec: Recorder, store: Store): Scheduler {
   const graph = project.graphs.find((g) => g.graph === graphId);
   if (!graph) throw new UserError(`this run uses recipe '${graphId}', which isn't in your recipes any more`);
   return new Scheduler(graph, rec, fakeExecutors(project.graphs), project.graphs, {
     assets: projectAssets(project.settings.library, project.settings.models === "fake"),
+    tools: fakeTools(),
+    blobs: jsonBlobs(store),
   });
+}
+
+/** Tool results as JSON files in `.kriya/blobs/`, named by content hash, so a resumed agent reads them back. */
+function jsonBlobs(store: Store): Blobs {
+  return {
+    put: (value) => store.blobs.put(Buffer.from(JSON.stringify(value ?? null))).hash,
+    get(hash) {
+      const b = store.blobs.get(hash);
+      if (!b) throw new Error(`a stored tool result is missing from .kriya/blobs (${hash.slice(0, 12)}…)`);
+      return JSON.parse(b.toString("utf8"));
+    },
+  };
 }
 
 /** Opens a run in this process: replays its log and asks again for anything in flight. */
@@ -360,7 +374,7 @@ function openRun(project: Project, store: Store, id: string, io: IO): { rec: Rec
   if (rec.state.release !== project.release) {
     io.err(`! ${id}: the recipes changed since this run started; it carries on with the current recipes (run upgrades come later)`);
   }
-  const s = scheduler(project, rec.state.graph, rec);
+  const s = scheduler(project, rec.state.graph, rec, store);
   if (rec.state.status === "running") {
     s.recover();
     s.run();

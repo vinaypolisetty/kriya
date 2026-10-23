@@ -15,7 +15,7 @@
  * Still to come: lock policy (Day 8), real tickets and waiting (Day 11),
  * re-running a map with reuse of unchanged items (Day 10), `subgraph` steps.
  */
-import { END, type Graph, type Node, type ScreenNode } from "./spec.js";
+import { END, type AgentNode, type Graph, type Node, type ScreenNode } from "./spec.js";
 import { createHash } from "node:crypto";
 import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
@@ -70,6 +70,60 @@ export interface Executors {
   produce(node: Node, ctx: StepContext): Record<string, unknown>[] | { ticket: string };
   /** screen steps: what the human chose, or undefined if there's no answer yet (the step waits; see `answer`). */
   decide(node: ScreenNode, ctx: StepContext): Decision | undefined;
+  /**
+   * agent steps: one model call, one turn (D-26). The engine owns the loop: it
+   * records the reply, runs the tools, and decides whether there's another turn.
+   * `history` is this attempt's earlier turns, rebuilt from the log on resume.
+   */
+  turn?(node: AgentNode, ctx: StepContext, history: AgentHistory): AgentTurnResult;
+}
+
+/** What an agent asks for on one turn: tools to call (in order), or its final output. */
+export type AgentReply = { calls: { tool: string; args?: unknown }[] } | { final: Record<string, unknown> };
+
+export type AgentTurnResult = {
+  reply: AgentReply;
+  tokens: { input: number; output: number };
+  /** Exact provider model version (rule 6). */
+  model: string;
+  cost_usd: number;
+};
+
+/** An agent's earlier turns in this attempt, with what each tool returned. */
+export type AgentHistory = { turn: number; reply: AgentReply; results: { call: number; tool: string; ok: boolean; result: unknown }[] }[];
+
+/**
+ * The tools agents can call. Throw to report a failure: the agent is told and
+ * carries on. A tool with side effects (post, send, pay) must use
+ * `idempotencyKey`, because a crash after it ran but before its result was
+ * recorded runs it again with the same key.
+ */
+export interface Tools {
+  call(tool: string, args: unknown, ctx: { key: string; idempotencyKey: string }): unknown;
+}
+
+/** Content-addressed storage for tool results (the store's blob folder, or memory in tests). */
+export interface Blobs {
+  /** Stores a JSON value and returns its content hash. */
+  put(value: unknown): string;
+  get(hash: string): unknown;
+}
+
+/** Blobs kept in memory: fine for tests and a single process, gone after a restart. */
+export function memoryBlobs(): Blobs {
+  const m = new Map<string, string>();
+  return {
+    put(value) {
+      const h = hash(value);
+      m.set(h, JSON.stringify(value ?? null));
+      return h;
+    },
+    get(h) {
+      const s = m.get(h);
+      if (s === undefined) throw new Error(`there's no stored result ${h}`);
+      return JSON.parse(s);
+    },
+  };
 }
 
 /** Where asset facets come from (the Library, Day 18). Behind an interface so tests use fakes. */
@@ -85,6 +139,8 @@ type Received = { uses: Record<string, unknown>; assets: Record<string, string>;
 type Context = { prefix: string; graph: Graph; inputs: Record<string, unknown> };
 type Instance = { key: string; node: Node; ctx: Context };
 type Producer = Extract<Node, { kind: "model" | "tool" | "agent" }>;
+
+const isFinal = (r: unknown): r is { final: Record<string, unknown> } => r != null && typeof r === "object" && "final" in r;
 
 const isProducer = (n: Node): n is Producer => n.kind === "model" || n.kind === "tool" || n.kind === "agent";
 
@@ -109,18 +165,22 @@ export class Scheduler {
   private readonly graphs: Map<string, Graph>;
   private readonly conditions = new Map<Graph, (Expr | undefined)[]>();
 
-  /** `bundle` holds the recipes that `map` steps run (usually every graph loaded from the folder). */
   private readonly assets: Assets;
+  private readonly tools: Tools;
+  private readonly blobs: Blobs;
 
+  /** `bundle` holds the recipes that `map` steps run (usually every graph loaded from the folder). */
   constructor(
     private readonly graph: Graph,
     private readonly rec: Recorder,
     private readonly exec: Executors,
     bundle: Graph[] = [],
-    options: { assets?: Assets } = {},
+    options: { assets?: Assets; tools?: Tools; blobs?: Blobs } = {},
   ) {
     this.graphs = new Map([...bundle, graph].map((g) => [g.graph, g]));
     this.assets = options.assets ?? { facet: () => undefined };
+    this.tools = options.tools ?? { call: () => { throw new Error("no tools are set up"); } };
+    this.blobs = options.blobs ?? memoryBlobs();
   }
 
   /** Starts a run: records RunStarted and makes the starting steps ready. */
@@ -264,6 +324,7 @@ export class Scheduler {
    * same attempt, same idempotency key, so the provider doesn't charge twice.
    */
   private call(key: string, node: Producer, ctx: Context): void {
+    if (node.kind === "agent") return this.agent(key, node, ctx);
     const n = this.rec.state.nodes[key]!;
     const target = node.refines ? ctx.prefix + node.refines : key;
     const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
@@ -275,6 +336,63 @@ export class Scheduler {
       return;
     }
     this.accept(key, node, ctx, result);
+  }
+
+  /**
+   * An agent's turns (D-26), from wherever the attempt is: finish the tool
+   * calls of the last turn, then check the limits, then take one more turn.
+   * Each model call and each tool call is an outside call, so everything before
+   * it is written first; after a crash, `recover` lands here and picks up at the
+   * same turn, asking again with the same idempotency key.
+   */
+  private agent(key: string, node: AgentNode, ctx: Context): void {
+    const turn = this.exec.turn?.bind(this.exec);
+    if (!turn) return this.fail(key, "agent steps need an agent runner, and none is set up");
+    for (;;) {
+      const n = this.rec.state.nodes[key]!;
+      const base = `${this.rec.runId}/${key}#${n.attempts}`;
+      const last = n.history.at(-1);
+      if (last && isFinal(last.response)) return this.accept(key, node, ctx, [last.response.final]);
+
+      for (const c of last?.calls.filter((x) => x.ok === undefined) ?? []) {
+        const idempotencyKey = `${base}/t${last!.turn}.c${c.call}`;
+        // Only the tool's own failure goes back to the agent; a failed write before the call is a crash.
+        const { ok, result } = !node.tools.includes(c.tool)
+          ? { ok: false, result: { error: `'${c.tool}' isn't one of this step's tools (${node.tools.join(", ")})` } }
+          : this.external(() => {
+              try {
+                return { ok: true, result: this.tools.call(c.tool, c.args, { key, idempotencyKey }) };
+              } catch (err) {
+                return { ok: false, result: { error: err instanceof Error ? err.message : String(err) } };
+              }
+            });
+        this.rec.record({ type: "ToolResult", node: key, turn: last!.turn, call: c.call, ok, result: this.blobs.put(result) });
+      }
+
+      const used = n.history.length;
+      const spent = n.history.reduce((s, h) => s + h.cost, 0);
+      if (used >= node.max_turns) return this.fail(key, `it used all ${node.max_turns} of its turns without finishing; raise max_turns or narrow the goal`);
+      if (node.budget && spent >= node.budget.usd) return this.fail(key, `it spent $${spent.toFixed(2)} of its $${node.budget.usd.toFixed(2)} budget without finishing`);
+
+      const sc = this.context(key, node, ctx, n.attempts);
+      sc.idempotencyKey = `${base}/t${used + 1}`;
+      const history = this.agentHistory(key);
+      const r = this.external(() => turn(node, sc, history));
+      const t = this.rec.state.nodes[key]!.turns + 1;
+      this.rec.record({ type: "AgentTurn", node: key, turn: t, response: r.reply, tokens: r.tokens, model: r.model, cost_usd: r.cost_usd });
+      if (isFinal(r.reply)) continue; // accepted at the top of the loop
+      if (!Array.isArray(r.reply.calls) || r.reply.calls.length === 0) return this.fail(key, "the agent answered with neither a tool call nor a final answer");
+      r.reply.calls.forEach((c, i) => this.rec.record({ type: "ToolCalled", node: key, turn: t, call: i + 1, tool: c.tool, args: c.args ?? null }));
+    }
+  }
+
+  /** This attempt's turns as the agent sees them, results read back by hash. */
+  private agentHistory(key: string): AgentHistory {
+    return this.rec.state.nodes[key]!.history.map((h) => ({
+      turn: h.turn,
+      reply: h.response as AgentReply,
+      results: h.calls.map((c) => ({ call: c.call, tool: c.tool, ok: c.ok!, result: this.blobs.get(c.result!) })),
+    }));
   }
 
   /** Records a call's outputs as candidates and applies the lock policy. */
