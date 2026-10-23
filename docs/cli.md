@@ -33,6 +33,8 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 | `kriya inbox` | Everything waiting on you, across runs |
 | `kriya decide <item> <button> [--pick v] [--note text] [--region x,y,w,h]` | Answers an inbox item, by number or `run:step` |
 | `kriya lock <run> <step> <version> [--why text]` | Locks a version yourself and lists what went stale |
+| `kriya rebuild <run>` | Redoes stale work from its earliest step; unchanged items are kept |
+| `kriya adopt <run> <step> <base> <from> --note text` | Makes a new version from `base`, taking what the note says from `from` (two parents, D-30). It waits for you to lock it |
 
 ## How it behaves
 

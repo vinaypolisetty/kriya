@@ -30,19 +30,24 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | 11 | Fri Oct 23 | Durable waits ✅: tickets (`deliver`); atomic steps; idempotency keys; `recover()`; crash at every write (D-46) | Resume makes no duplicate calls |
 | 12 | Sat Oct 24 | Context and assets ✅: inheritance (`inherits`), full/local/isolated, facets with versions, blocking on missing facets, @mentions, removed defaults, overrides (D-47); reference validation (B-1, B-2) | Context tests pass |
 | 13 | Sun Oct 25 | CLI ✅: `kriya init, run, status, inbox, decide, lock` ([docs/cli.md](cli.md)); plain schema errors (Q-18) | A full fake episode from the terminal |
-| 14 | Mon Oct 26 | Buffer + write-up: deterministic orchestration of non-deterministic models; `adopt` (two parents, from Day 9) | Draft saved; adopt tests pass |
+| 14 | Mon Oct 26 | Buffer + write-up ✅: [deterministic orchestration of non-deterministic models](notes/writeup-determinism.md); `adopt` (two parents, D-49); `kriya adopt`, `kriya rebuild` (Q-20) | Draft saved; adopt tests pass |
+| 14a | from slack | **Agent loop** (D-26): `AgentExecutor.turn()`, the engine-owned turn loop, a tool registry (only listed tools), `max_turns` and `budget.usd` checked between turns. Fakes only | An agent calls 3 tools and returns a final answer; a crash at any write resumes at the same turn with no repeated calls |
+| 14b | from slack | **Agents that wait and remember**: `ask_human` as a tool (the screen suspend path), slow tools as tickets, offload + `recall`, `note` (D-39 steps 1–3) | An agent pauses for a person, resumes the next day and finishes |
+| 14c | from slack (half day) | **File tools for agents** over the blob store: read, write, list; content-addressed so replay stays exact | An agent writes a draft file and reads it back after a crash |
+
+Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya run agents and tools, not only fixed workflows.
 
 ### Week 3 · Real models and the Library (Oct 27–Nov 2)
 
 | Day | Date | Focus | Done when |
 |---|---|---|---|
-| 15 | Tue Oct 27 | Capability interface + Anthropic adapter (write, vision; log model version and cost) | A real shot list from a real story |
-| 16 | Wed Oct 28 | Replicate images: Nano Banana generate/edit; webhook or polling resume | Three real candidates for one shot |
+| 15 | Tue Oct 27 | Capability interface + Anthropic adapter: **tool use first**, then write and vision; log model version and cost | A real Claude agent runs a real tool through kriya; a real shot list from a real story |
+| 16 | Wed Oct 28 | Replicate images: Nano Banana generate/edit; webhook or polling resume; `adopt` and `replay_change` on slow jobs (Q-22) | Three real candidates for one shot |
 | 17 | Thu Oct 29 | Replicate clips, voice, music; idempotency keys | One clip and one voice line |
 | 18 | Fri Oct 30 | Library: assets, facets, versions; import cast, style, voices, music | @Mitra resolves to look and voice |
 | 19 | Sat Oct 31 | Tools: crop, compress, `assemble_reel` (Part 2 script) | Assembly runs from the engine |
 | 20 | Sun Nov 1 | Checkers: rubric vision, duration, size; verdict events | A bad panel is caught |
-| 21 | Mon Nov 2 | Fix loop: edit/crop/retry routing; seed KB from the failure table | One real shot, start to lock, via CLI |
+| 21 | Mon Nov 2 | Fix loop: edit/crop/retry routing; seed KB from the failure table; a **fix agent** when no rule matches | One real shot, start to lock, via CLI |
 
 ### Week 4 · Review inbox (Nov 3–9)
 

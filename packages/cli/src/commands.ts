@@ -26,6 +26,9 @@ const HELP = `kriya: run recipes with people in the loop
   kriya decide <item> <button> [--pick v] [--note text] [--region x,y,w,h]
                                                   answer an inbox item (its number, or run:step)
   kriya lock <run> <step> <version> [--why text]  lock a version yourself
+  kriya rebuild <run>                             redo the run's stale work
+  kriya adopt <run> <step> <base> <from> --note text
+                                                  merge two versions: base, taking what the note says from <from>
 
 Values starting with @ are read from a file: --input story_pages=@pages.txt`;
 
@@ -39,6 +42,8 @@ export function main(argv: string[], io: IO): number {
       case "inbox": return inbox(io);
       case "decide": return decide(rest, io);
       case "lock": return lock(rest, io);
+      case "rebuild": return rebuild(rest, io);
+      case "adopt": return adopt(rest, io);
       case undefined:
       case "help":
       case "--help":
@@ -288,6 +293,42 @@ function lock(args: string[], io: IO): number {
       io.out(`  ${stale.length} step${stale.length === 1 ? "" : "s"} went stale:`);
       for (const x of stale) io.out(`    ↻ ${x.key}: ${x.reason}`);
     }
+    report(io, rec.state, s.inbox());
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+function rebuild(args: string[], io: IO): number {
+  const [id] = args;
+  if (!id) throw new UserError("say which run: kriya rebuild <run>");
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const { rec, s } = openRun(project, store, id, io);
+    const started = s.rebuild();
+    if (started.length === 0) io.out("Nothing is stale; there's nothing to rebuild");
+    else io.out(`✓ Rebuilding from ${started.join(", ")}`);
+    s.run();
+    report(io, rec.state, s.inbox());
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+function adopt(args: string[], io: IO): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { note: { type: "string" } } });
+  const [id, step, base, from] = positionals;
+  if (!id || !step || !base || !from) throw new UserError("say which run, step and two versions: kriya adopt <run> <step> <base> <from> --note text");
+  if (!values.note) throw new UserError(`say what to take from ${from} with --note, e.g. --note "use its sky"`);
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const { rec, s } = openRun(project, store, id, io);
+    const made = s.adopt(step, base, from, values.note);
+    io.out(`✓ Adopted into ${step}: ${made.join(", ")} (from ${base}, taking from ${from}). Nothing is locked yet`);
     report(io, rec.state, s.inbox());
     return 0;
   } finally {

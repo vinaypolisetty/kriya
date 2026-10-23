@@ -201,6 +201,84 @@ describe("branches", () => {
   });
 });
 
+describe("adopt (D-30)", () => {
+  /** An edit that knows about adopting: the base image, plus what it borrowed and why. */
+  const merged = (c: StepContext) => {
+    const image = (c.parent!.output as { image: string }).image;
+    return [{ image: c.borrow ? `${image}<${(c.borrow.output as { image: string }).image}:${c.instruction}` : `${image}+${c.instruction}` }];
+  };
+  const paused = () => {
+    const exec = fakes({ draw: panels, edit: merged }, { pick: () => undefined });
+    return { exec, ...start(example("shot_recipe"), exec, { item: { id: "P3-04", animate: false } }) };
+  };
+
+  it("makes a version with two parents, through the step that edits the panel", () => {
+    const { s, rec, exec } = paused();
+    expect(s.adopt("draw", "1.2", "1.3", "use its sky")).toEqual(["2.1"]);
+    expect(rec.state.nodes.draw!.versions["2.1"]).toMatchObject({
+      parents: ["1.2", "1.3"],
+      instruction: "use its sky",
+      madeBy: "edit",
+      output: { image: "img:P3-04:a1c2<img:P3-04:a1c3:use its sky" },
+    });
+    const ctx = exec.calls.edit!.at(-1)!;
+    expect(ctx.parent).toEqual({ version: "1.2", output: { image: "img:P3-04:a1c2" } });
+    expect(ctx.borrow).toEqual({ version: "1.3", output: { image: "img:P3-04:a1c3" } });
+    expect(exec.calls.draw).toHaveLength(1); // draw isn't asked again
+  });
+
+  it("locks nothing: the adopted version waits for you", () => {
+    const { s, rec } = paused();
+    s.adopt("draw", "1.2", "1.3", "use its sky");
+    expect(rec.state.nodes.draw?.locked).toBeUndefined();
+    s.answer("pick", { action: "lock", selection: ["2.1"] });
+    expect(rec.state.nodes.draw?.locked?.version).toBe("2.1");
+  });
+
+  it("takes from another branch into the one you're on", () => {
+    const { s, rec } = paused();
+    s.branch("draw", "darker", "1.2");
+    s.answer("pick", { action: "edit", selection: ["1.2"], note: "darker sky" });
+    s.run(); // 2.1 on 'darker'; pick waits again
+    s.switchBranch("draw", "main");
+    expect(s.adopt("draw", "1.1", "2.1", "use the darker sky")).toEqual(["3.1"]);
+    const v = rec.state.nodes.draw!.versions["3.1"]!;
+    expect(v).toMatchObject({ parents: ["1.1", "2.1"], branch: "main" });
+    expect(v.output).toEqual({ image: "img:P3-04:a1c1<img:P3-04:a1c2+darker sky:use the darker sky" });
+    expect(rec.state.nodes.draw!.versions["2.1"]!.branch).toBe("darker"); // the source is untouched
+  });
+
+  it("a step nothing refines makes the merge itself", () => {
+    const exec = fakes(
+      { shot_list: (c) => [{ shots: [], lines: [], hook: c.borrow ? `${c.instruction}: ${(c.borrow.output as { hook: string }).hook}` : "Kal milte hain" }] },
+      { approve_shots: () => undefined },
+    );
+    const { s, rec } = start(example("part_recipe"), exec, { story_pages: "…", part_no: 3 });
+    s.writeVersion("shot_list", { shots: [], lines: [], hook: "Tanker Raja returns" });
+    expect(s.adopt("shot_list", "1.1", "2.1", "use its hook")).toEqual(["3.1"]);
+    const v = rec.state.nodes.shot_list!.versions["3.1"]!;
+    expect(v).toMatchObject({ parents: ["1.1", "2.1"], output: { hook: "use its hook: Tanker Raja returns" } });
+    expect(v.madeBy).toBeUndefined();
+    expect(exec.calls.shot_list!.at(-1)!.parent?.version).toBe("1.1");
+  });
+
+  it("says plainly what's wrong", () => {
+    const { s } = paused();
+    expect(() => s.adopt("drw", "1.1", "1.2", "x")).toThrow("there's no step 'drw' in this run");
+    expect(() => s.adopt("pick", "1.1", "1.2", "x")).toThrow("'pick' is a screen step; only model, agent and tool steps have versions to adopt");
+    expect(() => s.adopt("draw", "1.1", "9.9", "x")).toThrow("'draw' has no version 9.9");
+    expect(() => s.adopt("draw", "1.1", "1.1", "x")).toThrow("adopt takes two different versions, but both are 1.1");
+    expect(() => s.adopt("draw", "1.1", "1.2", "  ")).toThrow('say what to take from 1.2, e.g. "use its ending"');
+  });
+
+  it("replays to the same state", () => {
+    const { s, rec, events } = paused();
+    s.adopt("draw", "1.2", "1.3", "use its sky");
+    s.answer("pick", { action: "lock", selection: ["2.1"] });
+    expect(replay(events())).toEqual(rec.state);
+  });
+});
+
 describe("validating refines", () => {
   const errs = (yaml: string) => loadText(`graph: g\nlevel: part\n${yaml}`).problems.filter((p) => p.severity === "error").map((p) => p.message);
   const base = `  - { id: draw, kind: model, capability: image.generate, out: { image: image } }\n`;

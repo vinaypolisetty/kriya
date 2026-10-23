@@ -47,7 +47,7 @@ packages/store/src/
   events.ts        append-only event log on SQLite (better-sqlite3), schema migrations
   index.ts         openStore(dir): .kriya/kriya.db + .kriya/blobs/
 packages/cli/src/
-  commands.ts      init, run, status, inbox, decide, lock (each a fresh process over .kriya/)
+  commands.ts      init, run, status, inbox, decide, lock, rebuild, adopt (each a fresh process over .kriya/)
   project.ts       kriya.yaml + recipes folder
   fake.ts          fake models and Library for keyless runs
 bin/kriya          runs the CLI from this checkout in your current folder

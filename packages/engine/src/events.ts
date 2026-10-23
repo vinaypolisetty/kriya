@@ -6,7 +6,8 @@
  * model, agent, checker or human produced is stored here the first time and
  * replayed afterwards, never generated again (design rule 1).
  *
- * `Adopted` (merging two versions) comes later (D-30: replay first).
+ * Adopting (merging two versions) has no event of its own: it is a
+ * `CandidateProduced` with two parents (D-49).
  */
 import { z } from "zod";
 
