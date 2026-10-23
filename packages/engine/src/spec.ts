@@ -160,3 +160,4 @@ export type Graph = z.infer<typeof Graph>;
 export type Node = z.infer<typeof Node>;
 export type Edge = z.infer<typeof Edge>;
 export type ScreenNode = z.infer<typeof ScreenNode>;
+export type AgentNode = z.infer<typeof AgentNode>;

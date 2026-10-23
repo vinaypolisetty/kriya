@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main } from "../src/commands.js";
@@ -116,6 +116,37 @@ describe("adopt from the terminal (Day 14)", () => {
     const r = kriya(cwd, "adopt", "part_recipe-1", "per_shot[S1].draw", "1.2", "1.3");
     expect(r.code).toBe(1);
     expect(r.err).toBe('✗ say what to take from 1.3 with --note, e.g. --note "use its sky"');
+  });
+});
+
+describe("agents from the terminal (Day 14a)", () => {
+  it("an agent step calls a tool, answers, and waits for your approval like any step", () => {
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "recipes", "research.yaml"),
+      `graph: research
+level: part
+inputs:
+  topic: text
+nodes:
+  - id: analyst
+    kind: agent
+    goal: Write a short report on the topic
+    tools: [search]
+    uses: [inputs.topic]
+    out: { report: text }
+edges:
+  - { from: analyst, to: END }
+`,
+    );
+    const r = kriya(cwd, "run", "research", "--input", "topic=water tankers");
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("1 waiting on you");
+    expect(kriya(cwd, "inbox").out).toContain("research-1 · analyst: Approve 'analyst'");
+    expect(kriya(cwd, "decide", "1", "approve").code).toBe(0);
+    expect(kriya(cwd, "status", "research-1").out.split("\n")[0]).toBe("research-1 · research · completed");
+    // The tool's result is stored by hash, so a later process can read it back.
+    expect(readdirSync(join(cwd, ".kriya", "blobs"), { recursive: true }).length).toBeGreaterThan(0);
   });
 });
 

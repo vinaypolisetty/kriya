@@ -236,6 +236,25 @@ interface AgentExecutor {
 
 If the executor owned the loop, the engine would only see "started" and "finished": a crash on turn 37 would pay for turns 1–36 again and the model would take a different path. With one turn per call, `history` is rebuilt from the event log on resume and the next call is turn 37.
 
+#### In v0.1 ([D-50](17-decisions.md))
+
+```ts
+interface Executors {
+  turn?(node: AgentNode, ctx: StepContext, history: AgentHistory): {
+    reply: { calls: { tool: string; args?: unknown }[] } | { final: Record<string, unknown> };
+    tokens: { input: number; output: number }; model: string; cost_usd: number;
+  };
+}
+interface Tools { call(tool: string, args: unknown, ctx: { key: string; idempotencyKey: string }): unknown } // throw = failed
+interface Blobs { put(value: unknown): string; get(hash: string): unknown }                              // tool results by hash
+```
+
+- A turn may ask for several tools; they run in order, each recorded `ToolCalled` → `ToolResult`.
+- A tool the step doesn't list never runs, and a tool that throws doesn't stop the step: either way the agent gets `{ ok: false, error }` and carries on. A failed write *before* a call is a crash, never a tool error.
+- `max_turns` and `budget.usd` are checked before each turn. The budget can be overshot by one turn's cost until real adapters reserve before spending (§7).
+- Keys: `run/step#attempt/tN` for turn N, `…/tN.cM` for its Mth tool call.
+- The current attempt's turns live in run state (`history`), folded from events; results are read back from blobs by hash.
+
 One agent run through the engine:
 
 ```
