@@ -33,7 +33,7 @@ Rules: tick a day when its "done when" is met, not when time runs out. Days 14 a
 | 14 | Mon Oct 26 | Buffer + write-up ✅: [deterministic orchestration of non-deterministic models](notes/writeup-determinism.md); `adopt` (two parents, D-49); `kriya adopt`, `kriya rebuild` (Q-20) | Draft saved; adopt tests pass |
 | 14a | from slack | **Agent loop** ✅ (D-26, D-50): `AgentExecutor.turn()`, the engine-owned turn loop, a tool registry (only listed tools), `max_turns` and `budget.usd` checked between turns. Fakes only | An agent calls 3 tools and returns a final answer; a crash at any write resumes at the same turn with no repeated calls |
 | 14b | from slack | **Agents that wait and remember** ✅ (D-51): `ask_human` as a tool (the screen suspend path), slow tools as tickets, offload + `recall`, `note` (D-39 steps 1–3) | An agent pauses for a person, resumes the next day and finishes |
-| 14c | from slack (half day) | **File tools for agents** over the blob store: read, write, list; content-addressed so replay stays exact | An agent writes a draft file and reads it back after a crash |
+| 14c | from slack (half day) | **File tools for agents** ✅ (D-52) over the blob store: read, write, list; content-addressed so replay stays exact | An agent writes a draft file and reads it back after a crash |
 
 Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya run agents and tools, not only fixed workflows.
 
