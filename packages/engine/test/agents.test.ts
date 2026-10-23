@@ -174,7 +174,7 @@ describe("tools an agent can't use, and tools that fail", () => {
       call: 1,
       tool: "delete_everything",
       ok: false,
-      result: { error: "'delete_everything' isn't one of this step's tools (search, fetch, count_words, ask_human, recall, note)" },
+      result: { error: "'delete_everything' isn't one of this step's tools (search, fetch, count_words, ask_human, recall, note, write_file, read_file, list_files)" },
     });
     expect(rec.state.nodes.analyst!.locked?.version).toBe("1.1");
   });
@@ -246,40 +246,44 @@ class CrashingLog implements EventSink {
   }
 }
 
-describe("crash and resume mid-agent", () => {
-  /** The model provider, the tools' outside effects and the blob folder all outlive the crash; memory doesn't. */
-  function attempt(crashAt: number) {
-    const model = new Model(researcher);
-    const t = tools();
-    const blobs = memoryBlobs();
-    const db = new SqliteEventLog(openDatabase(":memory:"));
-    const log = new CrashingLog(db, crashAt);
-    const rec = Recorder.start(log, "run1");
-    const s = new Scheduler(recipe(), rec, model.executors(), [], { tools: t, blobs });
-    let crashed = false;
-    try {
-      s.start(RELEASE, INPUTS);
-      s.run();
-    } catch (e) {
-      if (!(e instanceof Crash)) throw e;
-      crashed = true;
-    }
-    let state: RunState | undefined;
-    if (!crashed) state = rec.state;
-    else {
-      const fresh = db.read("run1").length === 0;
-      const r2 = fresh ? Recorder.start(db, "run1") : Recorder.resume(db, "run1");
-      const s2 = new Scheduler(recipe(), r2, model.executors(), [], { tools: t, blobs });
-      if (fresh) s2.start(RELEASE, INPUTS);
-      else s2.recover();
-      s2.run();
-      state = r2.state;
-    }
-    return { crashed, state: state!, model, tools: t, writes: log.writes, events: readRun(db, "run1") };
+/**
+ * Runs the research recipe with `script`, the log dying at its `crashAt`-th write,
+ * then resumes in a "new process". The model provider, the tools' outside
+ * effects and the blob folder outlive the crash; memory doesn't.
+ */
+function crashRun<T extends Tools>(crashAt: number, script: (h: AgentHistory) => AgentReply, makeTools: () => T, drive: (s: Scheduler, rec: Recorder) => void = (s) => void s.run()) {
+  const model = new Model(script);
+  const t = makeTools();
+  const blobs = memoryBlobs();
+  const db = new SqliteEventLog(openDatabase(":memory:"));
+  const log = new CrashingLog(db, crashAt);
+  const rec = Recorder.start(log, "run1");
+  const s = new Scheduler(recipe(), rec, model.executors(), [], { tools: t, blobs });
+  let crashed = false;
+  try {
+    s.start(RELEASE, INPUTS);
+    drive(s, rec);
+  } catch (e) {
+    if (!(e instanceof Crash)) throw e;
+    crashed = true;
   }
+  let state: RunState | undefined;
+  if (!crashed) state = rec.state;
+  else {
+    const fresh = db.read("run1").length === 0;
+    const r2 = fresh ? Recorder.start(db, "run1") : Recorder.resume(db, "run1");
+    const s2 = new Scheduler(recipe(), r2, model.executors(), [], { tools: t, blobs });
+    if (fresh) s2.start(RELEASE, INPUTS);
+    else s2.recover();
+    drive(s2, r2);
+    state = r2.state;
+  }
+  return { crashed, state: state!, model, tools: t, writes: log.writes, events: readRun(db, "run1") };
+}
 
+describe("crash and resume mid-agent", () => {
+  const attempt = (k: number) => crashRun(k, researcher, tools);
   const base = attempt(Number.POSITIVE_INFINITY);
-
 
   it("a crash at any write, then resume: same result, same log, every turn paid once", () => {
     expect(base.state.status).toBe("completed");
@@ -476,35 +480,7 @@ describe("crash and resume: an agent that asks you and waits on a slow tool", ()
     }
   }
 
-  function attempt(crashAt: number) {
-    const model = new Model(script);
-    const t = new SlowTools();
-    const blobs = memoryBlobs();
-    const db = new SqliteEventLog(openDatabase(":memory:"));
-    const log = new CrashingLog(db, crashAt);
-    const rec = Recorder.start(log, "run1");
-    const s = new Scheduler(recipe(), rec, model.executors(), [], { tools: t, blobs });
-    let crashed = false;
-    try {
-      s.start(RELEASE, INPUTS);
-      drive(s, rec);
-    } catch (e) {
-      if (!(e instanceof Crash)) throw e;
-      crashed = true;
-    }
-    let state: RunState | undefined;
-    if (!crashed) state = rec.state;
-    else {
-      const fresh = db.read("run1").length === 0;
-      const r2 = fresh ? Recorder.start(db, "run1") : Recorder.resume(db, "run1");
-      const s2 = new Scheduler(recipe(), r2, model.executors(), [], { tools: t, blobs });
-      if (fresh) s2.start(RELEASE, INPUTS);
-      else s2.recover();
-      drive(s2, r2);
-      state = r2.state;
-    }
-    return { crashed, state: state!, model, jobs: t.jobs, writes: log.writes, events: readRun(db, "run1") };
-  }
+  const attempt = (k: number) => crashRun(k, script, () => new SlowTools(), drive);
 
   const base = attempt(Number.POSITIVE_INFINITY);
 
@@ -521,7 +497,96 @@ describe("crash and resume: an agent that asks you and waits on a slow tool", ()
       expect(r.state, `state after a crash at write ${k}`).toEqual(base.state);
       expect(r.events, `log after a crash at write ${k}`).toEqual(base.events);
       expect([...r.model.paid.keys()], `paid turns after a crash at write ${k}`).toEqual([...base.model.paid.keys()]);
-      expect([...r.jobs], `jobs after a crash at write ${k}`).toEqual([...base.jobs]);
+      expect([...r.tools.jobs], `jobs after a crash at write ${k}`).toEqual([...base.tools.jobs]);
     }
+  });
+});
+
+// ── Day 14c: a workspace of files ────────────────────────────────────────
+
+describe("file tools: each agent step has its own workspace (D-52)", () => {
+  /** Draft, list, revise, read back, then answer with the final draft. */
+  const writer = (h: AgentHistory): AgentReply => {
+    if (h.length === 0) return { calls: [{ tool: "write_file", args: { path: "drafts/part3.md", text: "Tanker Raja arrives." } }, { tool: "write_file", args: { path: "notes.txt", text: "check the valve scene" } }] };
+    if (h.length === 1) return { calls: [{ tool: "write_file", args: { path: "drafts/part3.md", text: "Tanker Raja arrives at dawn." } }, { tool: "list_files" }] };
+    if (h.length === 2) return { calls: [{ tool: "read_file", args: { path: "drafts/part3.md" } }] };
+    return { final: { report: (h[2]!.results[0]!.result as { text: string }).text } };
+  };
+
+  it("writes, lists and reads back files; the latest write of a path wins", () => {
+    const model = new Model(writer);
+    const { rec } = run(recipe(), model);
+    expect(model.histories[2]![1]!.results[1]!.result).toEqual({
+      files: [
+        { path: "drafts/part3.md", size: "Tanker Raja arrives at dawn.".length },
+        { path: "notes.txt", size: "check the valve scene".length },
+      ],
+    });
+    expect(model.histories[3]![2]!.results[0]!.result).toMatchObject({ path: "drafts/part3.md", from: 0, size: 28, text: "Tanker Raja arrives at dawn." });
+    expect(rec.state.nodes.analyst!.versions["1.1"]!.output).toEqual({ report: "Tanker Raja arrives at dawn." });
+  });
+
+  it("a write returns the path, the content hash and the size", () => {
+    const model = new Model(writer);
+    run(recipe(), model);
+    expect(model.histories[1]![0]!.results[0]).toEqual({ call: 1, tool: "write_file", ok: true, result: { path: "drafts/part3.md", hash: expect.stringMatching(/^[0-9a-f]{64}$/), size: 20 } });
+  });
+
+  it("paths stay inside the workspace", () => {
+    const model = new Model((h) =>
+      h.length === 0
+        ? { calls: ["../secrets.env", "/etc/passwd", "a/../../b", ".hidden"].map((path) => ({ tool: "write_file", args: { path, text: "x" } })) }
+        : { final: { report: "ok" } },
+    );
+    run(recipe(), model);
+    const results = model.histories[1]![0]!.results;
+    expect(results.every((r) => !r.ok)).toBe(true);
+    expect(results[0]!.result).toEqual({ error: `write_file needs a relative path like 'drafts/part3.md' (letters, digits, . _ - and /, no '..'), not "../secrets.env"` });
+  });
+
+  it("reading a file that isn't there says which files are", () => {
+    const model = new Model((h) =>
+      h.length === 0
+        ? { calls: [{ tool: "read_file", args: { path: "draft.md" } }, { tool: "write_file", args: { path: "a.md", text: "x" } }, { tool: "read_file", args: { path: "b.md" } }] }
+        : { final: { report: "ok" } },
+    );
+    run(recipe(), model);
+    const [first, , third] = model.histories[1]![0]!.results;
+    expect(first!.result).toEqual({ error: `there's no file "draft.md" in this step's workspace (it's empty)` });
+    expect(third!.result).toEqual({ error: `there's no file "b.md" in this step's workspace (a.md)` });
+  });
+
+  it("a long file is read in pieces, never offloaded", () => {
+    const long = "Mitra spots the valve. ".repeat(1000); // 23,000 characters
+    const model = new Model((h) => {
+      if (h.length === 0) return { calls: [{ tool: "write_file", args: { path: "script.md", text: long } }] };
+      if (h.length === 1) return { calls: [{ tool: "read_file", args: { path: "script.md", from: 8000 } }, { tool: "read_file", args: { path: "script.md", from: 16000 } }] };
+      return { final: { report: "ok" } };
+    });
+    run(recipe(), model);
+    const [middle, end] = model.histories[2]![1]!.results.map((x) => x.result as { from: number; to: number; size: number; text: string });
+    expect(middle).toMatchObject({ from: 8000, to: 16000, size: long.length, text: long.slice(8000, 16000) }); // a full piece, not a preview
+    expect(end).toMatchObject({ from: 16000, to: long.length, text: long.slice(16000) });
+  });
+
+  it("replays to the same state", () => {
+    const { rec, events } = run(recipe(), new Model(writer));
+    expect(replay(events())).toEqual(rec.state);
+  });
+
+  describe("crash and resume", () => {
+    const attempt = (k: number) => crashRun(k, writer, tools);
+    const base = attempt(Number.POSITIVE_INFINITY);
+
+    it("writes a draft and reads it back after a crash at any write: same draft, same log, every turn paid once", () => {
+      expect(base.state.nodes.analyst!.versions["1.1"]!.output).toEqual({ report: "Tanker Raja arrives at dawn." });
+      for (let k = 1; k <= base.writes; k++) {
+        const r = attempt(k);
+        expect(r.crashed, `write ${k}`).toBe(true);
+        expect(r.state, `state after a crash at write ${k}`).toEqual(base.state);
+        expect(r.events, `log after a crash at write ${k}`).toEqual(base.events);
+        expect([...r.model.paid.keys()], `paid turns after a crash at write ${k}`).toEqual([...base.model.paid.keys()]);
+      }
+    });
   });
 });

@@ -111,10 +111,14 @@ export class Pending {
 }
 
 /**
- * Tools every agent has, run by the engine itself (D-39): `ask_human` asks you
- * and waits, `recall` reads back a large result, `note` keeps working memory.
+ * Tools every agent has, run by the engine itself (D-39, D-52): `ask_human`
+ * asks you and waits, `recall` reads back a large result, `note` keeps working
+ * memory, and the file tools work on the step's own workspace.
  */
-export const BUILT_IN_TOOLS = ["ask_human", "recall", "note"] as const;
+export const BUILT_IN_TOOLS = ["ask_human", "recall", "note", "write_file", "read_file", "list_files"] as const;
+
+/** A workspace path: relative, with no `..`, like `drafts/part3.md`. */
+const FILE_PATH = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
 
 /** A tool result longer than this (about 2k tokens) reaches the agent as a preview it can `recall`. */
 export const OFFLOAD_CHARS = 8000;
@@ -434,6 +438,22 @@ export class Scheduler {
       if (typeof args.key !== "string" || typeof args.text !== "string") return failed("note needs a key and a text, e.g. { key: 'plan', text: '…' }");
       return { ok: true, result: { saved: args.key } };
     }
+    if (c.tool === "write_file") {
+      if (typeof args.path !== "string" || !FILE_PATH.test(args.path) || args.path.length > 200) return failed(`write_file needs a relative path like 'drafts/part3.md' (letters, digits, . _ - and /, no '..'), not ${JSON.stringify(args.path)}`);
+      if (typeof args.text !== "string") return failed("write_file needs the file's text");
+      return { ok: true, result: { path: args.path, hash: this.blobs.put(args.text), size: args.text.length } };
+    }
+    if (c.tool === "read_file") {
+      const f = typeof args.path === "string" ? this.workspace(key)[args.path] : undefined;
+      if (!f) return failed(`there's no file ${JSON.stringify(args.path)} in this step's workspace (${Object.keys(this.workspace(key)).join(", ") || "it's empty"})`);
+      const text = this.blobs.get(f.hash) as string;
+      const from = Math.max(0, Number(args.from ?? 0) || 0);
+      const to = Math.min(text.length, from + OFFLOAD_CHARS, Number(args.to ?? text.length) || text.length);
+      return { ok: true, result: { path: args.path, from, to, size: text.length, text: text.slice(from, to) } };
+    }
+    if (c.tool === "list_files") {
+      return { ok: true, result: { files: Object.entries(this.workspace(key)).sort(([a], [b]) => a.localeCompare(b)).map(([path, f]) => ({ path, size: f.size })) } };
+    }
     if (!node.tools.includes(c.tool)) return failed(`'${c.tool}' isn't one of this step's tools (${[...node.tools, ...BUILT_IN_TOOLS].join(", ")})`);
     return this.external(() => {
       try {
@@ -457,10 +477,26 @@ export class Scheduler {
         .map((c) => {
           const value = this.blobs.get(c.result!);
           const text = JSON.stringify(value);
-          const result = c.tool !== "recall" && text.length > OFFLOAD_CHARS ? { offloaded: c.result!, size: text.length, preview: text.slice(0, PREVIEW_CHARS) } : value;
+          const result = c.tool !== "recall" && c.tool !== "read_file" && text.length > OFFLOAD_CHARS ? { offloaded: c.result!, size: text.length, preview: text.slice(0, PREVIEW_CHARS) } : value;
           return { call: c.call, tool: c.tool, ok: c.ok!, result };
         }),
     }));
+  }
+
+  /**
+   * The step's workspace: every file it wrote in this attempt, latest write per
+   * path. Folded from history, contents in blobs by hash, so replay rebuilds it exactly.
+   */
+  private workspace(key: string): Record<string, { hash: string; size: number }> {
+    const files: Record<string, { hash: string; size: number }> = {};
+    for (const h of this.rec.state.nodes[key]!.history) {
+      for (const c of h.calls) {
+        if (c.tool !== "write_file" || !c.ok) continue;
+        const r = this.blobs.get(c.result!) as { path: string; hash: string; size: number };
+        files[r.path] = { hash: r.hash, size: r.size };
+      }
+    }
+    return files;
   }
 
   /** The agent's working notes: the latest successful `note` per key, in this attempt. */
