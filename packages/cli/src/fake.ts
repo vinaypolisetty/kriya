@@ -35,7 +35,10 @@ export function fakeExecutors(graphs: Graph[]): Executors {
 
 /** Tools that do nothing but say what they were asked (fake mode; real tools arrive on Day 19). */
 export function fakeTools(): Tools {
-  return { call: (tool, args) => ({ fake: true, tool, args: args ?? null }) };
+  return {
+    call: (tool, args) => ({ fake: true, tool, args: args ?? null }),
+    describe: (tool) => ({ description: `${tool} (a stand-in: it echoes what it was asked until real tools arrive on Day 19)`, input_schema: { type: "object" } }),
+  };
 }
 
 function fakeValue(type: string, field: string, types: Graph["types"], ctx: StepContext, candidate: number, index = 1): unknown {

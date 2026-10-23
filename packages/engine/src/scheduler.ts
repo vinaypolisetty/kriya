@@ -78,6 +78,12 @@ export interface Executors {
    * `history` is this attempt's earlier turns, rebuilt from the log on resume.
    */
   turn?(node: AgentNode, ctx: StepContext, history: AgentHistory): AgentTurnResult | Pending;
+  /**
+   * The provider trims old tool results itself, server-side (e.g. Claude's context
+   * editing), so the engine sends history unchanged: rewriting earlier turns would
+   * break providers that check the conversation is append-only.
+   */
+  managesContext?: boolean;
 }
 
 /**
@@ -112,6 +118,9 @@ export interface Tools {
   /** What a model is told about a tool: a description and a JSON Schema for its arguments. */
   describe?(tool: string): ToolSpec | undefined;
 }
+
+/** What a provider reports about one call: the exact model version, and what it cost. */
+export type CallMeta = { model?: string; cost_usd?: number };
 
 export type ToolSpec = { description: string; input_schema: Record<string, unknown> };
 
@@ -530,7 +539,7 @@ export class Scheduler {
     // Clearing (D-39 step 2), in batches: each time a turn reached 70% of the context window,
     // results older than the last 6 turns became stubs. Decided from recorded token counts only.
     let clearedUpTo = 0;
-    for (const h of this.rec.state.nodes[key]!.history) {
+    for (const h of this.exec.managesContext ? [] : this.rec.state.nodes[key]!.history) {
       if (h.window && h.tokensIn >= CLEAR_AT * h.window) clearedUpTo = h.turn - KEEP_TURNS;
     }
     return this.rec.state.nodes[key]!.history.map((h) => ({
@@ -618,7 +627,7 @@ export class Scheduler {
   }
 
   /** Records a call's outputs as candidates and applies the lock policy. */
-  private accept(key: string, node: Producer, ctx: Context, outputs: Record<string, unknown>[]): void {
+  private accept(key: string, node: Producer, ctx: Context, outputs: Record<string, unknown>[], meta: CallMeta[] = []): void {
     const target = node.refines ? ctx.prefix + node.refines : key;
     const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
     const attempt = this.rec.state.nodes[target]!.attempts;
@@ -633,7 +642,8 @@ export class Scheduler {
         candidate: i + 1,
         output,
         parents: parent ? [parent] : [],
-        cost_usd: 0,
+        cost_usd: meta[i]?.cost_usd ?? 0,
+        ...(meta[i]?.model ? { model: meta[i]!.model } : {}),
         inputs,
         ...(Object.keys(assets).length > 0 ? { assets } : {}),
         ...(instruction ? { instruction } : {}),
@@ -742,13 +752,16 @@ export class Scheduler {
 
   // ── Durable waits and crash recovery ────────────────────────────────────
 
-  /** A provider job finished: continues the step waiting on its ticket. Call `run()` after. */
-  deliver(ticket: string, outputs: Record<string, unknown>[]): void {
+  /**
+   * A provider job finished: continues the step waiting on its ticket. `meta`
+   * gives each candidate's exact model version and cost (rule 6). Call `run()` after.
+   */
+  deliver(ticket: string, outputs: Record<string, unknown>[], meta: CallMeta[] = []): void {
     this.atomic(() => {
       const inst = this.waitingOn(ticket);
       if (!inst || !isProducer(inst.node) || inst.node.kind === "agent") throw new Error(`no step is waiting on ticket '${ticket}'`);
       this.rec.record({ type: "Resumed", node: inst.key, ticket });
-      this.accept(inst.key, inst.node, inst.ctx, outputs);
+      this.accept(inst.key, inst.node, inst.ctx, outputs, meta);
     });
   }
 

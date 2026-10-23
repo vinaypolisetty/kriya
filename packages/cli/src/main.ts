@@ -6,4 +6,4 @@ for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (e: NodeJS.ErrnoException) => (e.code === "EPIPE" ? process.exit(0) : (() => { throw e; })()));
 }
 
-process.exitCode = main(process.argv.slice(2), { out: (l) => console.log(l), err: (l) => console.error(l), cwd: process.cwd() });
+process.exitCode = await main(process.argv.slice(2), { out: (l) => console.log(l), err: (l) => console.error(l), cwd: process.cwd() });

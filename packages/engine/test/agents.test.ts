@@ -745,4 +745,20 @@ describe("clearing old results when the context fills up (D-39 step 2)", () => {
     expect(after[1]!.results[0]!.result).toMatchObject({ cleared: expect.any(String) });
     expect(after[2]!.results[0]!.result).toEqual({ url: "https://example.org/tankers" });
   });
+
+  it("a provider that manages context itself gets the history unchanged (append-only)", () => {
+    let turnNo = 0;
+    const model = new Model((h) => (h.length < 9 ? { calls: [{ tool: "search", args: { q: String(h.length) } }] } : { final: { report: "done" } }));
+    const exec = model.executors();
+    const big: Executors = {
+      ...exec,
+      managesContext: true,
+      turn: (node, ctx, history) => ({ ...(exec.turn!(node, ctx, history) as object), tokens: { input: ++turnNo === 8 ? 750 : 100, output: 10 }, context_window: 1000 }) as never,
+    };
+    const rec = Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run1");
+    const s = new Scheduler(recipe("    max_turns: 12\n"), rec, big, [], { tools: tools(), blobs: memoryBlobs() });
+    s.start(RELEASE, INPUTS);
+    s.run();
+    expect(model.histories[8]![0]!.results[0]!.result).toEqual({ url: "https://example.org/tankers" });
+  });
 });
