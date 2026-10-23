@@ -27,7 +27,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 
 | Command | Does |
 |---|---|
-| `kriya init <folder> [--example mohalla-mitra]` | Starts a project |
+| `kriya init <folder> [--example <name>]` | Starts a project; `kriya init --examples` lists the examples |
 | `kriya run <recipe> [--input name=value]… [--id name]` | Starts a run. `@file` reads a value from a file |
 | `kriya status [run]` | All runs, or one run's steps |
 | `kriya inbox` | Everything waiting on you, across runs |
