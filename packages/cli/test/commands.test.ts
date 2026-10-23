@@ -304,6 +304,12 @@ describe("plain errors", () => {
     expect(r.err).toContain("'capabilty' isn't a setting for a model step. Did you mean 'capability'?");
   });
 
+  it("an unknown example lists the ones that exist", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-cli-"));
+    expect((await kriya(dir, "init", "p3", "--example", "mohalla-example")).err).toBe("✗ there's no example called 'mohalla-example'. Examples: mohalla-mitra");
+    expect((await kriya(dir, "init", "--examples")).out).toBe("Examples: mohalla-mitra");
+  });
+
   it("init refuses to overwrite a project", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kriya-cli-"));
     await kriya(dir, "init", "p3");
