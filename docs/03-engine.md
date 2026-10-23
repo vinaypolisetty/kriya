@@ -42,7 +42,7 @@ Every engine action is appended as an event. Current state is computed by replay
 | `ToolCalled` / `ToolResult` | An agent's tool call began / returned (result stored by content hash) |
 | `HistoryCompacted` | A long agent history was summarized; the summary replaces earlier turns in its prompt |
 | `Locked` / `Unlocked` | A version became / stopped being the node's output (`Locked` carries the optional `why` note, D-29) |
-| `BranchCreated` / `BranchSwitched` / `Adopted` | Version-tree operations |
+| `BranchCreated` / `BranchSwitched` | Version-tree operations. An adopt is a `CandidateProduced` with two parents ([D-49](17-decisions.md)) |
 | `MarkedStale` | Inputs changed under accepted work |
 | `NodeCompleted` / `RunCompleted` / `NodeFailed` | Terminal states |
 

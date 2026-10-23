@@ -78,6 +78,45 @@ describe("a full fake episode from the terminal (Day 13)", () => {
     expect(r.out).toContain("↻ per_shot: item S1 changed");
     expect(r.out).toContain("↻ assemble: 'per_shot' changed");
   });
+
+  it("rebuild redoes the stale work, and the run finishes again (Q-20)", () => {
+    const cwd = project();
+    kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
+    while (!kriya(cwd, "inbox").out.startsWith("Nothing")) answerFirst(cwd);
+    kriya(cwd, "lock", "part_recipe-1", "per_shot[S1].draw", "1.2");
+
+    const r = kriya(cwd, "rebuild", "part_recipe-1");
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/^✓ Rebuilding from /);
+    while (!kriya(cwd, "inbox").out.startsWith("Nothing")) answerFirst(cwd);
+    const status = kriya(cwd, "status", "part_recipe-1").out;
+    expect(status.split("\n")[0]).toBe("part_recipe-1 · part_recipe · completed");
+    expect(status).not.toContain("↻");
+    expect(kriya(cwd, "rebuild", "part_recipe-1").out).toContain("Nothing is stale; there's nothing to rebuild");
+  });
+});
+
+describe("adopt from the terminal (Day 14)", () => {
+  it("merges two panels into one with two parents, then you lock it", () => {
+    const cwd = project();
+    kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
+    kriya(cwd, "decide", "1", "approve");
+
+    const r = kriya(cwd, "adopt", "part_recipe-1", "per_shot[S1].draw", "1.2", "1.3", "--note", "use its sky");
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("✓ Adopted into per_shot[S1].draw: 2.1 (from 1.2, taking from 1.3). Nothing is locked yet");
+    expect(kriya(cwd, "inbox").out).toMatch(/per_shot\[S1\]\.pick: Pick one panel\n\s+2\.1\s+fake:\/\/image\/per_shot\[S1\]\.edit/);
+    expect(kriya(cwd, "decide", "1", "lock").code).toBe(0);
+    expect(kriya(cwd, "status", "part_recipe-1").out).toContain("per_shot[S1].draw · locked 2.1");
+  });
+
+  it("needs a note saying what to take", () => {
+    const cwd = project();
+    kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
+    const r = kriya(cwd, "adopt", "part_recipe-1", "per_shot[S1].draw", "1.2", "1.3");
+    expect(r.code).toBe(1);
+    expect(r.err).toBe('✗ say what to take from 1.3 with --note, e.g. --note "use its sky"');
+  });
 });
 
 describe("plain errors", () => {

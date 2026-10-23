@@ -19,7 +19,7 @@ Operations inside a node:
 |---|---|
 | **Generate** | Candidates per the config (`options: 3`) |
 | **Refine** | A child version from a conversational instruction |
-| **Adopt** | A version with two parents: "take A″, but use A‴'s ending" (a merge). For media it is a model call with both as references, so the result goes through the normal check → fix loop |
+| **Adopt** | A version with two parents: "take A″, but use A‴'s ending" (a merge). For media it is a model call with both as references, so the result goes through the normal check → fix loop. The model or agent step that refines the node makes it (for a panel, `edit`, given `parent` and `borrow`); otherwise the node's own step. It goes on the current branch and locks nothing ([D-49](17-decisions.md)) |
 | **Replay change** | Re-apply the recorded instruction behind a version to another version, branch or item: "do the same gamcha fix on every shot with Bheem". One parent; a new attempt ([D-30](17-decisions.md)) |
 | **Branch** | A separate, named path with its own conversation, from any version |
 | **Fork context** | Copy everything up to this point into a new node or another workflow |

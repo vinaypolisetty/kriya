@@ -39,6 +39,8 @@ export type StepContext = {
   parent?: { version: string; output: Record<string, unknown> };
   /** For an edit or a replayed change: what to change, e.g. "add the gamcha". */
   instruction?: string;
+  /** For an adopt: the other version to take from ("use its ending"); `parent` is the one it builds on. */
+  borrow?: { version: string; output: Record<string, unknown> };
   /** For a screen: the candidates on show (latest attempt of the step it shows), with the shown field. */
   shows?: { version: string; value: unknown }[];
   /** For a model, tool or agent call: the same for every try of this attempt, across crashes (`run/step#attempt`). */
@@ -532,6 +534,7 @@ export class Scheduler {
   rebuild(): string[] {
     return this.atomic(() => {
     this.refreshStale();
+    if (this.stale().length > 0) this.reopen("rebuilding stale work");
     const all = this.instances(this.root(), [], true);
     const staleMaps = all.filter((x) => x.node.kind === "map" && this.status(x.key) === "stale").map((x) => x.key);
     return this.readyEarliestStale(all.filter((x) => !staleMaps.some((m) => x.key.startsWith(`${m}[`))));
@@ -670,6 +673,64 @@ export class Scheduler {
       this.rec.record({ type: "NodeCompleted", node: target });
       if (stepKey !== target) this.rec.record({ type: "NodeCompleted", node: stepKey });
     }
+    return made;
+    });
+  }
+
+  /**
+   * Merges two versions of one step into new candidates: "take 1.2, but use
+   * 1.3's sky" (D-30). The model or agent step that refines this one makes them
+   * (for a panel, `edit`), given `base` as its parent and `from` to borrow from;
+   * a step nothing refines makes them itself. Each has both versions as parents
+   * and goes on the step's current branch. Nothing is locked: the result is a
+   * candidate like any other. Returns the new version ids.
+   */
+  adopt(key: string, base: string, from: string, instruction: string): string[] {
+    return this.atomic(() => {
+    const t = this.rec.state.nodes[key];
+    const inst = this.instances().find((x) => x.key === key);
+    if (!t || !inst) throw new Error(`there's no step '${key}' in this run`);
+    if (!isProducer(inst.node)) throw new Error(`'${key}' is a ${inst.node.kind} step; only model, agent and tool steps have versions to adopt`);
+    for (const v of [base, from]) if (!t.versions[v]) throw new Error(`'${key}' has no version ${v}`);
+    if (base === from) throw new Error(`adopt takes two different versions, but both are ${base}`);
+    if (!instruction.trim()) throw new Error(`say what to take from ${from}, e.g. "use its ending"`);
+
+    const own = inst.node;
+    const step = inst.ctx.graph.nodes.find((n): n is Producer => (n.kind === "model" || n.kind === "agent") && n.refines === own.id) ?? own;
+    const stepKey = inst.ctx.prefix + step.id;
+    this.reopen(`'${key}' got an adopted version`);
+    if (stepKey !== key) {
+      if (!this.rec.state.nodes[stepKey]) this.rec.record({ type: "NodeReady", node: stepKey });
+      this.rec.record({ type: "AttemptStarted", node: stepKey, attempt: (this.rec.state.nodes[stepKey]?.attempts ?? 0) + 1 });
+    }
+    this.rec.record({ type: "AttemptStarted", node: key, attempt: t.attempts + 1 });
+    const attempt = this.rec.state.nodes[key]!.attempts;
+    const visit = this.rec.state.nodes[stepKey]!.attempts;
+    const inputs = this.inputsOf(stepKey, step, inst.ctx);
+    const output = (v: string) => this.rec.state.nodes[key]!.versions[v]!.output;
+    // Both versions are given whatever the step's context mode: adopting them is an explicit choice.
+    const sc = { ...this.context(stepKey, step, inst.ctx, visit), parent: { version: base, output: output(base) }, borrow: { version: from, output: output(from) }, instruction };
+    sc.idempotencyKey = `${this.rec.runId}/${stepKey}#${visit}`;
+    const result = this.external(() => this.exec.produce(step, sc));
+    if (!Array.isArray(result)) throw new Error(`'${stepKey}' answered with a ticket; adopting with a slow job isn't supported yet`);
+    const made = result.map((out, i) => {
+      this.rec.record({
+        type: "CandidateProduced",
+        node: key,
+        attempt,
+        candidate: i + 1,
+        output: out,
+        parents: [base, from],
+        cost_usd: 0,
+        instruction,
+        inputs,
+        ...(stepKey !== key ? { made_by: stepKey } : {}),
+      });
+      return versionId(attempt, i + 1);
+    });
+    // Back to rest: the new candidates wait to be locked; nothing downstream moves.
+    this.rec.record({ type: "NodeCompleted", node: key });
+    if (stepKey !== key) this.rec.record({ type: "NodeCompleted", node: stepKey });
     return made;
     });
   }

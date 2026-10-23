@@ -131,6 +131,18 @@ describe("changing one shot marks only its work stale", () => {
     expect(events().find((e) => e.type === "RunReopened")).toEqual({ type: "RunReopened", reason: "'shot_list' got a new version" });
   });
 
+  it("rebuilding a run that settled with stale work reopens it", () => {
+    const { s, rec, changeShots, events } = finishedPart();
+    changeShots(changed("P3-02", "at dusk"));
+    s.run(); // nothing is ready, so the run settles with its stale work parked
+    expect(rec.state.status).toBe("completed");
+    s.rebuild();
+    expect(events().at(-2)).toEqual({ type: "RunReopened", reason: "rebuilding stale work" });
+    s.run();
+    expect(rec.state.status).toBe("completed");
+    expect(s.stale()).toEqual([]);
+  });
+
   it("replays to the same state after a rebuild", () => {
     const { s, rec, changeShots, events } = finishedPart();
     changeShots(changed("P3-02", "at dusk"));
