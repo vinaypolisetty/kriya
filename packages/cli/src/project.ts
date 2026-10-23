@@ -15,8 +15,10 @@ import { loadDir, type Graph, type Problem } from "@kriya/engine";
 export const ProjectFile = z
   .object({
     name: z.string().min(1),
-    /** Only `fake` until real providers arrive (Day 15). */
-    models: z.literal("fake").default("fake"),
+    /** `fake` (no keys, no cost) or `anthropic` (Claude for text, vision and agents; key in .env). */
+    models: z.enum(["fake", "anthropic"]).default("fake"),
+    /** Claude settings for `models: anthropic`; steps can still pin their own `model`. */
+    claude: z.object({ model: z.string().optional(), effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional() }).strict().optional(),
     recipes: z.string().default("recipes"),
     /** Locked context from higher levels, by level, e.g. `series: { style: … }` (D-47). */
     context: z.record(z.record(z.unknown())).default({}),

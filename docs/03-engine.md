@@ -258,7 +258,8 @@ interface Blobs { put(value: unknown): string; get(hash: string): unknown }     
 - **A workspace of files** per agent step ([D-52](17-decisions.md)): built-in `write_file { path, text }`, `read_file { path, from?, to? }` (up to 8,000 characters per read) and `list_files`. Paths are relative with no `..`. The workspace is the latest write per path in this attempt, folded from history, with contents in blobs by hash: nothing touches the real disk, and replay rebuilds it exactly.
 - **Slow tools** return `new Pending(ticket)`; the step waits (`Suspended`, kind `tool_job`) until `deliverTool(ticket, result, error?)`.
 - **Offload**: a result over 8,000 characters (about 2k tokens) reaches the agent as `{ offloaded: hash, size, preview }`. Nothing is lost; `recall` reads it back.
-- **Clear and summarize** (ladder steps 2 and 4) wait for real adapters: both trigger on how full the model's context is, which only a provider reports.
+- **Clear** (ladder step 2): once a turn reports 70% of its context window (`AgentTurn.context_window`), results older than the last 6 turns reach the agent as stubs; answers and notes are never cleared. A provider that clears server-side sets `managesContext` and gets the history unchanged (Claude does, D-54). **Summarize** (step 4) is still to come.
+- **Async providers** ([D-53](17-decisions.md)): `turn` may return `new Pending(ticket)` and the answer arrives with `deliverTurn`; model steps return `{ ticket }` and `deliver(ticket, outputs, meta)`; `failJob` fails a waiting step plainly. `recover()` resubmits waiting jobs under the same key.
 
 One agent run through the engine:
 
