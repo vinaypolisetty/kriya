@@ -108,7 +108,7 @@ Three **context modes** ([06-context-and-assets.md](06-context-and-assets.md)):
 | Mode | Uses | Default for |
 |---|---|---|
 | Full | Automatic defaults from all levels + mentions | Generating (new shot, script, voice line) |
-| Local | Only the node's own current version + mentions | Edits and refinements |
+| Local | The version it edits + its own declared inputs (`uses`, prompt refs) + mentions; no automatic defaults ([D-55](17-decisions.md)) | Edits and refinements (steps that `refines`) |
 | Isolated | Only what the user explicitly gives it | Experiments |
 
 ## Assets and facets

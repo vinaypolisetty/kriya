@@ -1182,7 +1182,13 @@ export class Scheduler {
     const scope = this.scope(ctx);
     const read = (ref: string) => evaluate(parseCondition(ref), scope) ?? null;
     // Only what the step actually receives (its context mode, mentions, removed defaults, facet versions).
-    for (const [r, v] of Object.entries(this.received(key, node, ctx).uses)) out[`uses:${r}`] = hash(v ?? null);
+    // A refining step's reads from the screen reviewing its target (`pick.selected`, `pick.note`) aren't inputs:
+    // they're its parent and instruction, recorded on the version, and they move as soon as its own result is locked.
+    const reviewer = "refines" in node && node.refines ? this.reviewer(node.refines, ctx)?.id : undefined;
+    for (const [r, v] of Object.entries(this.received(key, node, ctx).uses)) {
+      if (reviewer && r.split(/[.@[]/)[0] === reviewer) continue;
+      out[`uses:${r}`] = hash(v ?? null);
+    }
     for (const e of ctx.graph.edges) {
       if (e.to !== node.id || e.max_loops !== undefined) continue;
       for (const s of Array.isArray(e.from) ? e.from : [e.from]) {
@@ -1305,7 +1311,8 @@ export class Scheduler {
   /**
    * What a step receives (D-47), by its context mode:
    * - `full`: its `uses` and prompt `{{refs}}` (minus removed defaults), facets included, plus mentions and its parent;
-   * - `local`: only its parent (the version it edits) and mentions;
+   * - `local`: the same, its own declared inputs, but none of the automatic defaults (D-55): today the two match;
+   *   they differ once the Library attaches facets by kind (Day 18);
    * - `isolated`: only mentions.
    * Outputs are read locked and non-stale; facets resolve step override > run override > Library.
    */
@@ -1314,7 +1321,7 @@ export class Scheduler {
     const n = this.rec.state.nodes[key];
     const mentions = n?.mentions.map((m) => m.ref) ?? [];
     let refs: string[] = [];
-    if (mode === "full" && node.kind !== "screen") {
+    if (mode !== "isolated" && node.kind !== "screen") {
       const declared = [...("uses" in node ? node.uses : []), ...promptRefs(stepText(node))];
       refs = [...new Set(declared)].filter((r) => !n?.removed.includes(r));
     }

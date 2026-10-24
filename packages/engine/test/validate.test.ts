@@ -169,15 +169,19 @@ describe("what a step sees (D-13, D-55)", () => {
     expect(nodes.map((n) => contextMode(n))).toEqual(["full", "full", "local"]);
   });
 
-  it("warns when 'uses' won't reach a step outside full context", () => {
-    expect(warnings(graph(`  - { id: e, kind: model, capability: llm.write, refines: d, prompt: hi, uses: [inputs.topic], out: { t: text } }\n`))).toEqual([
-      "'uses' won't reach this step: it runs in local context, which sees the version it edits and @mentions. Remove 'uses', or set context: full",
+  it("a refining step in local context still gets its own uses and refs: no warning", () => {
+    expect(warnings(graph(`  - { id: e, kind: model, capability: llm.write, refines: d, prompt: "change {{inputs.topic}}", uses: [inputs.topic], out: { t: text } }\n`))).toEqual([]);
+  });
+
+  it("warns when 'uses' won't reach a step in isolated context", () => {
+    expect(warnings(graph(`  - { id: e, kind: model, capability: llm.write, prompt: hi, uses: [inputs.topic], context: isolated, out: { t: text } }\n`))).toEqual([
+      "'uses' won't reach this step: it runs in isolated context, which sees only @mentions. Remove 'uses', or set context: local or full",
     ]);
   });
 
   it("warns when a {{ref}} in a prompt or goal won't be filled", () => {
     expect(warnings(graph(`  - { id: a, kind: agent, goal: "write about {{inputs.topic}}", tools: [search], context: isolated, out: { t: text } }\n`))).toEqual([
-      "{{inputs.topic}} in its goal won't be filled: it runs in isolated context, which sees only @mentions. Set context: full, or @mention it",
+      "{{inputs.topic}} in its goal won't be filled: it runs in isolated context, which sees only @mentions. @mention it, or set context: local or full",
     ]);
   });
 
