@@ -21,6 +21,7 @@ nodes:
       {{item.action}}
       Only these characters. No other people. Exactly one of each.
     uses: [item.action, item.characters@look, item.place@look, series.style]
+    params: { aspect_ratio: "16:9" }   # panels are 16:9; the Reel crops and pans
     out:
       image: image
 
