@@ -30,6 +30,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 | `kriya init <folder> [--example <name>]` | Starts a project; `kriya init --examples` lists the examples |
 | `kriya run <recipe> [--input name=value]… [--id name]` | Starts a run. `@file` reads a value from a file |
 | `kriya status [run]` | All runs, or one run's steps |
+| `kriya show <run> [step] [version]` | What a run made: every step with its versions, model and cost; or one step's full output (YAML), with an agent's turns and tool calls |
 | `kriya inbox` | Everything waiting on you, across runs |
 | `kriya decide <item> <button> [--pick v] [--note text] [--region x,y,w,h]` | Answers an inbox item, by number or `run:step` |
 | `kriya lock <run> <step> <version> [--why text]` | Locks a version yourself and lists what went stale |
@@ -41,4 +42,5 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 - **Every command is its own process.** Runs live in `.kriya/kriya.db`; close the terminal mid-episode and carry on tomorrow. Each command replays the run and calls `recover()` first, so a crash never loses work or pays twice (D-46).
 - **Models**: `models: fake` in `kriya.yaml` (the default) makes up outputs from each step's declared types, no keys, no cost. `models: anthropic` sends text (`llm.write`), vision (`llm.vision`) and agent steps to Claude: put `ANTHROPIC_API_KEY=…` in `.env` at the project root. Image, video and audio stay fake until Day 16. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, the next command asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key and run any command to carry on), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
 - **`kriya.yaml`** holds the project's name, the inherited context (e.g. `series: { style, rules, cast }`) and, until the Library (Day 18), facet values as `Entity.facet: value`.
+- **A run is pinned to its recipes**: the recipe it runs and every recipe its maps run. Editing one of those shows `recipes changed` on the run; adding or editing other recipes doesn't.
 - **Errors are plain words**, including recipe problems ("'capabilty' isn't a setting for a model step. Did you mean 'capability'?").

@@ -293,6 +293,58 @@ edges:
   });
 });
 
+describe("show: what a run made", () => {
+  it("lists every step with its versions, then shows one step's full output", async () => {
+    const cwd = await project();
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
+    const all = (await kriya(cwd, "show", "part_recipe-1")).out;
+    expect(all.split("\n")[0]).toBe("part_recipe-1 · part_recipe · running · 1 waiting on you · spent $0.00");
+    expect(all).toContain("✓ shot_list\n      versions: 1.1");
+    expect(all).toContain("See one step in full: kriya show part_recipe-1 <step>");
+
+    const one = (await kriya(cwd, "show", "part_recipe-1", "shot_list")).out;
+    expect(one).toContain("Version 1.1 · not locked");
+    expect(one).toContain("shots:\n  - id: S1");
+    expect(one).toContain("hook: hook (fake) for shot_list");
+  });
+
+  it("an agent step shows its turns and tool calls", async () => {
+    const cwd = await project();
+    writeFileSync(join(cwd, "recipes", "brief.yaml"), "graph: brief\nlevel: part\nnodes:\n  - { id: writer, kind: agent, goal: Write the brief, tools: [search], trust: always, out: { brief: text } }\nedges:\n  - { from: writer, to: END }\n");
+    await kriya(cwd, "run", "brief");
+    const out = (await kriya(cwd, "show", "brief-1", "writer")).out;
+    expect(out).toContain("Turns (2, $0.00):");
+    expect(out).toContain('   1  search {"goal":"Write the brief"}');
+    expect(out).toContain("   2  finish");
+    expect(out).toContain("Version 1.1 · 🔒 locked");
+  });
+
+  it("says plainly what isn't there", async () => {
+    const cwd = await project();
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
+    expect((await kriya(cwd, "show", "part_recipe-1", "shotlist")).err).toBe("✗ run 'part_recipe-1' has no step 'shotlist' (it has: shot_list, approve_shots)");
+    expect((await kriya(cwd, "show", "part_recipe-1", "shot_list", "9.9")).err).toBe("✗ 'shot_list' has no version 9.9 (it has: 1.1)");
+  });
+});
+
+describe("a run's recipes", () => {
+  it("adding an unrelated recipe doesn't flag a run; editing one it uses does", async () => {
+    const cwd = await project();
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
+    writeFileSync(join(cwd, "recipes", "other.yaml"), "graph: other\nlevel: part\nnodes:\n  - { id: t, kind: tool, tool: x }\n");
+    expect((await kriya(cwd, "status")).out).not.toContain("recipes changed");
+
+    const shot = join(cwd, "recipes", "shot.yaml");
+    writeFileSync(shot, readFileSync(shot, "utf8").replace("Only these characters.", "Only these characters, please."));
+    expect((await kriya(cwd, "status")).out).toContain("part_recipe-1            part_recipe      running · 1 waiting on you · recipes changed");
+  });
+
+  it("a new project ignores .env as well as .kriya/", async () => {
+    const cwd = await project();
+    expect(readFileSync(join(cwd, ".gitignore"), "utf8")).toBe(".kriya/\n.env\n");
+  });
+});
+
 describe("plain errors", () => {
   it("outside a project", async () => {
     const r = await kriya(mkdtempSync(join(tmpdir(), "kriya-none-")), "status");

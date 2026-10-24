@@ -13,7 +13,7 @@ import { formatProblems, Recorder, Scheduler, type Blobs, type Executors, type I
 import { anthropicExecutors, describeError, Jobs, MissingKey, settle } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools, projectAssets } from "./fake.js";
-import { loadProject, UserError, type Project } from "./project.js";
+import { loadProject, releaseOf, UserError, type Project } from "./project.js";
 
 export type IO = { out: (line: string) => void; err: (line: string) => void; cwd: string };
 
@@ -23,6 +23,7 @@ const HELP = `kriya: run recipes with people in the loop
   kriya run <recipe> [--input name=value]… [--id name]
                                                   start a run (models from kriya.yaml: fake, or anthropic)
   kriya status [run]                              your runs, or one run's steps
+  kriya show <run> [step] [version]               what a run made: every step, or one step's full output
   kriya inbox                                     what's waiting on you
   kriya decide <item> <button> [--pick v] [--note text] [--region x,y,w,h]
                                                   answer an inbox item (its number, or run:step)
@@ -40,6 +41,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "init": return await init(rest, io);
       case "run": return await run(rest, io);
       case "status": return await status(rest, io);
+      case "show": return await show(rest, io);
       case "inbox": return await inbox(io);
       case "decide": return await decide(rest, io);
       case "lock": return await lock(rest, io);
@@ -110,7 +112,7 @@ function init(args: string[], io: IO): number {
     library: {},
   };
   writeFileSync(join(root, "kriya.yaml"), `# kriya project settings\n${stringify(settings)}`);
-  writeFileSync(join(root, ".gitignore"), ".kriya/\n");
+  writeFileSync(join(root, ".gitignore"), ".kriya/\n.env\n");
   io.out(`✓ Created ${folder}${example ? ` with the ${example} recipes` : ""}`);
   io.out(example ? `  Next: cd ${folder} && kriya run part_recipe --input part_no=3 --input story_pages="…"` : `  Next: add a recipe to ${folder}/recipes/`);
   return 0;
@@ -138,7 +140,7 @@ async function run(args: string[], io: IO): Promise<number> {
     if (runs.includes(id)) throw new UserError(`there's already a run called '${id}'`);
     const rec = Recorder.start(store.events, id);
     const { s, jobs } = scheduler(project, graph.graph, rec, store);
-    s.start(project.release, inputs, project.settings.context);
+    s.start(releaseOf(project.graphs, graph.graph), inputs, project.settings.context);
     io.out(`✓ Started ${id} (${recipe})`);
     await drive(s, jobs, io);
     report(io, rec.state, s.inbox());
@@ -182,8 +184,8 @@ async function status(args: string[], io: IO): Promise<number> {
     if (!id) {
       if (runs.length === 0) io.out("No runs yet. Start one with: kriya run <recipe>");
       for (const r of runs) {
-        const { rec, s } = await openRun(project, store, r, io);
-        io.out(`${r.padEnd(24)} ${rec.state.graph.padEnd(16)} ${summary(rec.state, s.inbox().length)}`);
+        const { rec, s, changed } = await openRun(project, store, r, io, { quiet: true });
+        io.out(`${r.padEnd(24)} ${rec.state.graph.padEnd(16)} ${summary(rec.state, s.inbox().length)}${changed ? " · recipes changed" : ""}`);
       }
       return 0;
     }
@@ -216,6 +218,71 @@ function summary(state: RunState, waiting: number): string {
   const blocked = Object.values(state.nodes).filter((n) => n.status === "blocked").length;
   return ["running", waiting ? `${waiting} waiting on you` : "", blocked ? `${blocked} blocked` : "", stale ? `${stale} stale` : ""].filter(Boolean).join(" · ");
 }
+
+// ── show ────────────────────────────────────────────────────────────────────
+
+/** What a run made: every step with its versions, or one version's full output (and an agent's turns). */
+async function show(args: string[], io: IO): Promise<number> {
+  const [id, step, version] = args;
+  if (!id) throw new UserError("say which run: kriya show <run> [step] [version]");
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const { rec, s } = await openRun(project, store, id, io);
+    const state = rec.state;
+    if (!step) {
+      io.out(`${id} · ${state.graph} · ${summary(state, s.inbox().length)} · spent ${usd(state.costUsd)}`);
+      for (const key of s.steps()) {
+        const n = state.nodes[key]!;
+        const versions = Object.values(n.versions).map((v) => `${v.id}${n.locked?.version === v.id ? " 🔒" : ""}${v.model ? ` ${v.model}` : ""}${v.costUsd ? ` ${usd(v.costUsd)}` : ""}`);
+        const turns = n.turns ? ` · ${n.turns} turn${n.turns === 1 ? "" : "s"}` : "";
+        io.out(`  ${line(key, n)}${turns}${versions.length ? `\n      versions: ${versions.join(" · ")}` : ""}`);
+      }
+      io.out(`  See one step in full: kriya show ${id} <step>`);
+      return 0;
+    }
+    const n = state.nodes[step];
+    if (!n) throw new UserError(`run '${id}' has no step '${step}' (it has: ${s.steps().join(", ")})`);
+    const ids = Object.keys(n.versions);
+    const v = n.versions[version ?? n.locked?.version ?? ids.at(-1) ?? ""];
+    if (version && !v) throw new UserError(`'${step}' has no version ${version} (it has: ${ids.join(", ") || "none yet"})`);
+
+    io.out(`${id} › ${step} · ${line(step, n).replace(/^\S+ \S+ ?·? ?/, "") || n.status}`);
+    if (n.history.length) {
+      const blobs = jsonBlobs(store);
+      const cost = n.history.reduce((t, h) => t + h.cost, 0);
+      io.out(`\nTurns (${n.history.length}, ${usd(cost)}):`);
+      for (const h of n.history) {
+        const r = h.response as { final?: unknown };
+        if (r.final !== undefined) io.out(`  ${String(h.turn).padStart(2)}  finish`);
+        for (const c of h.calls) {
+          const result = c.result ? preview(blobs.get(c.result)) : "…waiting";
+          io.out(`  ${String(h.turn).padStart(2)}  ${c.tool} ${preview(c.args)}\n        ${c.ok === false ? "✗" : "→"} ${result}`);
+        }
+      }
+    }
+    if (!v) {
+      io.out("\nNo versions yet.");
+      return 0;
+    }
+    const about = [
+      n.locked?.version === v.id ? "🔒 locked" : "not locked",
+      v.model,
+      v.costUsd ? usd(v.costUsd) : undefined,
+      v.madeBy ? `made by ${v.madeBy}` : undefined,
+      v.parents.length ? `from ${v.parents.join(" + ")}` : undefined,
+      v.instruction ? `"${v.instruction}"` : undefined,
+      v.branch !== "main" ? `branch ${v.branch}` : undefined,
+    ].filter(Boolean);
+    io.out(`\nVersion ${v.id} · ${about.join(" · ")}${ids.length > 1 ? `  (others: ${ids.filter((x) => x !== v.id).join(", ")})` : ""}\n`);
+    io.out(stringify(v.output, { lineWidth: 0 }).trimEnd());
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 
 // ── inbox and decide ────────────────────────────────────────────────────────
 
@@ -280,7 +347,7 @@ async function decide(args: string[], io: IO): Promise<number> {
 async function allInbox(project: Project, store: Store, io: IO): Promise<Entry[]> {
   const entries: Entry[] = [];
   for (const r of store.events.runs()) {
-    const { s, rec } = await openRun(project, store, r, io);
+    const { s, rec } = await openRun(project, store, r, io, { quiet: true });
     if (rec.state.status === "running") entries.push(...s.inbox().map((i) => ({ ...i, run: r })));
   }
   return entries;
@@ -408,11 +475,12 @@ function jsonBlobs(store: Store): Blobs {
 }
 
 /** Opens a run in this process: replays its log and asks again for anything in flight. */
-async function openRun(project: Project, store: Store, id: string, io: IO): Promise<{ rec: Recorder; s: Scheduler; jobs: Jobs }> {
+async function openRun(project: Project, store: Store, id: string, io: IO, opts: { quiet?: boolean } = {}): Promise<{ rec: Recorder; s: Scheduler; jobs: Jobs; changed: boolean }> {
   if (store.events.read(id).length === 0) throw new UserError(`there's no run '${id}'. See your runs with: kriya status`);
   const rec = Recorder.resume(store.events, id);
-  if (rec.state.release !== project.release) {
-    io.err(`! ${id}: the recipes changed since this run started; it carries on with the current recipes (run upgrades come later)`);
+  const changed = rec.state.release !== releaseOf(project.graphs, rec.state.graph);
+  if (changed && !opts.quiet) {
+    io.err(`! ${id}: its recipes changed since it started; it carries on with the current ones (run upgrades come later)`);
   }
   const { s, jobs } = scheduler(project, rec.state.graph, rec, store);
   if (rec.state.status === "running") {
@@ -425,7 +493,7 @@ async function openRun(project: Project, store: Store, id: string, io: IO): Prom
       io.err(`! ${id}: ${e.message}`);
     }
   }
-  return { rec, s, jobs };
+  return { rec, s, jobs, changed };
 }
 
 function report(io: IO, state: RunState, waiting: InboxItem[]): void {
