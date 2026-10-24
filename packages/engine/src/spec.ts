@@ -44,6 +44,8 @@ export const ModelNode = z
     capability: z.string().regex(/^[a-z]+(\.[a-z_]+)+$/, "a capability looks like image.generate"),
     model: z.string().optional(),
     prompt: z.string().optional(),
+    /** Extra settings passed to the provider as they are, e.g. `aspect_ratio: "16:9"`. Part of the step's settings, so changing one makes its work stale. */
+    params: z.record(z.unknown()).optional(),
     uses: z.array(Ref).default([]),
     options: z.number().int().min(1).max(8).default(1),
     /** Unset: `full`, or `local` for a step that `refines` another (D-13, D-55). */

@@ -16,7 +16,18 @@ export const ProjectFile = z
   .object({
     name: z.string().min(1),
     /** `fake` (no keys, no cost) or `anthropic` (Claude for text, vision and agents; key in .env). */
-    models: z.enum(["fake", "anthropic"]).default("fake"),
+    /**
+     * Which providers run which steps. `fake` (the default): made-up outputs, no keys.
+     * Per kind of step: `{ llm: anthropic, image: replicate }`; kinds left out stay fake.
+     * `anthropic` is short for `{ llm: anthropic }`.
+     */
+    models: z
+      .union([
+        z.enum(["fake", "anthropic"]),
+        z.object({ llm: z.enum(["fake", "anthropic"]).optional(), image: z.enum(["fake", "replicate"]).optional() }).strict(),
+      ])
+      .default("fake")
+      .transform((m) => (m === "fake" ? {} : m === "anthropic" ? { llm: "anthropic" as const } : m)),
     /** Claude settings for `models: anthropic`; steps can still pin their own `model`. */
     claude: z.object({ model: z.string().optional(), effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional() }).strict().optional(),
     recipes: z.string().default("recipes"),

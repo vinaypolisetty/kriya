@@ -49,6 +49,7 @@ packages/store/src/
 packages/adapters/src/
   jobs.ts          in-flight provider calls as tickets; settle() delivers them (D-53)
   anthropic.ts     Claude: llm.write / llm.vision steps and agent turns (D-54)
+  replicate.ts     Replicate: image.generate / image.edit (Nano Banana), job ledger (D-56)
   schema.ts        a step's `out` types as a strict JSON Schema
 packages/cli/src/
   commands.ts      init, run, status, inbox, decide, lock, rebuild, adopt (each a fresh process over .kriya/)
@@ -59,7 +60,7 @@ examples/mohalla-mitra/ reference recipes (part, shot, voice)
 docs/                   design docs (numbered)
 ```
 
-Planned packages (not created yet): `web` (review inbox). Replicate joins `adapters` on Day 16.
+Planned packages (not created yet): `web` (review inbox).
 
 Local run data lives in `.kriya/` at the project root (gitignored): `kriya.db` and `blobs/`.
 

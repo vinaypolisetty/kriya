@@ -5,12 +5,13 @@
  * them directly.
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stringify } from "yaml";
 import { formatProblems, Recorder, Scheduler, type Blobs, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
-import { anthropicExecutors, describeError, Jobs, MissingKey, settle } from "@kriya/adapters";
+import { anthropicExecutors, describeError, Jobs, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media } from "@kriya/adapters";
+import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools, projectAssets } from "./fake.js";
 import { loadProject, releaseOf, UserError, type Project } from "./project.js";
@@ -276,10 +277,35 @@ async function show(args: string[], io: IO): Promise<number> {
     ].filter(Boolean);
     io.out(`\nVersion ${v.id} · ${about.join(" · ")}${ids.length > 1 ? `  (others: ${ids.filter((x) => x !== v.id).join(", ")})` : ""}\n`);
     io.out(stringify(v.output, { lineWidth: 0 }).trimEnd());
+    const images = viewable(project, store, v.output);
+    if (images.length) io.out(`\nOpen the images:\n${images.map((p) => `  ${p}`).join("\n")}`);
     return 0;
   } finally {
     store.close();
   }
+}
+
+/** Every `blob:` image in an output, copied to `.kriya/view/<hash>.<ext>` so it opens in an image viewer. */
+function viewable(project: Project, store: Store, output: unknown): string[] {
+  const found: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string" && /^blob:[0-9a-f]{64}$/.test(v)) found.push(v.slice(5));
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  walk(output);
+  const dir = join(project.root, ".kriya", "view");
+  return found.flatMap((hash) => {
+    const bytes = store.blobs.get(hash);
+    if (!bytes) return [];
+    const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" }[sniff(bytes)] ?? "bin";
+    const file = join(dir, `${hash.slice(0, 12)}.${ext}`);
+    if (!existsSync(file)) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(file, bytes);
+    }
+    return [relative(project.root, file)];
+  });
 }
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
@@ -428,8 +454,8 @@ function scheduler(project: Project, graphId: string, rec: Recorder, store: Stor
   if (!graph) throw new UserError(`this run uses recipe '${graphId}', which isn't in your recipes any more`);
   const jobs = new Jobs();
   const tools = fakeTools();
-  const s = new Scheduler(graph, rec, executors(project, jobs, tools), project.graphs, {
-    assets: projectAssets(project.settings.library, project.settings.models === "fake"),
+  const s = new Scheduler(graph, rec, executors(project, store, jobs, tools), project.graphs, {
+    assets: projectAssets(project.settings.library, !project.settings.models.image),
     tools,
     blobs: jsonBlobs(store),
   });
@@ -441,24 +467,74 @@ function scheduler(project: Project, graphId: string, rec: Recorder, store: Stor
  * cost. `anthropic` sends text, vision and agent steps to Claude (key from
  * `.env`); image, video and audio stay fake until their providers arrive (Day 16).
  */
-function executors(project: Project, jobs: Jobs, tools: ReturnType<typeof fakeTools>): Executors {
+function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType<typeof fakeTools>): Executors {
   const fake = fakeExecutors(project.graphs);
-  if (project.settings.models === "fake") return fake;
+  const models = project.settings.models;
+  if (!models.llm && !models.image) return fake;
   const env = join(project.root, ".env");
-  if (existsSync(env) && !process.env.ANTHROPIC_API_KEY) process.loadEnvFile(env);
-  const claude = anthropicExecutors({ graphs: project.graphs, jobs, tools, ...(project.settings.claude ?? {}) });
+  if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
+  const real = [
+    ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, ...(project.settings.claude ?? {}) })] : []),
+    ...(models.image === "replicate" ? [replicateExecutors({ graphs: project.graphs, jobs, media: projectMedia(project, store), ledger: fileLedger(project) })] : []),
+  ];
+  const claude = models.llm === "anthropic" ? (real[0] as ReturnType<typeof anthropicExecutors>) : undefined;
   return {
-    produce: (node, ctx) => (claude.handles(node) ? claude.produce(node, ctx) : fake.produce(node, ctx)),
+    produce: (node, ctx) => (real.find((p) => p.handles(node)) ?? fake).produce(node, ctx),
     decide: fake.decide,
-    turn: claude.turn,
-    managesContext: true,
+    turn: claude?.turn ?? fake.turn!,
+    ...(claude ? { managesContext: true } : {}),
+  };
+}
+
+/**
+ * Images for providers: `blob:<sha256>` from the store, image files inside the
+ * project (character sheets in the Library), https URLs as they are.
+ * Downloaded images go into the store.
+ */
+function projectMedia(project: Project, store: Store): Media {
+  const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+  return {
+    read(value) {
+      if (value.startsWith("blob:")) {
+        const bytes = store.blobs.get(value.slice(5));
+        return bytes ? { bytes, mime: sniff(bytes) } : undefined;
+      }
+      if (/^https:\/\/\S+$/.test(value)) return { url: value };
+      const ext = /\.(\w+)$/.exec(value)?.[1]?.toLowerCase();
+      const path = resolve(project.root, value);
+      if (!ext || !MIME[ext] || !path.startsWith(project.root + "/") || !existsSync(path)) return undefined;
+      return { bytes: readFileSync(path), mime: MIME[ext]! };
+    },
+    write: (bytes) => `blob:${store.blobs.put(bytes).hash}`,
+  };
+}
+
+/** The image type from its first bytes. */
+function sniff(b: Uint8Array): string {
+  if (b[0] === 0x89 && b[1] === 0x50) return "image/png";
+  if (b[0] === 0xff && b[1] === 0xd8) return "image/jpeg";
+  if (b[0] === 0x52 && b[1] === 0x49 && b[8] === 0x57) return "image/webp";
+  if (b[0] === 0x47 && b[1] === 0x49) return "image/gif";
+  return "application/octet-stream";
+}
+
+/** Replicate prediction ids by idempotency key, one small file each in `.kriya/jobs/`. */
+function fileLedger(project: Project): Ledger {
+  const dir = join(project.root, ".kriya", "jobs");
+  const file = (key: string) => join(dir, `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`);
+  return {
+    get: (key) => (existsSync(file(key)) ? (JSON.parse(readFileSync(file(key), "utf8")) as string[]) : undefined),
+    set(key, ids) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(file(key), JSON.stringify(ids));
+    },
   };
 }
 
 /** Runs until nothing is in flight: model calls are awaited and delivered, then the run carries on. */
 async function drive(s: Scheduler, jobs: Jobs, io: IO): Promise<void> {
   s.run();
-  if (jobs.size > 0) io.out("  ⏳ waiting on Claude…");
+  if (jobs.size > 0) io.out("  ⏳ waiting on the models…");
   await settle(s, jobs, describeError);
 }
 
@@ -489,7 +565,7 @@ async function openRun(project: Project, store: Store, id: string, io: IO, opts:
       await drive(s, jobs, io);
     } catch (e) {
       // A step waiting on Claude with no key: say so, and still show and answer everything else.
-      if (!(e instanceof MissingKey)) throw e;
+      if (!(e instanceof MissingKey) && !(e instanceof MissingToken)) throw e;
       io.err(`! ${id}: ${e.message}`);
     }
   }

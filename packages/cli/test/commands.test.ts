@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server } from "node:http";
@@ -259,7 +259,7 @@ edges:
       process.env.ANTHROPIC_API_KEY = "test-key";
       process.env.ANTHROPIC_BASE_URL = api.url;
       const done = await kriya(cwd, "status", "brief-1"); // any command picks the run up again
-      expect(done.out).toContain("⏳ waiting on Claude…");
+      expect(done.out).toContain("⏳ waiting on the models…");
       expect(done.out).toContain("brief-1 · brief · completed");
       expect(api.bodies).toHaveLength(3);
     } finally {
@@ -279,7 +279,7 @@ edges:
       const cwd = await claudeProject();
       const r = await kriya(cwd, "run", "brief", "--input", "topic=water tankers");
       expect(r.code, r.err).toBe(0);
-      expect(r.out).toContain("⏳ waiting on Claude…");
+      expect(r.out).toContain("⏳ waiting on the models…");
       expect(r.out).toContain("completed");
       expect(api.bodies).toHaveLength(3); // the outline, then two agent turns
       const status = (await kriya(cwd, "status", "brief-1")).out;
@@ -342,6 +342,78 @@ describe("a run's recipes", () => {
   it("a new project ignores .env as well as .kriya/", async () => {
     const cwd = await project();
     expect(readFileSync(join(cwd, ".gitignore"), "utf8")).toBe(".kriya/\n.env\n");
+  });
+});
+
+describe("models: { image: replicate } (Day 16)", () => {
+  /** PNG bytes: enough for kriya to tell the type. */
+  const png = (tag: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tag)]);
+
+  /** A stand-in for Replicate on localhost: predictions succeed on the first poll; outputs are served from here too. */
+  async function replicateStandIn() {
+    const creates: { input: { prompt: string; image_input?: string[]; aspect_ratio?: string } }[] = [];
+    let n = 0;
+    const server: Server = createServer((req, res) => {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+        const send = (status: number, body: unknown) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+        };
+        if (req.method === "POST" && req.url!.endsWith("/predictions")) {
+          creates.push(JSON.parse(data));
+          return send(201, { id: `p${++n}`, status: "starting", version: "v123", output: null, error: null });
+        }
+        const get = /\/predictions\/(\w+)$/.exec(req.url!);
+        if (get) return send(200, { id: get[1], status: "succeeded", version: "v123", output: `${base}/out/${get[1]}.png`, error: null });
+        const out = /\/out\/(\w+)\.png$/.exec(req.url!);
+        if (out) {
+          res.writeHead(200);
+          return res.end(png(`panel ${out[1]}`));
+        }
+        send(404, { detail: "not found" });
+      });
+    });
+    await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+    return { creates, url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, close: () => server.close() };
+  }
+
+  it("draws three real candidates for one shot, with the character sheets as references; show makes them viewable", async () => {
+    const api = await replicateStandIn();
+    const saved = { token: process.env.REPLICATE_API_TOKEN, url: process.env.REPLICATE_BASE_URL };
+    process.env.REPLICATE_API_TOKEN = "r8_test";
+    process.env.REPLICATE_BASE_URL = api.url;
+    try {
+      const cwd = await project();
+      mkdirSync(join(cwd, "sheets"));
+      writeFileSync(join(cwd, "sheets", "bheem.png"), png("bheem"));
+      writeFileSync(join(cwd, "sheets", "reservoir.png"), png("reservoir"));
+      const yaml = readFileSync(join(cwd, "kriya.yaml"), "utf8")
+        .replace("models: fake", "models:\n  image: replicate")
+        .replace("library: {}", "library:\n  Bheem.look: sheets/bheem.png\n  Reservoir.look: sheets/reservoir.png");
+      writeFileSync(join(cwd, "kriya.yaml"), yaml);
+      const item = JSON.stringify({ id: "P3-08", action: "Bheem leaps up screaming", characters: ["Bheem"], place: "Reservoir", lines: [], animate: false });
+
+      const r = await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`);
+      expect(r.code, r.err).toBe(0);
+      expect(api.creates).toHaveLength(3);
+      expect(api.creates[0]!.input.image_input).toHaveLength(2); // Bheem's sheet and the reservoir's
+      expect(api.creates[0]!.input.prompt).toContain("Reference images: 1 = Bheem's look; 2 = Reservoir's look.");
+
+      const shown = (await kriya(cwd, "show", "shot_recipe-1", "draw")).out;
+      expect(shown).toMatch(/Version 1\.3 · not locked · google\/nano-banana:v123 · \$0\.04/);
+      const view = /Open the images:\n {2}(\S+)/.exec(shown)![1]!;
+      expect(view).toMatch(/^\.kriya\/view\/[0-9a-f]{12}\.png$/);
+      expect(readFileSync(join(cwd, view)).subarray(8).toString()).toBe("panel p3");
+      expect(readdirSync(join(cwd, ".kriya", "jobs"))).toHaveLength(1); // the ledger: one step, three predictions
+    } finally {
+      api.close();
+      for (const [k, v] of [["REPLICATE_API_TOKEN", saved.token], ["REPLICATE_BASE_URL", saved.url]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
   });
 });
 
