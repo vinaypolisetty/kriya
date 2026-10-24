@@ -33,9 +33,26 @@ export type Project = {
   settings: ProjectFile;
   graphs: Graph[];
   problems: Problem[];
-  /** Content hash of the recipes, so a run knows which recipes it started with. */
-  release: string;
 };
+
+/**
+ * Content hash of what one run uses: its recipe and every recipe its `map` and
+ * `subgraph` steps run, so adding or editing an unrelated recipe doesn't flag
+ * other runs as changed.
+ */
+export function releaseOf(graphs: Graph[], graphId: string): string {
+  const used = new Map<string, Graph>();
+  const visit = (id: string) => {
+    const g = graphs.find((x) => x.graph === id);
+    if (!g || used.has(id)) return;
+    used.set(id, g);
+    for (const n of g.nodes) if (n.kind === "map" || n.kind === "subgraph") visit(n.graph);
+  };
+  visit(graphId);
+  return createHash("sha256")
+    .update(JSON.stringify([...used.values()].sort((a, b) => a.graph.localeCompare(b.graph))))
+    .digest("hex");
+}
 
 /** Finds kriya.yaml in `from` or a folder above it. */
 export function findRoot(from: string): string | undefined {
@@ -60,10 +77,7 @@ export function loadProject(from: string): Project {
   const dir = join(root, parsed.data.recipes);
   if (!existsSync(dir)) throw new UserError(`the recipes folder '${parsed.data.recipes}' doesn't exist`);
   const { graphs, problems } = loadDir(dir);
-  const release = createHash("sha256")
-    .update(JSON.stringify([...graphs].sort((a, b) => a.graph.localeCompare(b.graph))))
-    .digest("hex");
-  return { root, settings: parsed.data, graphs, problems, release };
+  return { root, settings: parsed.data, graphs, problems };
 }
 
 /** An error meant for the person at the terminal: printed as-is, no stack trace. */

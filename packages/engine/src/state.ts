@@ -37,6 +37,8 @@ export type Version = {
   instruction?: string;
   madeBy?: string;
   replayedFrom?: string;
+  /** What the call that made it cost, in US$ (0 for fakes and people). */
+  costUsd: number;
   /** One content hash per input it was made from; see `CandidateProduced.inputs`. */
   inputs?: Record<string, string>;
 };
@@ -159,7 +161,7 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       const id = versionId(e.attempt, e.candidate);
       if (n.versions[id]) fail(e, `version ${id} already exists`);
       for (const p of e.parents) if (!n.versions[p]) fail(e, `parent version ${p} doesn't exist`);
-      const v: Version = { id, attempt: e.attempt, candidate: e.candidate, parents: e.parents, output: e.output, verdicts: [], branch: n.branch };
+      const v: Version = { id, attempt: e.attempt, candidate: e.candidate, parents: e.parents, output: e.output, verdicts: [], branch: n.branch, costUsd: e.cost_usd };
       if (e.model !== undefined) v.model = e.model;
       if (e.instruction !== undefined) v.instruction = e.instruction;
       if (e.made_by !== undefined) v.madeBy = e.made_by;

@@ -42,6 +42,13 @@ const BETAS = ["server-side-fallback-2026-07-01", "context-management-2025-06-27
 /** Claude declined the request (`stop_reason: "refusal"`), even after the fallback model. */
 export class Refusal extends Error {}
 
+/** No key to call Claude with. Thrown before anything is sent, so the step can simply run again once a key is set. */
+export class MissingKey extends Error {
+  constructor() {
+    super("this step needs Claude, and there's no key. Put ANTHROPIC_API_KEY=… in .env at the project root (see .env.example), then run the command again");
+  }
+}
+
 export type AnthropicOptions = {
   /** The recipes, to read each step's output types. */
   graphs: Graph[];
@@ -62,13 +69,19 @@ const SYSTEM_AGENT =
   "You are an agent running one step of a kriya recipe: a production pipeline where a person reviews the results. Work toward the goal with your tools. Ask the person with ask_human only when you need a decision or a fact only they have. When you're done, call finish with your result; that ends the step.";
 
 export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "produce" | "turn" | "managesContext"> & { handles(node: Node): boolean } {
-  const client = opts.client ?? new Anthropic();
+  let made: Anthropic | undefined;
+  /** The client, made on the first call: a key is needed only when Claude is actually asked something. */
+  const client = (): Anthropic => {
+    if (opts.client) return opts.client;
+    if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) throw new MissingKey();
+    return (made ??= new Anthropic());
+  };
   const maxTokens = opts.maxTokens ?? 16000;
   const effort = opts.effort ?? "high";
   const graphOf = (node: Node) => opts.graphs.find((g) => g.nodes.includes(node));
 
-  const request = async (params: Omit<Beta, "betas" | "fallbacks" | "max_tokens">): Promise<Message> => {
-    const m = await client.beta.messages.create({ ...params, betas: BETAS, fallbacks: "default", max_tokens: maxTokens });
+  const request = async (c: Anthropic, params: Omit<Beta, "betas" | "fallbacks" | "max_tokens">): Promise<Message> => {
+    const m = await c.beta.messages.create({ ...params, betas: BETAS, fallbacks: "default", max_tokens: maxTokens });
     if (m.stop_reason === "refusal") throw new Refusal(`Claude declined this step${m.stop_details?.category ? ` (${m.stop_details.category})` : ""}`);
     if (m.stop_reason === "max_tokens") throw new Error(`Claude's answer was cut off at ${maxTokens} tokens`);
     return m;
@@ -82,13 +95,14 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
     produce(node, ctx) {
       if (node.kind !== "model") throw new Error(`Claude doesn't run ${node.kind} steps`);
       const ticket = `claude:${ctx.idempotencyKey}`;
+      const c = client(); // before the ticket: no key, nothing starts and the step stays as it was
       const schema = fieldsSchema(node.out, graphOf(node)?.types ?? {});
       opts.jobs.start(ticket, {
         kind: "outputs",
         run: async () => {
           const answers = await Promise.all(
             Array.from({ length: node.options }, () =>
-              request({
+              request(c, {
                 model: node.model ?? opts.model ?? DEFAULT_MODEL,
                 system: SYSTEM_STEP,
                 output_config: { effort, format: { type: "json_schema", schema } },
@@ -104,11 +118,12 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
 
     turn(node, ctx, history) {
       const ticket = `claude:${ctx.idempotencyKey}`;
+      const c = client();
       const types = graphOf(node)?.types ?? {};
       opts.jobs.start(ticket, {
         kind: "turn",
         run: async () => {
-          const m = await request({
+          const m = await request(c, {
             model: opts.model ?? DEFAULT_MODEL,
             system: SYSTEM_AGENT,
             cache_control: { type: "ephemeral" },
@@ -138,13 +153,19 @@ export function describeError(e: unknown): string {
 
 // ── Model steps ─────────────────────────────────────────────────────────────
 
-/** The prompt with its `{{refs}}` filled in, then any other inputs; images first for vision. */
-function stepContent(prompt: string, ctx: StepContext, vision: boolean): Anthropic.Beta.Messages.BetaContentBlockParam[] {
+/** A prompt or goal with its `{{refs}}` filled in from what the step received, and the refs it used. */
+function fill(text: string, ctx: StepContext): { text: string; used: Set<string> } {
   const used = new Set<string>();
-  const text = prompt.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, ref: string) => {
+  const filled = text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, ref: string) => {
     used.add(ref);
     return show(ctx.uses[ref]);
   });
+  return { text: filled, used };
+}
+
+/** The prompt with its `{{refs}}` filled in, then any other inputs; images first for vision. */
+function stepContent(prompt: string, ctx: StepContext, vision: boolean): Anthropic.Beta.Messages.BetaContentBlockParam[] {
+  const { text, used } = fill(prompt, ctx);
   const rest = Object.entries(ctx.uses).filter(([k]) => !used.has(k));
   const blocks: Anthropic.Beta.Messages.BetaContentBlockParam[] = [];
   if (vision) {
@@ -199,8 +220,9 @@ function agentTools(names: string[], tools: Tools | undefined, outSchema: Record
  * as they stood after each turn.
  */
 function agentMessages(goal: string, ctx: StepContext, history: AgentHistory): Anthropic.Beta.Messages.BetaMessageParam[] {
-  const inputs = Object.entries(ctx.uses);
-  const first = `Goal: ${goal}${inputs.length ? `\n\nInputs:\n${inputs.map(([k, v]) => `- ${k}: ${show(v)}`).join("\n")}` : ""}`;
+  const { text, used } = fill(goal, ctx);
+  const inputs = Object.entries(ctx.uses).filter(([k]) => !used.has(k));
+  const first = `Goal: ${text.trim()}${inputs.length ? `\n\nInputs:\n${inputs.map(([k, v]) => `- ${k}: ${show(v)}`).join("\n")}` : ""}`;
   const messages: Anthropic.Beta.Messages.BetaMessageParam[] = [{ role: "user", content: first }];
   const notes: Record<string, string> = {};
   for (const h of history) {

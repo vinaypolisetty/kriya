@@ -3,7 +3,7 @@
  * buttons that edges rely on. Run before a recipe is published, so problems
  * show up in the builder, not halfway through a paid run.
  */
-import { END, type Edge, type Graph, type Node } from "./spec.js";
+import { contextMode, END, stepText, type Edge, type Graph, type Node } from "./spec.js";
 import { ConditionError, literalsComparedTo, parseCondition, pathsIn } from "./condition.js";
 
 export type Issue = {
@@ -173,6 +173,14 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
       n.beside.forEach((r, j) => checkRootRef(r, ["nodes", i, "beside", j]));
     }
     if ("prompt" in n && n.prompt) for (const r of promptRefs(n.prompt)) checkRootRef(r, ["nodes", i, "prompt"]);
+    if (n.kind === "agent") for (const r of promptRefs(n.goal)) checkRootRef(r, ["nodes", i, "goal"]);
+    // In isolated context, declared inputs never reach the step (D-55): say so instead of dropping them quietly.
+    if (contextMode(n) === "isolated") {
+      if ("uses" in n && n.uses.length) warn(["nodes", i, "uses"], "'uses' won't reach this step: it runs in isolated context, which sees only @mentions. Remove 'uses', or set context: local or full");
+      const refs = promptRefs(stepText(n));
+      const field = n.kind === "agent" ? "goal" : "prompt";
+      if (refs.length) warn(["nodes", i, field], `{{${refs[0]}}} in its ${field} won't be filled: it runs in isolated context, which sees only @mentions. @mention it, or set context: local or full`);
+    }
   });
 
   return issues;

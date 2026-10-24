@@ -108,10 +108,10 @@ describe("context modes", () => {
   const editOnce = (c: StepContext): Decision =>
     c.visit === 1 ? { action: "edit", selection: [c.shows![0]!.version], note: "add the gamcha" } : { action: "lock", selection: [c.shows!.at(-1)!.version] };
 
-  it("a local edit gets only the panel it edits: no style line, no character sheets", () => {
+  it("a local edit gets the panel it edits and its own inputs: no style line, no character sheets (D-55)", () => {
     const { seen } = part(fullLibrary(), editOnce);
     const edit = seen["per_shot[P3-01].edit"]![0]!;
-    expect(edit.uses).toEqual({});
+    expect(Object.keys(edit.uses).sort()).toEqual(["pick.note", "pick.selected"]);
     expect(edit.parent?.output).toEqual({ image: "img:P3-01" });
   });
 

@@ -69,10 +69,10 @@ Anything locked, at any level:
 | Mode | Uses | Default for |
 |---|---|---|
 | **Full** | Automatic defaults from all levels + mentions | Generate (new shot, script, voice line) |
-| **Local** | Only the node's own current version + mentions | Edit / refine |
+| **Local** | The version it edits + its own declared inputs (`uses`, prompt `{{refs}}`) + mentions; none of the automatic defaults ([D-55](17-decisions.md)) | Edit / refine |
 | **Isolated** | Only what the user explicitly gives it | Experiments, one-off tasks |
 
-Defaults are per action (generate → full, edit → local); the recipe author can override per node and the user can switch per action.
+Defaults are per action (generate → full, edit → local): a step with `refines` defaults to local, every other model or agent step to full ([D-55](17-decisions.md)). The recipe author can override per node and the user can switch per action. The validator warns when declared inputs can't reach a step (isolated mode).
 
 ### In v0.1 ([D-47](17-decisions.md))
 

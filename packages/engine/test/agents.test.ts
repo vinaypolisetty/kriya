@@ -762,3 +762,11 @@ describe("clearing old results when the context fills up (D-39 step 2)", () => {
     expect(model.histories[8]![0]!.results[0]!.result).toEqual({ url: "https://example.org/tankers" });
   });
 });
+
+describe("an agent sees its inputs by default (D-13, D-55)", () => {
+  it("'uses' and {{refs}} in the goal reach a generating agent without setting context", () => {
+    const model = new Model(() => ({ final: { report: "ok" } }));
+    run(recipe(), model);
+    expect(model.contexts[0]!.uses).toEqual({ "inputs.topic": "the water tanker mafia" });
+  });
+});
