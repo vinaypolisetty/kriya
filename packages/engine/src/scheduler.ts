@@ -15,7 +15,7 @@
  * Still to come: lock policy (Day 8), real tickets and waiting (Day 11),
  * re-running a map with reuse of unchanged items (Day 10), `subgraph` steps.
  */
-import { END, type AgentNode, type Graph, type Node, type ScreenNode } from "./spec.js";
+import { contextMode, END, stepText, type AgentNode, type Graph, type Node, type ScreenNode } from "./spec.js";
 import { createHash } from "node:crypto";
 import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
@@ -1310,12 +1310,12 @@ export class Scheduler {
    * Outputs are read locked and non-stale; facets resolve step override > run override > Library.
    */
   private received(key: string, node: Node, ctx: Context): Received {
-    const mode = "context" in node ? node.context : "full";
+    const mode = contextMode(node);
     const n = this.rec.state.nodes[key];
     const mentions = n?.mentions.map((m) => m.ref) ?? [];
     let refs: string[] = [];
     if (mode === "full" && node.kind !== "screen") {
-      const declared = [...("uses" in node ? node.uses : []), ...("prompt" in node && node.prompt ? promptRefs(node.prompt) : [])];
+      const declared = [...("uses" in node ? node.uses : []), ...promptRefs(stepText(node))];
       refs = [...new Set(declared)].filter((r) => !n?.removed.includes(r));
     }
     refs = [...new Set([...refs, ...mentions])];

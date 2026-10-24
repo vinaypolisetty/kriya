@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stringify } from "yaml";
 import { formatProblems, Recorder, Scheduler, type Blobs, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
-import { anthropicExecutors, describeError, Jobs, settle } from "@kriya/adapters";
+import { anthropicExecutors, describeError, Jobs, MissingKey, settle } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools, projectAssets } from "./fake.js";
 import { loadProject, UserError, type Project } from "./project.js";
@@ -379,9 +379,6 @@ function executors(project: Project, jobs: Jobs, tools: ReturnType<typeof fakeTo
   if (project.settings.models === "fake") return fake;
   const env = join(project.root, ".env");
   if (existsSync(env) && !process.env.ANTHROPIC_API_KEY) process.loadEnvFile(env);
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-    throw new UserError("models: anthropic needs a key. Put ANTHROPIC_API_KEY=… in .env at the project root (see .env.example), or set models: fake in kriya.yaml");
-  }
   const claude = anthropicExecutors({ graphs: project.graphs, jobs, tools, ...(project.settings.claude ?? {}) });
   return {
     produce: (node, ctx) => (claude.handles(node) ? claude.produce(node, ctx) : fake.produce(node, ctx)),
@@ -419,8 +416,14 @@ async function openRun(project: Project, store: Store, id: string, io: IO): Prom
   }
   const { s, jobs } = scheduler(project, rec.state.graph, rec, store);
   if (rec.state.status === "running") {
-    s.recover();
-    await drive(s, jobs, io);
+    try {
+      s.recover();
+      await drive(s, jobs, io);
+    } catch (e) {
+      // A step waiting on Claude with no key: say so, and still show and answer everything else.
+      if (!(e instanceof MissingKey)) throw e;
+      io.err(`! ${id}: ${e.message}`);
+    }
   }
   return { rec, s, jobs };
 }

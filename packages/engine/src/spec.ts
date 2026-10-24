@@ -46,7 +46,8 @@ export const ModelNode = z
     prompt: z.string().optional(),
     uses: z.array(Ref).default([]),
     options: z.number().int().min(1).max(8).default(1),
-    context: ContextMode.default("full"),
+    /** Unset: `full`, or `local` for a step that `refines` another (D-13, D-55). */
+    context: ContextMode.optional(),
     trust: Trust.default("ask_me"),
     out: Fields.default({}),
   })
@@ -64,7 +65,8 @@ export const AgentNode = z
     max_turns: z.number().int().min(1).default(8),
     /** Spend cap for the whole agent run, checked between turns. */
     budget: z.object({ usd: z.number().positive() }).strict().optional(),
-    context: ContextMode.default("local"),
+    /** Unset: `full`, or `local` for a step that `refines` another (D-13, D-55). */
+    context: ContextMode.optional(),
     trust: Trust.default("ask_me"),
     out: Fields.default({}),
   })
@@ -161,3 +163,17 @@ export type Node = z.infer<typeof Node>;
 export type Edge = z.infer<typeof Edge>;
 export type ScreenNode = z.infer<typeof ScreenNode>;
 export type AgentNode = z.infer<typeof AgentNode>;
+
+/**
+ * What a step sees (D-13): generating steps default to `full`, steps that
+ * refine another (edits, fixes) to `local`. Screens and other kinds: `full`.
+ */
+export function contextMode(node: Node): "full" | "local" | "isolated" {
+  if (node.kind !== "model" && node.kind !== "agent") return "full";
+  return node.context ?? (node.refines ? "local" : "full");
+}
+
+/** The text a step's `{{refs}}` live in: a model's prompt or an agent's goal. */
+export function stepText(node: Node): string {
+  return node.kind === "model" ? (node.prompt ?? "") : node.kind === "agent" ? node.goal : "";
+}

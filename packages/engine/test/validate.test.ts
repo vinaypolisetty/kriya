@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import { loadDir, loadText } from "../src/load.js";
+import { contextMode } from "../src/spec.js";
 
 const EXAMPLES = resolve(__dirname, "../../../examples");
 
@@ -156,5 +157,35 @@ describe("graph checks", () => {
   it("warns about steps that can never run", () => {
     const text = minimal(`nodes:\n${tool("a")}${tool("b")}${tool("c")}edges:\n  - { from: a, to: b }\n  - { from: b, to: c }\n  - { from: c, to: b, max_loops: 2 }\n`);
     expect(errors(text)).toEqual([]);
+  });
+});
+
+describe("what a step sees (D-13, D-55)", () => {
+  const warnings = (text: string) => loadText(text).problems.filter((p) => p.severity === "warning").map((p) => p.message);
+  const graph = (node: string) => minimal(`inputs:\n  topic: text\nnodes:\n  - { id: d, kind: model, capability: llm.write, prompt: hi, out: { t: text } }\n${node}`);
+
+  it("generating steps default to full, refining steps to local", () => {
+    const nodes = loadText(graph(`  - { id: a, kind: agent, goal: go, tools: [search], out: { t: text } }\n  - { id: e, kind: agent, goal: fix it, tools: [search], refines: d, out: { t: text } }\n`)).graphs[0]!.nodes;
+    expect(nodes.map((n) => contextMode(n))).toEqual(["full", "full", "local"]);
+  });
+
+  it("warns when 'uses' won't reach a step outside full context", () => {
+    expect(warnings(graph(`  - { id: e, kind: model, capability: llm.write, refines: d, prompt: hi, uses: [inputs.topic], out: { t: text } }\n`))).toEqual([
+      "'uses' won't reach this step: it runs in local context, which sees the version it edits and @mentions. Remove 'uses', or set context: full",
+    ]);
+  });
+
+  it("warns when a {{ref}} in a prompt or goal won't be filled", () => {
+    expect(warnings(graph(`  - { id: a, kind: agent, goal: "write about {{inputs.topic}}", tools: [search], context: isolated, out: { t: text } }\n`))).toEqual([
+      "{{inputs.topic}} in its goal won't be filled: it runs in isolated context, which sees only @mentions. Set context: full, or @mention it",
+    ]);
+  });
+
+  it("checks refs in an agent's goal like a prompt's", () => {
+    expect(errors(graph(`  - { id: a, kind: agent, goal: "write about {{inptus.topic}}", tools: [search], out: { t: text } }\n`))[0]?.message).toMatch(/inptus.*Did you mean .inputs./);
+  });
+
+  it("full context needs no warning", () => {
+    expect(warnings(graph(`  - { id: a, kind: agent, goal: "write about {{inputs.topic}}", tools: [search], uses: [inputs.topic], out: { t: text } }\n`))).toEqual([]);
   });
 });

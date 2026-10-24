@@ -195,6 +195,22 @@ const agentScript = (p: Params) =>
     : message([{ type: "tool_use", id: "toolu_3", name: "finish", input: { report: "Tankers set the price." } }], "tool_use");
 
 describe("agents: one request per turn, the conversation rebuilt append-only", () => {
+  it("fills {{refs}} in the goal from what the step received", async () => {
+    const g = load(`graph: g
+level: part
+inputs:
+  topic: text
+nodes:
+  - { id: a, kind: agent, goal: "Write about {{inputs.topic}}", tools: [search], trust: always, out: { report: text } }
+edges:
+  - { from: a, to: END }
+`);
+    const { client, requests } = fakeClient(agentScript);
+    const { s, jobs } = start(g, client, { topic: "water tankers" }, searchTool);
+    await settle(s, jobs, describeError);
+    expect(requests[0]!.messages[0]).toEqual({ role: "user", content: "Goal: Write about water tankers" });
+  });
+
   it("runs to finish; the final answer is the step's version", async () => {
     const { client, requests } = fakeClient(agentScript);
     const { s, rec, jobs } = start(researcher, client, { topic: "water tankers" }, searchTool);

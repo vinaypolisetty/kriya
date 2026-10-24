@@ -213,21 +213,8 @@ edges:
     return cwd;
   }
 
-  it("without a key, says where to put one", async () => {
-    const saved = { key: process.env.ANTHROPIC_API_KEY, token: process.env.ANTHROPIC_AUTH_TOKEN };
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_AUTH_TOKEN;
-    try {
-      const r = await kriya(await claudeProject(), "run", "brief", "--input", "topic=water tankers");
-      expect(r.code).toBe(1);
-      expect(r.err).toBe("✗ models: anthropic needs a key. Put ANTHROPIC_API_KEY=… in .env at the project root (see .env.example), or set models: fake in kriya.yaml");
-    } finally {
-      if (saved.key !== undefined) process.env.ANTHROPIC_API_KEY = saved.key;
-      if (saved.token !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = saved.token;
-    }
-  });
-
-  it("runs a text step and an agent through the real SDK, over HTTP, to a stand-in API", async () => {
+  /** A stand-in for the Anthropic API on localhost: an outline, then an agent that searches once and finishes. */
+  async function standIn() {
     const bodies: { messages: unknown[]; tools?: unknown[] }[] = [];
     const reply = (content: unknown[], stop_reason: string) => ({
       id: "msg_x", type: "message", role: "assistant", model: "claude-opus-5-5", content, stop_reason, stop_details: null,
@@ -249,21 +236,57 @@ edges:
       });
     });
     await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+    return { bodies, url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, close: () => server.close() };
+  }
+
+  it("without a key: the run stops before calling, status still works, and adding the key carries on", async () => {
+    const saved = { key: process.env.ANTHROPIC_API_KEY, token: process.env.ANTHROPIC_AUTH_TOKEN, url: process.env.ANTHROPIC_BASE_URL };
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+    const api = await standIn();
+    try {
+      const cwd = await claudeProject();
+      const r = await kriya(cwd, "run", "brief", "--input", "topic=water tankers");
+      expect(r.code).toBe(1);
+      expect(r.err).toBe("✗ this step needs Claude, and there's no key. Put ANTHROPIC_API_KEY=… in .env at the project root (see .env.example), then run the command again");
+      expect(api.bodies).toHaveLength(0);
+
+      const st = await kriya(cwd, "status", "brief-1");
+      expect(st.code).toBe(0);
+      expect(st.err).toContain("! brief-1: this step needs Claude, and there's no key.");
+      expect(st.out.split("\n")[0]).toBe("brief-1 · brief · running");
+
+      process.env.ANTHROPIC_API_KEY = "test-key";
+      process.env.ANTHROPIC_BASE_URL = api.url;
+      const done = await kriya(cwd, "status", "brief-1"); // any command picks the run up again
+      expect(done.out).toContain("⏳ waiting on Claude…");
+      expect(done.out).toContain("brief-1 · brief · completed");
+      expect(api.bodies).toHaveLength(3);
+    } finally {
+      api.close();
+      for (const [k, v] of [["ANTHROPIC_API_KEY", saved.key], ["ANTHROPIC_AUTH_TOKEN", saved.token], ["ANTHROPIC_BASE_URL", saved.url]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  });
+
+  it("runs a text step and an agent through the real SDK, over HTTP, to a stand-in API", async () => {
+    const api = await standIn();
     const saved = { key: process.env.ANTHROPIC_API_KEY, url: process.env.ANTHROPIC_BASE_URL };
     process.env.ANTHROPIC_API_KEY = "test-key";
-    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    process.env.ANTHROPIC_BASE_URL = api.url;
     try {
       const cwd = await claudeProject();
       const r = await kriya(cwd, "run", "brief", "--input", "topic=water tankers");
       expect(r.code, r.err).toBe(0);
       expect(r.out).toContain("⏳ waiting on Claude…");
       expect(r.out).toContain("completed");
-      expect(bodies).toHaveLength(3); // the outline, then two agent turns
+      expect(api.bodies).toHaveLength(3); // the outline, then two agent turns
       const status = (await kriya(cwd, "status", "brief-1")).out;
       expect(status).toContain("✓ outline · locked 1.1");
       expect(status).toContain("✓ writer · locked 1.1");
     } finally {
-      server.close();
+      api.close();
       if (saved.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = saved.key;
       if (saved.url === undefined) delete process.env.ANTHROPIC_BASE_URL; else process.env.ANTHROPIC_BASE_URL = saved.url;
     }
