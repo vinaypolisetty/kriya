@@ -199,3 +199,52 @@ describe("tickets", () => {
     expect(() => s.deliver("nope", [])).toThrow("no step is waiting on ticket 'nope'");
   });
 });
+
+describe("retry a failed step (Q-23)", () => {
+  /** A full Part where the first voice job is refused, like Gemini's false E005 on Day 17. */
+  function refusedVoice() {
+    const provider = new Provider();
+    const db = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(db, "run1");
+    const s = new Scheduler(part, rec, executors(provider), graphs, LIBRARY);
+    s.start(RELEASE, INPUTS, SERIES);
+    for (let i = 0; i < 100; i++) {
+      s.run();
+      const ticket = Object.values(rec.state.nodes).find((n) => n.status === "waiting_external")?.ticket;
+      if (!ticket) break;
+      if (ticket.endsWith("voices[L1].speak#1")) s.failJob(ticket, "flagged as sensitive (E005)");
+      else s.deliver(ticket, provider.result(ticket));
+    }
+    return { provider, db, rec, s };
+  }
+
+  it("the refused line fails its map and the run; retry asks again as a new attempt and the run finishes", () => {
+    const { provider, db, rec, s } = refusedVoice();
+    expect(rec.state.status).toBe("failed");
+    expect(rec.state.nodes["voices"]).toMatchObject({ status: "failed", failure: "item L1 didn't finish" });
+    const drawn = provider.submissions;
+
+    expect(s.retry("voices[L1].speak")).toEqual(["voices[L1].speak"]);
+    drive(s, rec, provider);
+    expect(rec.state.status).toBe("completed");
+    expect(rec.state.nodes["voices[L1].speak"]!.attempts).toBe(2);
+    expect(provider.paid.has("run1/voices[L1].speak#2")).toBe(true); // a new key: the provider makes it afresh
+    // Only the line and the steps after it ran again; every shot was kept.
+    expect(rec.state.nodes["per_shot[P3-01].draw"]!.attempts).toBe(1);
+    expect(provider.submissions - drawn).toBe(2); // the line, then the Reel
+    expect(replay(readRun(db, "run1"))).toEqual(rec.state);
+  });
+
+  it("naming the failed map retries its failed items", () => {
+    const { provider, rec, s } = refusedVoice();
+    expect(s.retry("voices")).toEqual(["voices[L1].speak"]);
+    drive(s, rec, provider);
+    expect(rec.state.status).toBe("completed");
+  });
+
+  it("a step that hasn't failed has nothing to retry", () => {
+    const { s } = refusedVoice();
+    expect(() => s.retry("shot_list")).toThrow("'shot_list' hasn't failed (it's locked), so there's nothing to retry");
+    expect(() => s.retry("nope")).toThrow("there's no step 'nope' in this run");
+  });
+});

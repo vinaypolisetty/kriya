@@ -349,8 +349,8 @@ describe("models: { image: replicate } (Day 16)", () => {
   /** PNG bytes: enough for kriya to tell the type. */
   const png = (tag: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tag)]);
 
-  /** A stand-in for Replicate on localhost: predictions succeed on the first poll; outputs are served from here too. */
-  async function replicateStandIn() {
+  /** A stand-in for Replicate on localhost: predictions succeed on the first poll (or fail, if `refused` names them); outputs are served from here too. */
+  async function replicateStandIn(refused: string[] = []) {
     const creates: { input: { prompt: string; image_input?: string[]; aspect_ratio?: string } }[] = [];
     let n = 0;
     const server: Server = createServer((req, res) => {
@@ -367,6 +367,7 @@ describe("models: { image: replicate } (Day 16)", () => {
           return send(201, { id: `p${++n}`, status: "starting", version: "v123", output: null, error: null });
         }
         const get = /\/predictions\/(\w+)$/.exec(req.url!);
+        if (get && refused.includes(get[1]!)) return send(200, { id: get[1], status: "failed", version: "v123", output: null, error: "The input or output was flagged as sensitive. (E005)" });
         if (get) return send(200, { id: get[1], status: "succeeded", version: "v123", output: `${base}/out/${get[1]}.png`, error: null });
         const out = /\/out\/(\w+)\.png$/.exec(req.url!);
         if (out) {
@@ -379,6 +380,36 @@ describe("models: { image: replicate } (Day 16)", () => {
     await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
     return { creates, url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, close: () => server.close() };
   }
+
+  it("a refused job fails the step; status says how to try again, and retry makes new predictions (Q-23)", async () => {
+    const api = await replicateStandIn(["p2"]);
+    const saved = { token: process.env.REPLICATE_API_TOKEN, url: process.env.REPLICATE_BASE_URL };
+    process.env.REPLICATE_API_TOKEN = "r8_test";
+    process.env.REPLICATE_BASE_URL = api.url;
+    try {
+      const cwd = await project();
+      writeFileSync(join(cwd, "kriya.yaml"), readFileSync(join(cwd, "kriya.yaml"), "utf8").replace("models: fake", "models:\n  image: replicate").replace("library: {}", "library:\n  Bheem.look: a very tall bodybuilder\n  Reservoir.look: a concrete water tank"));
+      const item = JSON.stringify({ id: "P3-08", action: "Bheem leaps up screaming", characters: ["Bheem"], place: "Reservoir", lines: [], animate: false });
+      await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`);
+
+      const failed = (await kriya(cwd, "status", "shot_recipe-1")).out;
+      expect(failed).toContain("✗ draw · Replicate couldn't make the image: The input or output was flagged as sensitive. (E005)");
+      expect(failed).toContain("Try again: kriya retry shot_recipe-1 'draw'");
+
+      const r = await kriya(cwd, "retry", "shot_recipe-1", "draw");
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toContain("✓ Retrying draw");
+      expect(r.out).toContain("1 waiting on you");
+      expect(api.creates).toHaveLength(6); // three refused-or-kept, then three new: a new attempt is a new job
+      expect((await kriya(cwd, "show", "shot_recipe-1", "draw")).out).toMatch(/Version 2\.3/);
+      expect((await kriya(cwd, "retry", "shot_recipe-1", "draw")).err).toBe("✗ 'draw' hasn't failed (it's completed), so there's nothing to retry");
+    } finally {
+      api.close();
+      for (const [k, v] of [["REPLICATE_API_TOKEN", saved.token], ["REPLICATE_BASE_URL", saved.url]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  });
 
   it("draws three real candidates for one shot, with the character sheets as references; show makes them viewable", async () => {
     const api = await replicateStandIn();

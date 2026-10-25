@@ -1030,6 +1030,27 @@ export class Scheduler {
     });
   }
 
+  /**
+   * Tries a failed step again as a new attempt (Q-23), so a provider that
+   * refused or gave up is asked afresh under a new idempotency key. Naming a
+   * failed map retries its failed items; failed maps around the step run again
+   * and keep their finished items (D-35). Call `run()` after.
+   */
+  retry(key: string): string[] {
+    return this.atomic(() => {
+      const n = this.rec.state.nodes[key];
+      if (!n) throw new Error(`there's no step '${key}' in this run`);
+      if (n.status !== "failed") throw new Error(`'${key}' hasn't failed (it's ${n.status}), so there's nothing to retry`);
+      const failed = this.instances().filter(
+        (x) => this.status(x.key) === "failed" && (x.key === key || key.startsWith(`${x.key}[`) || x.key.startsWith(`${key}[`)),
+      );
+      this.reopen(`retrying ${key}`);
+      for (const x of failed) this.rec.record({ type: "NodeReady", node: x.key });
+      const steps = failed.filter((x) => x.node.kind !== "map").map((x) => x.key);
+      return steps.length ? steps : [key];
+    });
+  }
+
   private reopen(reason: string): void {
     if (this.rec.state.status !== "running") this.rec.record({ type: "RunReopened", reason });
   }

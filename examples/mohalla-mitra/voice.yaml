@@ -26,7 +26,7 @@ nodes:
     refines: speak       # the faster take becomes the next version of the line, so 'listen' plays it
     prompt: "{{item.hinglish}}"   # a speech step's prompt is the words to say
     uses: [item.hinglish, item.emotion, item.speaker@voice]
-    params: { prompt: "Speak about 20% faster than usual." }   # Gemini TTS's style field; the emotion and voice follow it
+    params: { prompt: "Speak about 20% faster than usual." }   # Gemini TTS's style field; it goes after the emotion and voice
     out:
       audio: audio
       seconds: number
