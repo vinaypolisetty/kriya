@@ -295,3 +295,43 @@ describe("validating refines", () => {
     expect(e[0]).toMatch(/'draw' has no output 'imag'.*Did you mean 'image'/);
   });
 });
+
+describe("tool steps (Day 19)", () => {
+  it("a crop gets the panel picked and the region marked on the screen, and its output is draw's next version", () => {
+    const exec = fakes(
+      { draw: panels, crop: (c) => [{ image: `${(c.parent!.output as { image: string }).image}@${String(c.region)}` }] },
+      { pick: (c) => (c.visit === 1 ? { action: "crop", selection: ["1.2"], region: "0.1,0,0.8,1" } : { action: "lock", selection: [c.shows!.at(-1)!.version] }) },
+    );
+    const { rec } = start(example("shot_recipe"), exec, { item: { id: "P3-04", animate: false } });
+    expect(exec.calls.crop![0]!.region).toBe("0.1,0,0.8,1");
+    expect(rec.state.nodes.draw!.versions["2.1"]).toMatchObject({ parents: ["1.2"], madeBy: "crop", output: { image: "img:P3-04:a1c2@0.1,0,0.8,1" } });
+  });
+
+  it("a tool step receives its uses, like a model step", () => {
+    const g = loadText(`graph: t
+level: part
+inputs:
+  title: text
+nodes:
+  - id: write
+    kind: model
+    capability: llm.write
+    trust: always
+    out: { reel: video }
+  - id: squeeze
+    kind: tool
+    tool: compress
+    uses: [write.reel, inputs.title]
+    args: { video: write.reel, max_mb: 30 }
+    out: { reel: video }
+edges:
+  - { from: write, to: squeeze }
+  - { from: squeeze, to: END }
+`);
+    expect(g.problems).toEqual([]);
+    const exec = fakes({ write: () => [{ reel: "reel.mp4" }], squeeze: () => [{ reel: "small.mp4" }] });
+    const { rec } = start(g.graphs[0]!, exec, { title: "Part 3" });
+    expect(exec.calls.squeeze![0]!.uses).toEqual({ "write.reel": "reel.mp4", "inputs.title": "Part 3" });
+    expect(rec.state.status).toBe("completed");
+  });
+});

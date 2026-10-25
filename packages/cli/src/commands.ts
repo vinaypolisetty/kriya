@@ -6,11 +6,12 @@
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stringify } from "yaml";
 import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
-import { anthropicExecutors, describeError, Jobs, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
+import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
@@ -85,6 +86,7 @@ const EXAMPLE_CONTEXT: Record<string, ProjectContext> = {
       style: "2D Indian cartoon, flat colors, warm afternoon light",
       rules: "Original Bollywood-style music only; Hinglish voices, English captions",
       cast: ["Mitra", "Bheem", "Pinki", "Tinku", "Pinku", "Kamla", "Biscuit"],
+      music: { main: "music/main-theme.mp3", clue: "music/emotional-clue.mp3", villain: "music/villain.mp3", chase: "music/comedy-chase.mp3" },
     },
   },
 };
@@ -572,14 +574,24 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
   const fake = fakeExecutors(project.graphs);
   const models = project.settings.models;
   const media = realMedia(project);
-  if (models.llm !== "anthropic" && media.length === 0) return fake;
+  const toolRun = project.settings.tools;
+  if (models.llm !== "anthropic" && media.length === 0 && toolRun === "fake") return fake;
   const env = join(project.root, ".env");
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
   const real = [
     ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, ...(project.settings.claude ?? {}) })] : []),
+    ...(toolRun !== "fake"
+      ? [mediaTools({
+          jobs,
+          media: projectMedia(project, store),
+          build: join(project.root, ".kriya", "build"),
+          ...(toolRun.python ? { python: toolRun.python.replace(/^~(?=\/)/, homedir()) } : {}),
+          ...(toolRun.font ? { font: resolve(project.root, toolRun.font) } : {}),
+        })]
+      : []),
     ...(media.length ? [replicateExecutors({ graphs: project.graphs, jobs, media: projectMedia(project, store), ledger: fileLedger(project), capabilities: media, ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
   ];
-  const claude = models.llm === "anthropic" ? (real[0] as ReturnType<typeof anthropicExecutors>) : undefined;
+  const claude = models.llm === "anthropic" ? (real.find((r) => "turn" in r) as ReturnType<typeof anthropicExecutors>) : undefined;
   return {
     produce: (node, ctx) => (real.find((p) => p.handles(node)) ?? fake).produce(node, ctx),
     decide: fake.decide,
@@ -589,12 +601,11 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
 }
 
 /**
- * Images for providers: `blob:<sha256>` from the store, image files inside the
- * project (character sheets in the Library), https URLs as they are.
- * Downloaded images go into the store.
+ * Media for providers and tools: `blob:<sha256>` from the store, image, audio
+ * and video files inside the project (sheets, tracks), https URLs as they are.
+ * Downloaded and made files go into the store.
  */
 function projectMedia(project: Project, store: Store): Media {
-  const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
   return {
     read(value) {
       if (value.startsWith("blob:")) {
@@ -610,25 +621,6 @@ function projectMedia(project: Project, store: Store): Media {
     write: (bytes) => `blob:${store.blobs.put(bytes).hash}`,
   };
 }
-
-/** The file type from its first bytes. */
-function sniff(b: Uint8Array): string {
-  const at = (i: number, s: string) => [...s].every((c, j) => b[i + j] === c.charCodeAt(0));
-  if (b[0] === 0x89 && b[1] === 0x50) return "image/png";
-  if (b[0] === 0xff && b[1] === 0xd8) return "image/jpeg";
-  if (at(0, "RIFF") && at(8, "WEBP")) return "image/webp";
-  if (at(0, "RIFF") && at(8, "WAVE")) return "audio/wav";
-  if (b[0] === 0x47 && b[1] === 0x49) return "image/gif";
-  if (at(4, "ftyp")) return "video/mp4";
-  if (at(0, "ID3") || (b[0] === 0xff && ((b[1] ?? 0) & 0xe0) === 0xe0)) return "audio/mpeg";
-  if (at(0, "OggS")) return "audio/ogg";
-  if (at(0, "fLaC")) return "audio/flac";
-  return "application/octet-stream";
-}
-const EXT: Record<string, string> = {
-  "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
-  "audio/wav": "wav", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac", "video/mp4": "mp4",
-};
 
 /** Replicate prediction ids by idempotency key, one small file each in `.kriya/jobs/`. */
 function fileLedger(project: Project): Ledger {

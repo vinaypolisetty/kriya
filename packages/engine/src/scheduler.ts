@@ -39,6 +39,8 @@ export type StepContext = {
   parent?: { version: string; output: Record<string, unknown> };
   /** For an edit or a replayed change: what to change, e.g. "add the gamcha". */
   instruction?: string;
+  /** For a refining step: the region the person marked on the screen (`--region`), e.g. for a crop. */
+  region?: unknown;
   /** For an adopt: the other version to take from ("use its ending"); `parent` is the one it builds on. */
   borrow?: { version: string; output: Record<string, unknown> };
   /** For a screen: the candidates on show (latest attempt of the step it shows), with the shown field. */
@@ -620,8 +622,9 @@ export class Scheduler {
   private produceRequest(key: string, node: Producer, ctx: Context): StepContext {
     const n = this.rec.state.nodes[key]!;
     const target = node.refines ? ctx.prefix + node.refines : key;
-    const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
+    const { parent, instruction, region } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined, region: undefined };
     const sc = this.context(key, node, ctx, n.attempts, target, parent, instruction);
+    if (region !== undefined) sc.region = region;
     sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}`;
     return sc;
   }
@@ -672,12 +675,12 @@ export class Scheduler {
   }
 
   /** Where a refining step starts from: what the reviewing screen last selected, else the locked or newest version. */
-  private refineSource(ctx: Context, targetId: string): { parent: string; instruction?: string } {
+  private refineSource(ctx: Context, targetId: string): { parent: string; instruction?: string; region?: unknown } {
     const t = this.rec.state.nodes[ctx.prefix + targetId]!;
     const screen = this.reviewer(targetId, ctx);
     const d = screen ? this.rec.state.nodes[ctx.prefix + screen.id]?.decisions.at(-1) : undefined;
     const parent = d?.selection?.[0] ?? t.locked?.version ?? Object.keys(t.versions).at(-1)!;
-    return d?.note ? { parent, instruction: d.note } : { parent };
+    return { parent, ...(d?.note ? { instruction: d.note } : {}), ...(d?.region !== undefined ? { region: d.region } : {}) };
   }
 
   /** A screen step: asks, and continues now if the answer is already there. */
@@ -1627,9 +1630,11 @@ function reaches(g: Graph, from: string, to: string): boolean {
 
 /** A plain reason for staleness from the inputs that changed. */
 function describe(changed: string[], node: Node, facets: string[] = []): string {
-  // "its item changed" already covers item.action, item.place, …; a named facet change covers the refs that read facets.
+  // "its item changed" already covers item.action, item.place, …; a named facet change covers the refs that read facets;
+  // "'per_shot' changed" (the step it comes after) covers per_shot.panel and per_shot.clip.
   const covered = (k: string) =>
     (changed.includes("item") && k.startsWith("uses:item.")) ||
+    (k.startsWith("uses:") && changed.includes(`after:${k.slice(5).split(/[.@[]/)[0]}`)) ||
     (changed.includes("inputs") && k.startsWith("uses:inputs.")) ||
     (facets.length > 0 && k.startsWith("uses:") && k.includes("@"));
   const parts = changed.filter((k) => !covered(k)).map((k) => {

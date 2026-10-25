@@ -112,9 +112,18 @@ Agents may only call the tools listed. Each turn is recorded. (Decision: explici
 - id: assemble
   kind: tool
   tool: assemble_reel
-  args: { aspect: "9:16", max_mb: 30, captions: english, music: duck_under_voices }
-  out: { reel: video }
+  uses: [shot_list.shots, shot_list.lines, per_shot.panel, per_shot.clip, voices.audio, series.music]
+  args:
+    shots: shot_list.shots     # an arg naming one of the step's uses gets its value
+    panels: per_shot.panel
+    clips: per_shot.clip
+    voices: voices.audio
+    music: series.music
+    max_mb: 30                 # anything else is passed as written
+  out: { reel: video, seconds: number }
 ```
+
+A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) and `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`).
 
 ### `screen`: a UI action (human decision)
 
