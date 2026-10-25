@@ -119,8 +119,8 @@ export interface Tools {
   describe?(tool: string): ToolSpec | undefined;
 }
 
-/** What a provider reports about one call: the exact model version, and what it cost. */
-export type CallMeta = { model?: string; cost_usd?: number };
+/** What a provider reports about one call: the exact model version, what it cost, and exactly what it was asked. */
+export type CallMeta = { model?: string; cost_usd?: number; prompt?: string; references?: { label: string; ref: string }[] };
 
 export type ToolSpec = { description: string; input_schema: Record<string, unknown> };
 
@@ -644,6 +644,8 @@ export class Scheduler {
         parents: parent ? [parent] : [],
         cost_usd: meta[i]?.cost_usd ?? 0,
         ...(meta[i]?.model ? { model: meta[i]!.model } : {}),
+        ...(meta[i]?.prompt !== undefined ? { prompt: meta[i]!.prompt } : {}),
+        ...(meta[i]?.references?.length ? { references: meta[i]!.references } : {}),
         inputs,
         ...(Object.keys(assets).length > 0 ? { assets } : {}),
         ...(instruction ? { instruction } : {}),
@@ -1230,8 +1232,11 @@ export class Scheduler {
         const now = this.inputsOf(ctx.prefix + maker.id, maker, ctx);
         const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k]);
         if (diff.length > 0 && n.status !== "stale") {
+          // Name the Library change itself ("Bheem's look changed"), not just the reference that reads it.
+          const used = this.received(ctx.prefix + maker.id, maker, ctx).assets;
+          const facets = Object.keys({ ...v.assets, ...used }).filter((f) => v.assets?.[f] !== used[f]);
           this.reopen("something its work used changed");
-          this.rec.record({ type: "MarkedStale", node: key, reason: describe(diff, node) });
+          this.rec.record({ type: "MarkedStale", node: key, reason: describe(diff, node, facets) });
           changed = true;
         } else if (diff.length === 0 && n.status === "stale") {
           this.reopen("something its work used changed");
@@ -1600,10 +1605,12 @@ function reaches(g: Graph, from: string, to: string): boolean {
 }
 
 /** A plain reason for staleness from the inputs that changed. */
-function describe(changed: string[], node: Node): string {
-  // "its item changed" already covers item.action, item.place, …
+function describe(changed: string[], node: Node, facets: string[] = []): string {
+  // "its item changed" already covers item.action, item.place, …; a named facet change covers the refs that read facets.
   const covered = (k: string) =>
-    (changed.includes("item") && k.startsWith("uses:item.")) || (changed.includes("inputs") && k.startsWith("uses:inputs."));
+    (changed.includes("item") && k.startsWith("uses:item.")) ||
+    (changed.includes("inputs") && k.startsWith("uses:inputs.")) ||
+    (facets.length > 0 && k.startsWith("uses:") && k.includes("@"));
   const parts = changed.filter((k) => !covered(k)).map((k) => {
     if (k === "spec") return "its settings changed";
     if (k === "item") return "its item changed";
@@ -1613,6 +1620,10 @@ function describe(changed: string[], node: Node): string {
     if (kind === "item") return `item ${name} changed`;
     return `'${name}' changed`;
   });
-  return [...new Set(parts)].join("; ");
+  const named = facets.map((f) => {
+    const dot = f.lastIndexOf(".");
+    return `${f.slice(0, dot)}'s ${f.slice(dot + 1)} changed`;
+  });
+  return [...new Set([...named, ...parts])].join("; ");
 }
 

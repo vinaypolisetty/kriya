@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { openDatabase, SqliteEventLog } from "@kriya/store";
-import { loadText, readRun, Recorder, replay, Scheduler, type Graph } from "@kriya/engine";
-import { describeError, Jobs, MissingToken, replicateExecutors, settle, type Ledger, type Media } from "../src/index.js";
+import { loadText, readRun, Recorder, replay, Scheduler, type Assets, type Graph } from "@kriya/engine";
+import { describeError, Jobs, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateOptions } from "../src/index.js";
 
 const RELEASE = "a".repeat(64);
 const VERSION = "5bdc2c7cd642ae33611d8c33f79615f98ff02509ab8db9d8ec1cc6c36d378fba";
@@ -50,7 +50,8 @@ type Call = { method: string; url: string; body?: unknown };
  * A stand-in for Replicate. Predictions run for one poll, then succeed (or
  * fail, if `fail` says so); outputs are bytes named after the prediction.
  */
-function fakeReplicate(opts: { fail?: (n: number) => string | undefined; status?: number } = {}) {
+function fakeReplicate(opts: { fail?: (n: number) => string | undefined; status?: number; version?: string } = {}) {
+  const version = opts.version ?? VERSION;
   const calls: Call[] = [];
   const predictions = new Map<string, { polls: number; error?: string }>();
   let n = 0;
@@ -65,14 +66,14 @@ function fakeReplicate(opts: { fail?: (n: number) => string | undefined; status?
     if (method === "POST" && url.endsWith("/predictions")) {
       const id = `p${++n}`;
       predictions.set(id, { polls: 0, ...(opts.fail?.(n) ? { error: opts.fail(n) } : {}) });
-      return json({ id, status: "starting", version: VERSION, output: null, error: null }, 201);
+      return json({ id, status: "starting", version, output: null, error: null }, 201);
     }
     const get = /\/predictions\/(\w+)$/.exec(url);
     if (get) {
       const p = predictions.get(get[1]!)!;
-      if (p.polls++ === 0) return json({ id: get[1], status: "processing", version: VERSION, output: null, error: null });
-      if (p.error) return json({ id: get[1], status: "failed", version: VERSION, output: null, error: p.error });
-      return json({ id: get[1], status: "succeeded", version: VERSION, output: `https://replicate.delivery/out/${get[1]}.jpg`, error: null });
+      if (p.polls++ === 0) return json({ id: get[1], status: "processing", version, output: null, error: null });
+      if (p.error) return json({ id: get[1], status: "failed", version, output: null, error: p.error });
+      return json({ id: get[1], status: "succeeded", version, output: `https://replicate.delivery/out/${get[1]}.jpg`, error: null });
     }
     const out = /replicate\.delivery\/out\/(\w+)\.jpg$/.exec(url);
     if (out) return new Response(new TextEncoder().encode(`jpeg bytes of ${out[1]}`));
@@ -111,16 +112,16 @@ const memoryLedger = (): Ledger & { m: Map<string, string[]> } => {
 const ITEM = { item: { id: "P3-08", action: "Bheem leaps up screaming; Dhanpat tumbles into the mud", characters: ["Bheem", "Dhanpat"] } };
 const ASSETS = { facet: (entity: string, facet: string) => ({ version: "v1", value: `sheets/${entity}.png` }) };
 
-function start(o: { replicate?: ReturnType<typeof fakeReplicate>; media?: ReturnType<typeof memoryMedia>; ledger?: Ledger; model?: string; decide?: (screen: string) => unknown; token?: string | null } = {}) {
+function start(o: { replicate?: ReturnType<typeof fakeReplicate>; media?: ReturnType<typeof memoryMedia>; ledger?: Ledger; models?: ReplicateOptions["models"]; assets?: Assets; decide?: (screen: string) => unknown; token?: string | null } = {}) {
   const replicate = o.replicate ?? fakeReplicate();
   const media = o.media ?? memoryMedia();
   const ledger = o.ledger ?? memoryLedger();
   const jobs = new Jobs();
-  const rep = replicateExecutors({ graphs: [shot], jobs, media, ledger, fetch: replicate.fetch, pollMs: 0, ...(o.token === null ? {} : { token: o.token ?? "r8_test" }), ...(o.model ? { model: o.model } : {}) });
+  const rep = replicateExecutors({ graphs: [shot], jobs, media, ledger, fetch: replicate.fetch, pollMs: 0, ...(o.token === null ? {} : { token: o.token ?? "r8_test" }), ...(o.models ? { models: o.models } : {}) });
   const exec = { produce: rep.produce, decide: (n: { id: string }) => o.decide?.(n.id) as never };
   const log = new SqliteEventLog(openDatabase(":memory:"));
   const rec = Recorder.start(log, "run1");
-  const s = new Scheduler(shot, rec, exec, [shot], { assets: ASSETS });
+  const s = new Scheduler(shot, rec, exec, [shot], { assets: o.assets ?? ASSETS });
   s.start(RELEASE, ITEM);
   return { s, rec, jobs, log, replicate, media, ledger };
 }
@@ -141,25 +142,64 @@ describe("image.generate on Replicate (D-56)", () => {
     await settle(s, jobs, describeError);
     const { input } = replicate.creates()[0]!.body as { input: { prompt: string; image_input: string[]; aspect_ratio: string } };
     expect(input.prompt).toBe(
-      "Bheem leaps up screaming; Dhanpat tumbles into the mud. Characters: Bheem (image 1), Dhanpat (image 2)\n\nReference images: 1 = Bheem's look; 2 = Dhanpat's look.",
+      "Bheem leaps up screaming; Dhanpat tumbles into the mud. Characters: Bheem (image 1); Dhanpat (image 2)\n\nReference images: 1 = Bheem's look; 2 = Dhanpat's look.",
     );
     expect(input.image_input).toEqual([`data:image/png;base64,${Buffer.from("Bheem sheet").toString("base64")}`, `data:image/png;base64,${Buffer.from("Dhanpat sheet").toString("base64")}`]);
     expect(input.aspect_ratio).toBe("16:9");
-    expect(replicate.creates()[0]!.url).toBe("https://api.replicate.com/v1/models/google/nano-banana/predictions");
+    expect(replicate.creates()[0]!.url).toBe("https://api.replicate.com/v1/models/google/nano-banana-2/predictions");
   });
 
-  it("records the exact model version and the estimated cost (rule 6)", async () => {
-    const { s, jobs, log } = start();
+  it("records the exact model version, the estimated cost, and the prompt and references it was asked with", async () => {
+    const { s, rec, jobs, log } = start();
     await settle(s, jobs, describeError);
     const made = readRun(log, "run1").filter((e) => e.type === "CandidateProduced");
-    expect(made.map((e) => ("model" in e ? e.model : undefined))).toEqual(Array(3).fill(`google/nano-banana:${VERSION}`));
-    expect(made.map((e) => ("cost_usd" in e ? e.cost_usd : undefined))).toEqual([0.039, 0.039, 0.039]);
+    expect(made.map((e) => ("model" in e ? e.model : undefined))).toEqual(Array(3).fill(`google/nano-banana-2:${VERSION}`));
+    expect(made.map((e) => ("cost_usd" in e ? e.cost_usd : undefined))).toEqual([0.067, 0.067, 0.067]);
+    const v = rec.state.nodes.draw!.versions["1.1"]!;
+    expect(v.prompt).toContain("Characters: Bheem (image 1); Dhanpat (image 2)");
+    expect(v.references).toEqual([
+      { label: "Bheem's look", ref: `sha256:${createHash("sha256").update("Bheem sheet").digest("hex")}` },
+      { label: "Dhanpat's look", ref: `sha256:${createHash("sha256").update("Dhanpat sheet").digest("hex")}` },
+    ]);
+  });
+
+  it("Replicate's hidden versions are recorded as the model name alone", async () => {
+    const { s, rec, jobs } = start({ replicate: fakeReplicate({ version: "hidden" }) });
+    await settle(s, jobs, describeError);
+    expect(rec.state.nodes.draw!.versions["1.1"]!.model).toBe("google/nano-banana-2");
+  });
+
+  it("settings per capability: model, params, field names and price; a step's own params win", async () => {
+    const { s, rec, jobs, replicate } = start({
+      models: { "image.generate": { model: "acme/painter", params: { resolution: "2K", aspect_ratio: "1:1" }, fields: { prompt: "text", images: "refs" }, price_usd: 0.5 } },
+    });
+    await settle(s, jobs, describeError);
+    const c = replicate.creates()[0]!;
+    expect(c.url).toBe("https://api.replicate.com/v1/models/acme/painter/predictions");
+    const input = (c.body as { input: Record<string, unknown> }).input;
+    expect(Object.keys(input).sort()).toEqual(["aspect_ratio", "refs", "resolution", "text"]);
+    expect(input).toMatchObject({ resolution: "2K", aspect_ratio: "16:9" }); // the step's 16:9 beats the setting's 1:1
+    expect(rec.state.nodes.draw!.versions["1.1"]!.costUsd).toBe(0.5);
   });
 
   it("a pinned version is asked for by version", async () => {
-    const { s, jobs, replicate } = start({ model: `google/nano-banana:${VERSION}` });
+    const { s, jobs, replicate } = start({ models: { "image.generate": { model: `google/nano-banana-2:${VERSION}` } } });
     await settle(s, jobs, describeError);
     expect(replicate.creates()[0]).toMatchObject({ url: "https://api.replicate.com/v1/predictions", body: { version: VERSION } });
+  });
+
+  it("a look with words describes the character in the prompt; words alone draw without a sheet", async () => {
+    const looks: Record<string, unknown> = {
+      Bheem: { image: "sheets/Bheem.png", words: "a very tall bodybuilder with a red-and-white checked gamcha" },
+      Dhanpat: { words: "a pot-bellied man in a white kurta and a gold watch" },
+    };
+    const { s, jobs, replicate } = start({ assets: { facet: (e: string) => ({ version: "v1", value: looks[e] }) } });
+    await settle(s, jobs, describeError);
+    const { input } = replicate.creates()[0]!.body as { input: { prompt: string; image_input: string[] } };
+    expect(input.prompt).toBe(
+      "Bheem leaps up screaming; Dhanpat tumbles into the mud. Characters: Bheem, a very tall bodybuilder with a red-and-white checked gamcha (image 1); Dhanpat, a pot-bellied man in a white kurta and a gold watch\n\nReference images: 1 = Bheem's look.",
+    );
+    expect(input.image_input).toHaveLength(1);
   });
 
   it("large reference images are uploaded once, then passed by URL", async () => {

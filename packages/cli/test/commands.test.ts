@@ -392,22 +392,32 @@ describe("models: { image: replicate } (Day 16)", () => {
       writeFileSync(join(cwd, "sheets", "reservoir.png"), png("reservoir"));
       const yaml = readFileSync(join(cwd, "kriya.yaml"), "utf8")
         .replace("models: fake", "models:\n  image: replicate")
-        .replace("library: {}", "library:\n  Bheem.look: sheets/bheem.png\n  Reservoir.look: sheets/reservoir.png");
+        .replace("library: {}", "library:\n  Bheem.look: { image: sheets/bheem.png, words: a very tall bodybuilder with a red-and-white checked gamcha }\n  Reservoir.look: a concrete water tank on stilts above red mud");
       writeFileSync(join(cwd, "kriya.yaml"), yaml);
       const item = JSON.stringify({ id: "P3-08", action: "Bheem leaps up screaming", characters: ["Bheem"], place: "Reservoir", lines: [], animate: false });
 
       const r = await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`);
       expect(r.code, r.err).toBe(0);
       expect(api.creates).toHaveLength(3);
-      expect(api.creates[0]!.input.image_input).toHaveLength(2); // Bheem's sheet and the reservoir's
-      expect(api.creates[0]!.input.prompt).toContain("Reference images: 1 = Bheem's look; 2 = Reservoir's look.");
+      expect(api.creates[0]!.input.image_input).toHaveLength(1); // Bheem's sheet; the reservoir is words only
+      expect(api.creates[0]!.input.prompt).toContain("Characters: Bheem, a very tall bodybuilder with a red-and-white checked gamcha (image 1)");
+      expect(api.creates[0]!.input.prompt).toContain("Place: Reservoir, a concrete water tank on stilts above red mud");
 
       const shown = (await kriya(cwd, "show", "shot_recipe-1", "draw")).out;
-      expect(shown).toMatch(/Version 1\.3 · not locked · google\/nano-banana:v123 · \$0\.04/);
+      expect(shown).toMatch(/Version 1\.3 · not locked · google\/nano-banana-2:v123 · \$0\.07/);
+      expect(shown).toContain("Prompt:\n  Anime-influenced".slice(0, 9)); // the prompt, indented
+      expect(shown).toMatch(/References:\n {2}1\. Bheem's look · sha256:[0-9a-f]{12}/);
       const view = /Open the images:\n {2}(\S+)/.exec(shown)![1]!;
       expect(view).toMatch(/^\.kriya\/view\/[0-9a-f]{12}\.png$/);
       expect(readFileSync(join(cwd, view)).subarray(8).toString()).toBe("panel p3");
       expect(readdirSync(join(cwd, ".kriya", "jobs"))).toHaveLength(1); // the ledger: one step, three predictions
+
+      // Lock a panel, then redraw Bheem's sheet in place: the shot that used it goes stale.
+      expect((await kriya(cwd, "decide", "1", "lock", "--pick", "1.2")).code).toBe(0);
+      expect((await kriya(cwd, "status", "shot_recipe-1")).out.split("\n")[0]).toBe("shot_recipe-1 · shot_recipe · completed");
+      writeFileSync(join(cwd, "sheets", "bheem.png"), png("bheem, round 3"));
+      const after = (await kriya(cwd, "status", "shot_recipe-1")).out;
+      expect(after).toContain("↻ draw · stale: Bheem's look changed · locked 1.2");
     } finally {
       api.close();
       for (const [k, v] of [["REPLICATE_API_TOKEN", saved.token], ["REPLICATE_BASE_URL", saved.url]] as const) {

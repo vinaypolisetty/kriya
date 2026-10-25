@@ -100,17 +100,20 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       opts.jobs.start(ticket, {
         kind: "outputs",
         run: async () => {
+          const content = stepContent(node.prompt ?? "", ctx, node.capability === "llm.vision");
+          const prompt = content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
+          const references = content.flatMap((b, i) => (b.type === "image" && b.source.type === "url" ? [{ label: `image ${i + 1}`, ref: b.source.url }] : []));
           const answers = await Promise.all(
             Array.from({ length: node.options }, () =>
               request(c, {
                 model: node.model ?? opts.model ?? DEFAULT_MODEL,
                 system: SYSTEM_STEP,
                 output_config: { effort, format: { type: "json_schema", schema } },
-                messages: [{ role: "user", content: stepContent(node.prompt ?? "", ctx, node.capability === "llm.vision") }],
+                messages: [{ role: "user", content }],
               }),
             ),
           );
-          return { outputs: answers.map(parseJson), meta: answers.map((m) => ({ model: m.model, cost_usd: cost(m) })) };
+          return { outputs: answers.map(parseJson), meta: answers.map((m) => ({ model: m.model, cost_usd: cost(m), prompt, references })) };
         },
       });
       return { ticket };
