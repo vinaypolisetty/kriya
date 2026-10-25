@@ -407,7 +407,7 @@ describe("models: { image: replicate } (Day 16)", () => {
       expect(shown).toMatch(/Version 1\.3 · not locked · google\/nano-banana-2:v123 · \$0\.07/);
       expect(shown).toContain("Prompt:\n  Anime-influenced".slice(0, 9)); // the prompt, indented
       expect(shown).toMatch(/References:\n {2}1\. Bheem's look · sha256:[0-9a-f]{12}/);
-      const view = /Open the images:\n {2}(\S+)/.exec(shown)![1]!;
+      const view = /Open the files:\n {2}(\S+)/.exec(shown)![1]!;
       expect(view).toMatch(/^\.kriya\/view\/[0-9a-f]{12}\.png$/);
       expect(readFileSync(join(cwd, view)).subarray(8).toString()).toBe("panel p3");
       expect(readdirSync(join(cwd, ".kriya", "jobs"))).toHaveLength(1); // the ledger: one step, three predictions

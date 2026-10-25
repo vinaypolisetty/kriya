@@ -49,7 +49,8 @@ packages/store/src/
 packages/adapters/src/
   jobs.ts          in-flight provider calls as tickets; settle() delivers them (D-53)
   anthropic.ts     Claude: llm.write / llm.vision steps and agent turns (D-54)
-  replicate.ts     Replicate: image.generate / image.edit (Nano Banana), job ledger (D-56)
+  replicate.ts     Replicate: images (Nano Banana), clips (Wan), voice (Gemini TTS), music (Lyria); job ledger (D-56, D-58)
+  duration.ts      length of a WAV or MP4 from its bytes
   schema.ts        a step's `out` types as a strict JSON Schema
 packages/cli/src/
   commands.ts      init, run, status, inbox, decide, lock, rebuild, adopt (each a fresh process over .kriya/)

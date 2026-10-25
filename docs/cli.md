@@ -44,9 +44,11 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
   ```yaml
   models:
     llm: anthropic     # text (llm.write), vision (llm.vision) and agents → Claude; key ANTHROPIC_API_KEY
-    image: replicate   # image.generate, image.edit → Nano Banana; token REPLICATE_API_TOKEN
+    image: replicate   # image.generate, image.edit → Nano Banana 2; token REPLICATE_API_TOKEN
+    video: replicate   # video.from_image → Wan 2.7 image-to-video
+    audio: replicate   # audio.speech → Gemini 3.1 Flash TTS; audio.music → Lyria 2
   ```
-  (`models: anthropic` is short for `{ llm: anthropic }`.) Keys go in `.env` at the project root. Video and audio stay fake until Day 17. Images need their looks in the Library (paths inside the project), with words that describe them:
+  (`models: anthropic` is short for `{ llm: anthropic }`.) Keys go in `.env` at the project root. Images need their looks in the Library (paths inside the project), with words that describe them:
   ```yaml
   library:
     Mitra.look:
@@ -54,10 +56,15 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
       words: a thin 60-year-old bald man with white side hair, round glasses, white mustache, brown vest over white kurta
     Driver.look:
       words: a heavyset tanker driver with curly hair, a muddy grey shirt and a brown vest   # no sheet: drawn from words
-  replicate:                       # optional; defaults to google/nano-banana-2
+    Mitra.voice:
+      voice: Charon                # a Gemini TTS voice name; or just `Mitra.voice: Charon`
+      words: warm and slow, a little hoarse
+  replicate:                       # optional, per capability; a step's own model: and params: win
     image.generate: { model: google/nano-banana-2, params: { resolution: 1K, output_format: png } }
+    video.from_image: { params: { resolution: 720p } }   # $0.10 a second instead of $0.15
+    audio.speech: { params: { language_code: hi-IN } }
   ```
-  A look missing from the Library (or a sheet that isn't there) blocks the shot instead of drawing a stranger. Redrawing a sheet in place makes the shots that used it stale. `kriya show` prints the prompt and references each version got, copies images to `.kriya/view/` and prints the paths to open. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, the next command asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key and run any command to carry on), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
+  A clip starts from the one image its step uses (the locked panel). A voice step's prompt is the words to say; the speaker's `@voice` picks the voice, and everything else it uses (the line's emotion, `@speech`, the voice's words) says how. Clips and audio are measured from their bytes, so `out: { seconds: number }` gets the real length. Any Replicate model works: name its input `fields:` (`prompt`, `images`, `voice`, `style`) if they differ, and its `price_usd` or `price_per_second_usd`. A look missing from the Library (or a sheet that isn't there) blocks the shot instead of drawing a stranger. Redrawing a sheet in place makes the shots that used it stale. `kriya show` prints the prompt and references each version got, copies images, clips and audio to `.kriya/view/` and prints the paths to open. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, the next command asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key and run any command to carry on), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
 - **`kriya.yaml`** holds the project's name, the inherited context (e.g. `series: { style, rules, cast }`) and, until the Library (Day 18), facet values as `Entity.facet: value`.
 - **A run is pinned to its recipes**: the recipe it runs and every recipe its maps run. Editing one of those shows `recipes changed` on the run; adding or editing other recipes doesn't.
 - **Errors are plain words**, including recipe problems ("'capabilty' isn't a setting for a model step. Did you mean 'capability'?").

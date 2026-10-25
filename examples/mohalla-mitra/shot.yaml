@@ -67,7 +67,8 @@ nodes:
     capability: video.from_image
     trust: when_confident
     prompt: |
-      {{item.action}}. Camera static. Keep the 2D cartoon style, flat colors, no 3D.
+      {{item.action}}
+      Camera static. Keep the 2D cartoon style, flat colors, no 3D.
       Ambient sound only, no music, no speech.
     uses: [pick.selected, item.action]
     out:
