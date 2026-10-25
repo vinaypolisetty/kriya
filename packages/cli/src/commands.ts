@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stringify } from "yaml";
 import { formatProblems, Recorder, Scheduler, type Blobs, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
-import { anthropicExecutors, describeError, Jobs, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media } from "@kriya/adapters";
+import { anthropicExecutors, describeError, Jobs, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools, projectAssets } from "./fake.js";
@@ -22,7 +22,7 @@ const HELP = `kriya: run recipes with people in the loop
 
   kriya init <folder> [--example <name>]          start a project (examples: kriya init --examples)
   kriya run <recipe> [--input name=value]… [--id name]
-                                                  start a run (models from kriya.yaml: fake, or anthropic)
+                                                  start a run (models from kriya.yaml: fake, anthropic, replicate)
   kriya status [run]                              your runs, or one run's steps
   kriya show <run> [step] [version]               what a run made: every step, or one step's full output
   kriya inbox                                     what's waiting on you
@@ -279,15 +279,15 @@ async function show(args: string[], io: IO): Promise<number> {
     io.out(stringify(v.output, { lineWidth: 0 }).trimEnd());
     if (v.prompt !== undefined) io.out(`\nPrompt:\n${v.prompt.replace(/^/gm, "  ")}`);
     if (v.references?.length) io.out(`\nReferences:\n${v.references.map((r, i) => `  ${i + 1}. ${r.label} · ${r.ref.startsWith("sha256:") ? r.ref.slice(0, 19) : r.ref}`).join("\n")}`);
-    const images = viewable(project, store, v.output);
-    if (images.length) io.out(`\nOpen the images:\n${images.map((p) => `  ${p}`).join("\n")}`);
+    const files = viewable(project, store, v.output);
+    if (files.length) io.out(`\nOpen the files:\n${files.map((p) => `  ${p}`).join("\n")}`);
     return 0;
   } finally {
     store.close();
   }
 }
 
-/** Every `blob:` image in an output, copied to `.kriya/view/<hash>.<ext>` so it opens in an image viewer. */
+/** Every `blob:` file in an output (images, clips, audio), copied to `.kriya/view/<hash>.<ext>` so it opens in a viewer or player. */
 function viewable(project: Project, store: Store, output: unknown): string[] {
   const found: string[] = [];
   const walk = (v: unknown) => {
@@ -300,7 +300,7 @@ function viewable(project: Project, store: Store, output: unknown): string[] {
   return found.flatMap((hash) => {
     const bytes = store.blobs.get(hash);
     if (!bytes) return [];
-    const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" }[sniff(bytes)] ?? "bin";
+    const ext = EXT[sniff(bytes)] ?? "bin";
     const file = join(dir, `${hash.slice(0, 12)}.${ext}`);
     if (!existsSync(file)) {
       mkdirSync(dir, { recursive: true });
@@ -457,27 +457,37 @@ function scheduler(project: Project, graphId: string, rec: Recorder, store: Stor
   const jobs = new Jobs();
   const tools = fakeTools();
   const s = new Scheduler(graph, rec, executors(project, store, jobs, tools), project.graphs, {
-    assets: projectAssets(project.settings.library, !project.settings.models.image, project.root),
+    assets: projectAssets(project.settings.library, realMedia(project).length === 0, project.root),
     tools,
     blobs: jsonBlobs(store),
   });
   return { s, jobs };
 }
 
+/** Steps of each kind of media that Replicate runs, from `models:` in kriya.yaml. */
+const MEDIA: Record<"image" | "video" | "audio", ReplicateCapability[]> = {
+  image: ["image.generate", "image.edit"],
+  video: ["video.from_image"],
+  audio: ["audio.speech", "audio.music"],
+};
+const realMedia = (project: Project): ReplicateCapability[] =>
+  (Object.keys(MEDIA) as (keyof typeof MEDIA)[]).flatMap((k) => (project.settings.models[k] === "replicate" ? MEDIA[k] : []));
+
 /**
  * Which models run the steps. `fake` (the default) makes up outputs, no keys, no
- * cost. `anthropic` sends text, vision and agent steps to Claude (key from
- * `.env`); image, video and audio stay fake until their providers arrive (Day 16).
+ * cost. `anthropic` sends text, vision and agent steps to Claude; `replicate`
+ * runs images, clips and audio, per kind (keys from `.env`).
  */
 function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType<typeof fakeTools>): Executors {
   const fake = fakeExecutors(project.graphs);
   const models = project.settings.models;
-  if (!models.llm && !models.image) return fake;
+  const media = realMedia(project);
+  if (models.llm !== "anthropic" && media.length === 0) return fake;
   const env = join(project.root, ".env");
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
   const real = [
     ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, ...(project.settings.claude ?? {}) })] : []),
-    ...(models.image === "replicate" ? [replicateExecutors({ graphs: project.graphs, jobs, media: projectMedia(project, store), ledger: fileLedger(project), ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
+    ...(media.length ? [replicateExecutors({ graphs: project.graphs, jobs, media: projectMedia(project, store), ledger: fileLedger(project), capabilities: media, ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
   ];
   const claude = models.llm === "anthropic" ? (real[0] as ReturnType<typeof anthropicExecutors>) : undefined;
   return {
@@ -511,14 +521,24 @@ function projectMedia(project: Project, store: Store): Media {
   };
 }
 
-/** The image type from its first bytes. */
+/** The file type from its first bytes. */
 function sniff(b: Uint8Array): string {
+  const at = (i: number, s: string) => [...s].every((c, j) => b[i + j] === c.charCodeAt(0));
   if (b[0] === 0x89 && b[1] === 0x50) return "image/png";
   if (b[0] === 0xff && b[1] === 0xd8) return "image/jpeg";
-  if (b[0] === 0x52 && b[1] === 0x49 && b[8] === 0x57) return "image/webp";
+  if (at(0, "RIFF") && at(8, "WEBP")) return "image/webp";
+  if (at(0, "RIFF") && at(8, "WAVE")) return "audio/wav";
   if (b[0] === 0x47 && b[1] === 0x49) return "image/gif";
+  if (at(4, "ftyp")) return "video/mp4";
+  if (at(0, "ID3") || (b[0] === 0xff && ((b[1] ?? 0) & 0xe0) === 0xe0)) return "audio/mpeg";
+  if (at(0, "OggS")) return "audio/ogg";
+  if (at(0, "fLaC")) return "audio/flac";
   return "application/octet-stream";
 }
+const EXT: Record<string, string> = {
+  "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
+  "audio/wav": "wav", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac", "video/mp4": "mp4",
+};
 
 /** Replicate prediction ids by idempotency key, one small file each in `.kriya/jobs/`. */
 function fileLedger(project: Project): Ledger {

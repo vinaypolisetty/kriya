@@ -24,8 +24,9 @@ nodes:
     name: Redo faster
     capability: audio.speech
     refines: speak       # the faster take becomes the next version of the line, so 'listen' plays it
-    prompt: "{{item.hinglish}} (speak 20% faster)"
+    prompt: "{{item.hinglish}}"   # a speech step's prompt is the words to say
     uses: [item.hinglish, item.emotion, item.speaker@voice]
+    params: { prompt: "Speak about 20% faster than usual." }   # Gemini TTS's style field; the emotion and voice follow it
     out:
       audio: audio
       seconds: number

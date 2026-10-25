@@ -10,38 +10,46 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
+import { REPLICATE_CAPABILITIES } from "@kriya/adapters";
 import { loadDir, type Graph, type Problem } from "@kriya/engine";
 
 export const ProjectFile = z
   .object({
     name: z.string().min(1),
-    /** `fake` (no keys, no cost) or `anthropic` (Claude for text, vision and agents; key in .env). */
     /**
      * Which providers run which steps. `fake` (the default): made-up outputs, no keys.
-     * Per kind of step: `{ llm: anthropic, image: replicate }`; kinds left out stay fake.
-     * `anthropic` is short for `{ llm: anthropic }`.
+     * Per kind of step: `{ llm: anthropic, image: replicate, video: replicate, audio: replicate }`;
+     * kinds left out stay fake. `anthropic` is short for `{ llm: anthropic }`.
      */
     models: z
       .union([
         z.enum(["fake", "anthropic"]),
-        z.object({ llm: z.enum(["fake", "anthropic"]).optional(), image: z.enum(["fake", "replicate"]).optional() }).strict(),
+        z
+          .object({
+            llm: z.enum(["fake", "anthropic"]).optional(),
+            image: z.enum(["fake", "replicate"]).optional(),
+            video: z.enum(["fake", "replicate"]).optional(),
+            audio: z.enum(["fake", "replicate"]).optional(),
+          })
+          .strict(),
       ])
       .default("fake")
       .transform((m) => (m === "fake" ? {} : m === "anthropic" ? { llm: "anthropic" as const } : m)),
     /**
-     * Replicate settings per kind of image step, for `image: replicate`: model (`owner/name`, or
-     * `owner/name:version`), params sent every time, the model's input field names, price per image.
-     * A step's own `model:` and `params:` win.
+     * Replicate settings per capability (`image.generate`, `video.from_image`, `audio.speech`, …):
+     * model (`owner/name`, or `owner/name:version`), params sent every time, the model's input field
+     * names, and a price per output or per second. A step's own `model:` and `params:` win.
      */
     replicate: z
       .record(
-        z.enum(["image.generate", "image.edit"]),
+        z.enum(REPLICATE_CAPABILITIES),
         z
           .object({
             model: z.string().optional(),
             params: z.record(z.unknown()).optional(),
-            fields: z.object({ prompt: z.string().optional(), images: z.string().optional() }).strict().optional(),
+            fields: z.object({ prompt: z.string().optional(), images: z.string().optional(), voice: z.string().optional(), style: z.string().optional() }).strict().optional(),
             price_usd: z.number().nonnegative().optional(),
+            price_per_second_usd: z.number().nonnegative().optional(),
           })
           .strict(),
       )

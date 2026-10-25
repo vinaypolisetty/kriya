@@ -6,11 +6,11 @@ Steps ask for a **capability**; a registry maps it to a provider and model. Swap
 
 | Capability | Input → output | Mohalla Mitra default |
 |---|---|---|
-| `image.generate` | text + reference images → image | Nano Banana (Replicate), 16:9 |
-| `image.edit` | image + instruction (+ refs) → image | Nano Banana (Replicate) |
-| `video.from_image` | image + text → video | Wan 2.7 image-to-video (Replicate), 5 s |
-| `audio.speech` | text + voice + style → audio | Gemini TTS `gemini-3.1-flash-tts` (Replicate) |
-| `audio.music` | text → audio | A Replicate music model, ~30 s tracks |
+| `image.generate` | text + reference images → image | Nano Banana 2 `google/nano-banana-2` (Replicate), 16:9, $0.067 at 1K |
+| `image.edit` | image + instruction (+ refs) → image | Nano Banana 2 (Replicate) |
+| `video.from_image` | image + text → video | Wan 2.7 image-to-video `wan-video/wan-2.7-i2v` (Replicate), 5 s, $0.10/s at 720p, $0.15/s at 1080p |
+| `audio.speech` | text + voice + style → audio | Gemini TTS `google/gemini-3.1-flash-tts` (Replicate), ~$0.001/s (priced by tokens) |
+| `audio.music` | text → audio | Lyria 2 `google/lyria-2` (Replicate), 30 s tracks, $0.002/s |
 | `llm.write` | text (+ images) → structured text | Claude (Anthropic API) |
 | `llm.vision` | images + rubric → verdict | Claude (Anthropic API) |
 
