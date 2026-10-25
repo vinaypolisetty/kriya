@@ -60,7 +60,10 @@ export const EngineEvent = z.discriminatedUnion("type", [
     output: z.record(z.unknown()),
     /** Versions this one was made from (an edit's source; two for adopt). */
     parents: z.array(z.string()).default([]),
+    /** The prompt exactly as the provider got it, refs filled in. */
     prompt: z.string().optional(),
+    /** The reference images it was given, in order: what each one is, and its content hash or URL. */
+    references: z.array(z.object({ label: z.string(), ref: z.string() }).strict()).optional(),
     /** Exact provider model version (rule 6). */
     model: z.string().optional(),
     seed: z.number().int().optional(),

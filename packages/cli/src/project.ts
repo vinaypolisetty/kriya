@@ -28,6 +28,24 @@ export const ProjectFile = z
       ])
       .default("fake")
       .transform((m) => (m === "fake" ? {} : m === "anthropic" ? { llm: "anthropic" as const } : m)),
+    /**
+     * Replicate settings per kind of image step, for `image: replicate`: model (`owner/name`, or
+     * `owner/name:version`), params sent every time, the model's input field names, price per image.
+     * A step's own `model:` and `params:` win.
+     */
+    replicate: z
+      .record(
+        z.enum(["image.generate", "image.edit"]),
+        z
+          .object({
+            model: z.string().optional(),
+            params: z.record(z.unknown()).optional(),
+            fields: z.object({ prompt: z.string().optional(), images: z.string().optional() }).strict().optional(),
+            price_usd: z.number().nonnegative().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     /** Claude settings for `models: anthropic`; steps can still pin their own `model`. */
     claude: z.object({ model: z.string().optional(), effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional() }).strict().optional(),
     recipes: z.string().default("recipes"),

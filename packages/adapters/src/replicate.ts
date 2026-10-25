@@ -17,10 +17,26 @@ import type { Executors, Graph, Node, StepContext } from "@kriya/engine";
 import type { Jobs } from "./jobs.js";
 
 const API = "https://api.replicate.com/v1";
-export const DEFAULT_IMAGE_MODEL = "google/nano-banana";
+export const DEFAULT_IMAGE_MODEL = "google/nano-banana-2";
 
-/** US$ per image, an estimate: Replicate reports no price. google/nano-banana was $0.039 (late 2025). */
-const PRICE_PER_IMAGE: Record<string, number> = { "google/nano-banana": 0.039 };
+/** US$ per image, estimates (Replicate reports no price): override with `price_usd` in the model settings. */
+const PRICE_PER_IMAGE: Record<string, number> = { "google/nano-banana": 0.039, "google/nano-banana-2": 0.067 };
+
+/**
+ * How one kind of image step runs, set per capability in kriya.yaml and
+ * overridable per step (`model:`, `params:`). Any Replicate image model works:
+ * name the input fields it uses if they aren't `prompt` and `image_input`.
+ */
+export type ImageModelSettings = {
+  /** `owner/name`, or `owner/name:version` to pin a version. */
+  model?: string;
+  /** Inputs sent every time, e.g. `{ resolution: "2K", output_format: "png" }`; a step's own `params` win. */
+  params?: Record<string, unknown>;
+  /** The model's names for the prompt and the reference images. */
+  fields?: { prompt?: string; images?: string };
+  /** US$ per image, for the cost on each version. */
+  price_usd?: number;
+};
 
 /** Files at most this size go in as data URLs; larger ones are uploaded first (Replicate's advice). */
 const INLINE_BYTES = 256 * 1024;
@@ -46,8 +62,8 @@ export type ReplicateOptions = {
   fetch?: typeof fetch;
   /** How often to check on a running prediction. */
   pollMs?: number;
-  /** Used unless a step pins its own `model` (`owner/name`, or `owner/name:version`). */
-  model?: string;
+  /** Settings per capability; a step's own `model:` and `params:` win over them. */
+  models?: Partial<Record<"image.generate" | "image.edit", ImageModelSettings>>;
 };
 
 /** No token to call Replicate with. Thrown before anything is sent, so the step can run again once one is set. */
@@ -118,15 +134,20 @@ export function replicateExecutors(opts: ReplicateOptions): Pick<Executors, "pro
       if (!field) throw new ReplicateError(`'${node.id}' makes images, so its out needs an image field, e.g. out: { image: image }`);
       const key = ctx.idempotencyKey!;
       const ticket = `replicate:${key}`;
-      const model = node.model ?? opts.model ?? DEFAULT_IMAGE_MODEL;
+      const settings = opts.models?.[node.capability as "image.generate" | "image.edit"] ?? {};
+      const model = node.model ?? settings.model ?? DEFAULT_IMAGE_MODEL;
       const [name, pinned] = model.split(":") as [string, string | undefined];
+      const fields = { prompt: settings.fields?.prompt ?? "prompt", images: settings.fields?.images ?? "image_input" };
+      const price = settings.price_usd ?? PRICE_PER_IMAGE[name] ?? 0;
 
       opts.jobs.start(ticket, {
         kind: "outputs",
         run: async () => {
           const ids = [...(opts.ledger.get(key) ?? [])];
+          const ask = buildRequest(node, ctx, field, opts.media);
           if (ids.length < node.options) {
-            const input = await buildInput(node, ctx, field, opts.media, (img) => asInput(t, img));
+            const images = await Promise.all(ask.images.map((x) => asInput(t, x.img)));
+            const input = { ...(settings.params ?? {}), ...(node.params ?? {}), [fields.prompt]: ask.prompt, ...(images.length ? { [fields.images]: images } : {}) };
             for (let i = ids.length; i < node.options; i++) {
               const created = pinned
                 ? await call<Prediction>(t, "/predictions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: pinned, input }) })
@@ -144,7 +165,12 @@ export function replicateExecutors(opts: ReplicateOptions): Pick<Executors, "pro
             if (!res.ok) throw new ReplicateError(`couldn't download the image from Replicate (${res.status}); outputs are kept for an hour`);
             outputs.push({ [field]: opts.media.write(new Uint8Array(await res.arrayBuffer())) });
           }
-          return { outputs, meta: done.map((p) => ({ model: `${name}:${p.version}`, cost_usd: PRICE_PER_IMAGE[name] ?? 0 })) };
+          const references = ask.images.map((x) => ({ label: x.label, ref: "url" in x.img ? x.img.url : `sha256:${createHash("sha256").update(x.img.bytes).digest("hex")}` }));
+          // Replicate hides the version of its official models ("hidden"): then the name is all there is to record.
+          return {
+            outputs,
+            meta: done.map((p) => ({ model: p.version && p.version !== "hidden" ? `${name}:${p.version}` : name, cost_usd: price, prompt: ask.prompt, references })),
+          };
         },
       });
       return { ticket };
@@ -153,17 +179,18 @@ export function replicateExecutors(opts: ReplicateOptions): Pick<Executors, "pro
 }
 
 /**
- * The model's input: the prompt with `{{refs}}` filled in (images named by
- * their place in the list), every image the step received as a reference
- * (an edit's own panel first), and the step's `params`.
+ * What the model is asked: the prompt with `{{refs}}` filled in, and every
+ * image the step received as a reference (an edit's own panel first). A look
+ * facet brings its words into the prompt ("Mitra, a thin 60-year-old bald
+ * man… (image 2)") and its sheet into the references; words alone draw from
+ * the description (a minor character, a place without a sheet).
  */
-async function buildInput(
+function buildRequest(
   node: Extract<Node, { kind: "model" }>,
   ctx: StepContext,
   field: string,
   media: Media,
-  asInput: (img: { bytes: Uint8Array; mime: string } | { url: string }) => Promise<string>,
-): Promise<Record<string, unknown>> {
+): { prompt: string; images: { label: string; img: { bytes: Uint8Array; mime: string } | { url: string } }[] } {
   const images: { label: string; img: { bytes: Uint8Array; mime: string } | { url: string } }[] = [];
   const add = (label: string, v: unknown): string | undefined => {
     if (typeof v !== "string") return undefined;
@@ -177,10 +204,13 @@ async function buildInput(
 
   /** A received value as prompt text; images become "image N" and join the references. */
   const words = (ref: string, v: unknown): string => {
-    if (Array.isArray(v)) return v.map((x, i) => words(`${ref}[${i}]`, x)).join(", ");
+    if (Array.isArray(v)) return v.map((x, i) => words(`${ref}[${i}]`, x)).join("; ");
     if (v && typeof v === "object" && "value" in v && "entity" in v) {
       const f = v as { entity: string; facet: string; value: unknown };
-      return add(`${f.entity}'s ${f.facet}`, f.value) ? `${f.entity} (image ${images.length})` : String(f.value);
+      const look = (f.value && typeof f.value === "object" ? f.value : { image: f.value }) as { image?: unknown; words?: unknown };
+      const n = add(`${f.entity}'s ${f.facet}`, look.image);
+      const desc = typeof look.words === "string" ? look.words : n ? undefined : typeof look.image === "string" ? look.image : undefined;
+      return `${f.entity}${desc ? `, ${desc}` : ""}${n ? ` (${n})` : ""}`;
     }
     return add(ref, v) ?? (typeof v === "string" ? v : JSON.stringify(v));
   };
@@ -190,10 +220,10 @@ async function buildInput(
     return words(ref, ctx.uses[ref]);
   });
   for (const [ref, v] of Object.entries(ctx.uses)) if (!used.has(ref)) words(ref, v);
+  prompt = prompt.trimEnd();
   if (ctx.instruction && !prompt.includes(ctx.instruction)) prompt += `\nChange: ${ctx.instruction}`;
   if (images.length) prompt += `\n\nReference images: ${images.map((x, i) => `${i + 1} = ${x.label}`).join("; ")}.`;
-
-  return { ...(node.params ?? {}), prompt: prompt.trim(), ...(images.length ? { image_input: await Promise.all(images.map((x) => asInput(x.img))) } : {}) };
+  return { prompt: prompt.trim(), images };
 }
 
 function httpProblem(status: number, body: string): string {

@@ -42,7 +42,7 @@ Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya r
 | Day | Date | Focus | Done when |
 |---|---|---|---|
 | 15 | Tue Oct 27 | Capability interface + Anthropic adapter ✅ (D-53, D-54): **tool use first**, then write and vision; log model version and cost; agent context use drives clearing (D-39 step 2). Real run on Oct 23: Part 3 shot list (13 shots, 18 lines, $0.13) and a 4-turn caption agent with file tools ($0.02); follow-ups in D-55 | A real Claude agent runs a real tool through kriya; a real shot list from a real story |
-| 16 | Wed Oct 28 | Replicate images ✅ (D-56): Nano Banana generate/edit; polling resume with a job ledger; `adopt` and `replay_change` on slow jobs (Q-22, still open) | Three real candidates for one shot |
+| 16 | Wed Oct 28 | Replicate images ✅ (D-56, D-57): Nano Banana generate/edit; polling resume with a job ledger; looks with words; prompts recorded. Real run Oct 24: P3-04, three on-model panels for $0.20. `adopt` and `replay_change` on slow jobs (Q-22) still open | Three real candidates for one shot |
 | 17 | Thu Oct 29 | Replicate clips, voice, music; idempotency keys | One clip and one voice line |
 | 18 | Fri Oct 30 | Library: assets, facets, versions; import cast, style, voices, music | @Mitra resolves to look and voice |
 | 19 | Sat Oct 31 | Tools: crop, compress, `assemble_reel` (Part 2 script) | Assembly runs from the engine |

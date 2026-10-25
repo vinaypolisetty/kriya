@@ -277,6 +277,8 @@ async function show(args: string[], io: IO): Promise<number> {
     ].filter(Boolean);
     io.out(`\nVersion ${v.id} · ${about.join(" · ")}${ids.length > 1 ? `  (others: ${ids.filter((x) => x !== v.id).join(", ")})` : ""}\n`);
     io.out(stringify(v.output, { lineWidth: 0 }).trimEnd());
+    if (v.prompt !== undefined) io.out(`\nPrompt:\n${v.prompt.replace(/^/gm, "  ")}`);
+    if (v.references?.length) io.out(`\nReferences:\n${v.references.map((r, i) => `  ${i + 1}. ${r.label} · ${r.ref.startsWith("sha256:") ? r.ref.slice(0, 19) : r.ref}`).join("\n")}`);
     const images = viewable(project, store, v.output);
     if (images.length) io.out(`\nOpen the images:\n${images.map((p) => `  ${p}`).join("\n")}`);
     return 0;
@@ -455,7 +457,7 @@ function scheduler(project: Project, graphId: string, rec: Recorder, store: Stor
   const jobs = new Jobs();
   const tools = fakeTools();
   const s = new Scheduler(graph, rec, executors(project, store, jobs, tools), project.graphs, {
-    assets: projectAssets(project.settings.library, !project.settings.models.image),
+    assets: projectAssets(project.settings.library, !project.settings.models.image, project.root),
     tools,
     blobs: jsonBlobs(store),
   });
@@ -475,7 +477,7 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
   const real = [
     ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, ...(project.settings.claude ?? {}) })] : []),
-    ...(models.image === "replicate" ? [replicateExecutors({ graphs: project.graphs, jobs, media: projectMedia(project, store), ledger: fileLedger(project) })] : []),
+    ...(models.image === "replicate" ? [replicateExecutors({ graphs: project.graphs, jobs, media: projectMedia(project, store), ledger: fileLedger(project), ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
   ];
   const claude = models.llm === "anthropic" ? (real[0] as ReturnType<typeof anthropicExecutors>) : undefined;
   return {
@@ -559,6 +561,8 @@ async function openRun(project: Project, store: Store, id: string, io: IO, opts:
     io.err(`! ${id}: its recipes changed since it started; it carries on with the current ones (run upgrades come later)`);
   }
   const { s, jobs } = scheduler(project, rec.state.graph, rec, store);
+  // A sheet redrawn or a look reworded since the last command: the work that used it goes stale.
+  s.assetsChanged();
   if (rec.state.status === "running") {
     try {
       s.recover();

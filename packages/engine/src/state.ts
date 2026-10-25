@@ -39,6 +39,11 @@ export type Version = {
   replayedFrom?: string;
   /** What the call that made it cost, in US$ (0 for fakes and people). */
   costUsd: number;
+  /** The prompt and reference images the provider got, when it reported them. */
+  prompt?: string;
+  references?: { label: string; ref: string }[];
+  /** Library facet versions it used, `Entity.facet` → version. */
+  assets?: Record<string, string>;
   /** One content hash per input it was made from; see `CandidateProduced.inputs`. */
   inputs?: Record<string, string>;
 };
@@ -163,6 +168,9 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       for (const p of e.parents) if (!n.versions[p]) fail(e, `parent version ${p} doesn't exist`);
       const v: Version = { id, attempt: e.attempt, candidate: e.candidate, parents: e.parents, output: e.output, verdicts: [], branch: n.branch, costUsd: e.cost_usd };
       if (e.model !== undefined) v.model = e.model;
+      if (e.prompt !== undefined) v.prompt = e.prompt;
+      if (e.references !== undefined) v.references = e.references;
+      if (e.assets !== undefined) v.assets = e.assets;
       if (e.instruction !== undefined) v.instruction = e.instruction;
       if (e.made_by !== undefined) v.madeBy = e.made_by;
       if (e.replayed_from !== undefined) v.replayedFrom = e.replayed_from;
