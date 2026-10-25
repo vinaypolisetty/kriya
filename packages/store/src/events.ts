@@ -24,7 +24,7 @@ export interface EventLog {
   runs(): string[];
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -40,6 +40,18 @@ const MIGRATIONS: Record<number, string> = {
       BEGIN SELECT RAISE(ABORT, 'events are append-only: they can''t be changed'); END;
     CREATE TRIGGER events_no_delete BEFORE DELETE ON events
       BEGIN SELECT RAISE(ABORT, 'events are append-only: they can''t be deleted'); END;
+  `,
+  // Day 18: every Library facet version kriya has seen, so an old sheet or voice survives an edit.
+  2: `
+    CREATE TABLE facet_versions (
+      n       INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity  TEXT NOT NULL,
+      facet   TEXT NOT NULL,
+      version TEXT NOT NULL,
+      value   TEXT NOT NULL,
+      at      TEXT NOT NULL,
+      UNIQUE (entity, facet, version)
+    );
   `,
 };
 

@@ -3,6 +3,9 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, exist
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server } from "node:http";
+import { createHash } from "node:crypto";
+import { openStore } from "@kriya/store";
+import { Recorder } from "@kriya/engine";
 import { main } from "../src/commands.js";
 
 /** Runs one `kriya …` command in `cwd`, capturing what it prints. */
@@ -17,6 +20,11 @@ async function project(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "kriya-cli-"));
   expect((await kriya(dir, "init", "p3", "--example", "mohalla-mitra")).code).toBe(0);
   return join(dir, "p3");
+}
+
+/** Writes one Library entity, `library/<file>.yaml`. */
+function entity(cwd: string, file: string, yaml: string): void {
+  writeFileSync(join(cwd, "library", `${file}.yaml`), yaml);
 }
 
 /** Answers whatever is first in the inbox, the simplest way each screen allows. */
@@ -388,7 +396,9 @@ describe("models: { image: replicate } (Day 16)", () => {
     process.env.REPLICATE_BASE_URL = api.url;
     try {
       const cwd = await project();
-      writeFileSync(join(cwd, "kriya.yaml"), readFileSync(join(cwd, "kriya.yaml"), "utf8").replace("models: fake", "models:\n  image: replicate").replace("library: {}", "library:\n  Bheem.look: a very tall bodybuilder\n  Reservoir.look: a concrete water tank"));
+      writeFileSync(join(cwd, "kriya.yaml"), readFileSync(join(cwd, "kriya.yaml"), "utf8").replace("models: fake", "models:\n  image: replicate"));
+      entity(cwd, "bheem", "name: Bheem\nkind: character\nlook: a very tall bodybuilder\n");
+      entity(cwd, "reservoir", "name: Reservoir\nkind: place\nlook: a concrete water tank\n");
       const item = JSON.stringify({ id: "P3-08", action: "Bheem leaps up screaming", characters: ["Bheem"], place: "Reservoir", lines: [], animate: false });
       await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`);
 
@@ -421,10 +431,9 @@ describe("models: { image: replicate } (Day 16)", () => {
       mkdirSync(join(cwd, "sheets"));
       writeFileSync(join(cwd, "sheets", "bheem.png"), png("bheem"));
       writeFileSync(join(cwd, "sheets", "reservoir.png"), png("reservoir"));
-      const yaml = readFileSync(join(cwd, "kriya.yaml"), "utf8")
-        .replace("models: fake", "models:\n  image: replicate")
-        .replace("library: {}", "library:\n  Bheem.look: { image: sheets/bheem.png, words: a very tall bodybuilder with a red-and-white checked gamcha }\n  Reservoir.look: a concrete water tank on stilts above red mud");
-      writeFileSync(join(cwd, "kriya.yaml"), yaml);
+      writeFileSync(join(cwd, "kriya.yaml"), readFileSync(join(cwd, "kriya.yaml"), "utf8").replace("models: fake", "models:\n  image: replicate"));
+      entity(cwd, "bheem", "name: Bheem\nkind: character\nlook: { image: sheets/bheem.png, words: a very tall bodybuilder with a red-and-white checked gamcha }\n");
+      entity(cwd, "reservoir", "name: Reservoir\nkind: place\nlook: a concrete water tank on stilts above red mud\n");
       const item = JSON.stringify({ id: "P3-08", action: "Bheem leaps up screaming", characters: ["Bheem"], place: "Reservoir", lines: [], animate: false });
 
       const r = await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`);
@@ -455,6 +464,101 @@ describe("models: { image: replicate } (Day 16)", () => {
         if (v === undefined) delete process.env[k]; else process.env[k] = v;
       }
     }
+  });
+});
+
+describe("the Library (Day 18)", () => {
+  const MITRA = "name: Mitra\nkind: character\nlook: { image: sheets/mitra.png, words: a thin 60-year-old bald man }\nvoice: { voice: Charon, words: calm and dry }\nspeech: Hinglish\n";
+  const line = JSON.stringify({ id: "L06", speaker: "Mitra", hinglish: "Ek cutting chai, extra cheeni, aur ek confession.", emotion: "dry, satisfied", caption_en: "One confession." });
+  const shot = JSON.stringify({ id: "P3-04", characters: ["Mitra"], place: "Chai stall", action: "Mitra writes in his notebook", lines: [], animate: false });
+  /** What one step of a run received from the Library, `Entity.facet` → version, read from its event log. */
+  const received = (cwd: string, run: string, step: string) => {
+    const store = openStore(join(cwd, ".kriya"));
+    try {
+      return Object.values(Recorder.resume(store.events, run).state.nodes[step]!.versions)[0]!.assets;
+    } finally {
+      store.close();
+    }
+  };
+
+  async function cast() {
+    const cwd = await project();
+    mkdirSync(join(cwd, "sheets"));
+    writeFileSync(join(cwd, "sheets", "mitra.png"), "mitra, round 1");
+    entity(cwd, "mitra", MITRA);
+    entity(cwd, "tiwari", "name: Tiwari\nkind: character\nlook: { image: sheets/tiwari.png }\n");
+    entity(cwd, "stall", "name: Chai stall\nkind: place\nlook: a small wooden chai stall\n");
+    return cwd;
+  }
+
+  it("@Mitra resolves to his look for a panel and his voice and speech for a line", async () => {
+    const cwd = await cast();
+    expect((await kriya(cwd, "run", "voice_recipe", "--input", `item=${line}`, "--id", "line")).code).toBe(0);
+    expect((await kriya(cwd, "run", "shot_recipe", "--input", `item=${shot}`, "--id", "shot")).code).toBe(0);
+    const voice = received(cwd, "line", "speak");
+    expect(Object.keys(voice!).sort()).toEqual(["Mitra.speech", "Mitra.voice"]);
+    expect(Object.keys(received(cwd, "shot", "draw")!).sort()).toEqual(["Chai stall.look", "Mitra.look"]);
+
+    // Approve both, then give Mitra a new voice: the line he spoke goes stale; the panel doesn't.
+    expect((await kriya(cwd, "decide", "line:listen", "approve")).code).toBe(0);
+    expect((await kriya(cwd, "decide", "shot:pick", "lock", "--pick", "1.1")).code).toBe(0);
+    entity(cwd, "mitra", MITRA.replace("Charon", "Puck"));
+    expect((await kriya(cwd, "status", "line")).out).toContain("Mitra's voice changed");
+    expect((await kriya(cwd, "status", "shot")).out).not.toContain("stale");
+    expect((await kriya(cwd, "status")).out).toContain("voice_recipe     completed · 1 stale"); // finished runs say so too
+    expect(received(cwd, "line", "speak")!["Mitra.voice"]).toBe(voice!["Mitra.voice"]); // the old take keeps the version it used
+  });
+
+  it("kriya library lists everyone by kind, with versions, what's missing, and files that aren't there", async () => {
+    const cwd = await cast();
+    const r = await kriya(cwd, "library");
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toBe(
+      ["character", "  Mitra       look v1 · voice v1 · speech v1 · needs: rules", "  Tiwari      look ✗ (sheets/tiwari.png isn't there) · needs: voice, speech, rules", "place", "  Chai stall  look v1"].join("\n"),
+    );
+  });
+
+  it("every version is kept: redrawing a sheet in place makes v2 and the old file stays in .kriya", async () => {
+    const cwd = await cast();
+    await kriya(cwd, "library");
+    writeFileSync(join(cwd, "sheets", "mitra.png"), "mitra, round 2");
+    entity(cwd, "mitra", MITRA.replace("Charon", "Puck"));
+    const r = (await kriya(cwd, "library", "Mitra")).out;
+    expect(r).toMatch(/^Mitra · character · library\/mitra\.yaml\n\n {2}look v2\n {4}v2 · \d{4}-\d\d-\d\d · current · image: sheets\/mitra\.png · words: a thin 60-year-old bald man\n {4}v1 · /);
+    expect(r).toContain("  voice v2\n    v2 · ");
+    expect(r).toMatch(/v1 · [\d-]+ · voice: Charon · words: calm and dry/);
+    const store = openStore(join(cwd, ".kriya"));
+    try {
+      const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+      expect(store.blobs.get(sha("mitra, round 1"))?.toString()).toBe("mitra, round 1");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("mistakes in the Library are plain, with the nearest name", async () => {
+    const cwd = await project();
+    entity(cwd, "a", "name: Mitra\nkind: charcter\n");
+    entity(cwd, "b", "name: Bheem\nkind: character\nlok: a very tall bodybuilder\n");
+    entity(cwd, "c", "name: Mitra\n");
+    entity(cwd, "d", "kind: place\n");
+    const r = await kriya(cwd, "run", "voice_recipe", "--input", `item=${line}`);
+    expect(r.code).toBe(1);
+    expect(r.err).toBe(
+      [
+        "✗ your Library has problems:",
+        "  library/a.yaml: there's no kind 'charcter'. Did you mean 'character'? Kinds: character, place, music (kinds: in kriya.yaml)",
+        "  library/b.yaml: a character has no 'lok'. Did you mean 'look'? A character has: look, voice, speech, rules",
+        "  library/c.yaml: 'Mitra' is already in library/a.yaml; each entity has one file",
+        "  library/d.yaml: needs a name, e.g. name: Mitra (the name recipes use, like item.speaker)",
+      ].join("\n"),
+    );
+  });
+
+  it("a project with the old library: in kriya.yaml is told where it went", async () => {
+    const cwd = await project();
+    writeFileSync(join(cwd, "kriya.yaml"), `${readFileSync(join(cwd, "kriya.yaml"), "utf8")}library:\n  Mitra.look: x\n`);
+    expect((await kriya(cwd, "status")).err).toContain("✗ kriya.yaml: the Library moved to the library/ folder, one file per entity");
   });
 });
 

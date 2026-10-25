@@ -1,8 +1,9 @@
 /**
  * A kriya project on disk:
  *
- *   kriya.yaml   project settings: which models, the inherited context, the Library
+ *   kriya.yaml   project settings: which models, the inherited context, the Library's kinds
  *   recipes/     the recipe files (the source of truth, D-33)
+ *   library/     the Library: one file per character, place, track… (Day 18)
  *   .kriya/      run data: the event log and media (gitignored)
  */
 import { createHash } from "node:crypto";
@@ -12,6 +13,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { REPLICATE_CAPABILITIES } from "@kriya/adapters";
 import { loadDir, type Graph, type Problem } from "@kriya/engine";
+import { loadLibrary, type Library } from "./library.js";
 
 export const ProjectFile = z
   .object({
@@ -59,8 +61,8 @@ export const ProjectFile = z
     recipes: z.string().default("recipes"),
     /** Locked context from higher levels, by level, e.g. `series: { style: … }` (D-47). */
     context: z.record(z.record(z.unknown())).default({}),
-    /** Asset facets, `Entity.facet: value`, until the Library (Day 18). */
-    library: z.record(z.unknown()).default({}),
+    /** The Library's kinds and the facets each has, e.g. `character: [look, voice, speech]`; entities live in `library/`. */
+    kinds: z.record(z.string().regex(/^[a-z][a-z0-9_]*$/, "use lower_snake_case"), z.array(z.string().regex(/^[a-z][a-z0-9_]*$/, "use lower_snake_case"))).default({}),
   })
   .strict();
 export type ProjectFile = z.infer<typeof ProjectFile>;
@@ -70,6 +72,7 @@ export type Project = {
   settings: ProjectFile;
   graphs: Graph[];
   problems: Problem[];
+  library: Library;
 };
 
 /**
@@ -106,6 +109,9 @@ export function loadProject(from: string): Project {
   const root = findRoot(from);
   if (!root) throw new UserError("there's no kriya.yaml here or in any folder above. Start a project with: kriya init <folder>");
   const raw = parse(readFileSync(join(root, "kriya.yaml"), "utf8")) ?? {};
+  if (raw && typeof raw === "object" && "library" in raw) {
+    throw new UserError("kriya.yaml: the Library moved to the library/ folder, one file per entity (e.g. library/mitra.yaml with name, kind and facets). Move each Entity.facet there and delete library: from kriya.yaml; see docs/cli.md");
+  }
   const parsed = ProjectFile.safeParse(raw);
   if (!parsed.success) {
     const i = parsed.error.issues[0]!;
@@ -114,7 +120,7 @@ export function loadProject(from: string): Project {
   const dir = join(root, parsed.data.recipes);
   if (!existsSync(dir)) throw new UserError(`the recipes folder '${parsed.data.recipes}' doesn't exist`);
   const { graphs, problems } = loadDir(dir);
-  return { root, settings: parsed.data, graphs, problems };
+  return { root, settings: parsed.data, graphs, problems, library: loadLibrary(root, parsed.data.kinds) };
 }
 
 /** An error meant for the person at the terminal: printed as-is, no stack trace. */

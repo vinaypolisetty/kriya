@@ -36,6 +36,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 | `kriya lock <run> <step> <version> [--why text]` | Locks a version yourself and lists what went stale |
 | `kriya rebuild <run>` | Redoes stale work from its earliest step; unchanged items are kept |
 | `kriya retry <run> <step>` | Tries a failed step again as a new attempt (a refusal, a bad key, a rate limit). Failed maps around it run again and keep their finished items; naming a failed map retries its failed items. `kriya status <run>` prints the command for each failure |
+| `kriya library [entity]` | The Library by kind: each entity's facets with their version, what its kind still needs, files that aren't there; or one entity's facets with every version |
 | `kriya adopt <run> <step> <base> <from> --note text` | Makes a new version from `base`, taking what the note says from `from` (two parents, D-30). It waits for you to lock it |
 
 ## How it behaves
@@ -49,23 +50,26 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
     video: replicate   # video.from_image → Wan 2.7 image-to-video
     audio: replicate   # audio.speech → Gemini 3.1 Flash TTS; audio.music → Lyria 2
   ```
-  (`models: anthropic` is short for `{ llm: anthropic }`.) Keys go in `.env` at the project root. Images need their looks in the Library (paths inside the project), with words that describe them:
+  (`models: anthropic` is short for `{ llm: anthropic }`.) Keys go in `.env` at the project root. Images need their looks in the Library, and voices their voice (see **The Library** below). Per capability:
   ```yaml
-  library:
-    Mitra.look:
-      image: sheets/mitra-sheet.png
-      words: a thin 60-year-old bald man with white side hair, round glasses, white mustache, brown vest over white kurta
-    Driver.look:
-      words: a heavyset tanker driver with curly hair, a muddy grey shirt and a brown vest   # no sheet: drawn from words
-    Mitra.voice:
-      voice: Charon                # a Gemini TTS voice name; or just `Mitra.voice: Charon`
-      words: warm and slow, a little hoarse
   replicate:                       # optional, per capability; a step's own model: and params: win
     image.generate: { model: google/nano-banana-2, params: { resolution: 1K, output_format: png } }
     video.from_image: { params: { resolution: 720p } }   # $0.10 a second instead of $0.15
     audio.speech: { params: { language_code: hi-IN } }
   ```
-  A clip starts from the one image its step uses (the locked panel). A voice step's prompt is the words to say; the speaker's `@voice` picks the voice, and everything else it uses (the line's emotion, `@speech`, the voice's words) says how, followed by any style the step gives in `params`. Clips and audio are measured from their bytes, so `out: { seconds: number }` gets the real length. Any Replicate model works: name its input `fields:` (`prompt`, `images`, `voice`, `style`) if they differ, and its `price_usd` or `price_per_second_usd`. A look missing from the Library (or a sheet that isn't there) blocks the shot instead of drawing a stranger. Redrawing a sheet in place makes the shots that used it stale. `kriya show` prints the prompt and references each version got, copies images, clips and audio to `.kriya/view/` and prints the paths to open. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, the next command asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key and run any command to carry on), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
-- **`kriya.yaml`** holds the project's name, the inherited context (e.g. `series: { style, rules, cast }`) and, until the Library (Day 18), facet values as `Entity.facet: value`.
+  A clip starts from the one image its step uses (the locked panel). A voice step's prompt is the words to say; the speaker's `@voice` picks the voice, and everything else it uses (the line's emotion, `@speech`, the voice's words) says how, followed by any style the step gives in `params`. Clips and audio are measured from their bytes, so `out: { seconds: number }` gets the real length. Any Replicate model works: name its input `fields:` (`prompt`, `images`, `voice`, `style`) if they differ, and its `price_usd` or `price_per_second_usd`. `kriya show` prints the prompt and references each version got, copies images, clips and audio to `.kriya/view/` and prints the paths to open. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, the next command asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key and run any command to carry on), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
+- **`kriya.yaml`** holds the project's name, the models, the inherited context (e.g. `series: { style, rules, cast }`) and the Library's `kinds:`.
+- **The Library** is the `library/` folder: one YAML file per character, place or track, with its `name` (what recipes use, like `item.speaker`), its `kind`, and its facets (D-61):
+  ```yaml
+  # library/mitra.yaml
+  name: Mitra
+  kind: character
+  look:
+    image: sheets/mitra-sheet.png    # a file in the project
+    words: a thin 60-year-old bald man with white side hair, round glasses, brown vest over white kurta
+  voice: { voice: Charon, words: calm and dry, unhurried }   # or just `voice: Charon`
+  speech: Hinglish; calls everyone beta
+  ```
+  A facet is words, a file (image, audio or video), or an object holding either; words alone draw a minor character or a place without a sheet. `kinds:` in kriya.yaml (`character: [look, voice, speech, rules]`, `place: [look]`, `music: [track]` in a new project) catches typos (`lok` → "Did you mean 'look'?") and makes `kriya library` list what each entity still needs. Recipes ask for facets by name: `item.speaker@voice`, `item.characters@look`. A facet missing from the Library (or naming a file that isn't there) blocks the step instead of drawing a stranger; in fake mode it's made up. Any change to a facet (a sheet redrawn in place, a new voice) is a new version: the work that used it goes stale (`kriya status` says "Mitra's voice changed"), and the old version, file included, is kept in `.kriya` (`kriya library Mitra` lists them).
 - **A run is pinned to its recipes**: the recipe it runs and every recipe its maps run. Editing one of those shows `recipes changed` on the run; adding or editing other recipes doesn't.
 - **Errors are plain words**, including recipe problems ("'capabilty' isn't a setting for a model step. Did you mean 'capability'?").
