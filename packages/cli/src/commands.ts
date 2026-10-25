@@ -30,6 +30,7 @@ const HELP = `kriya: run recipes with people in the loop
                                                   answer an inbox item (its number, or run:step)
   kriya lock <run> <step> <version> [--why text]  lock a version yourself
   kriya rebuild <run>                             redo the run's stale work
+  kriya retry <run> <step>                        try a failed step again (a new attempt)
   kriya adopt <run> <step> <base> <from> --note text
                                                   merge two versions: base, taking what the note says from <from>
 
@@ -47,6 +48,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "decide": return await decide(rest, io);
       case "lock": return await lock(rest, io);
       case "rebuild": return await rebuild(rest, io);
+      case "retry": return await retry(rest, io);
       case "adopt": return await adopt(rest, io);
       case undefined:
       case "help":
@@ -193,6 +195,8 @@ async function status(args: string[], io: IO): Promise<number> {
     const { rec, s } = await openRun(project, store, id, io);
     io.out(`${id} · ${rec.state.graph} · ${summary(rec.state, s.inbox().length)}`);
     for (const key of s.steps()) io.out(`  ${line(key, rec.state.nodes[key]!)}`);
+    const failed = s.steps().filter((k) => rec.state.nodes[k]!.status === "failed" && !s.steps().some((o) => o.startsWith(`${k}[`) && rec.state.nodes[o]!.status === "failed"));
+    if (failed.length) io.out(`  Try again: ${failed.map((k) => `kriya retry ${id} '${k}'`).join("  ·  ")}`);
     return 0;
   } finally {
     store.close();
@@ -416,6 +420,22 @@ async function rebuild(args: string[], io: IO): Promise<number> {
     const started = s.rebuild();
     if (started.length === 0) io.out("Nothing is stale; there's nothing to rebuild");
     else io.out(`✓ Rebuilding from ${started.join(", ")}`);
+    await drive(s, jobs, io);
+    report(io, rec.state, s.inbox());
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+async function retry(args: string[], io: IO): Promise<number> {
+  const [id, step] = args;
+  if (!id || !step) throw new UserError("say which run and step: kriya retry <run> <step> (kriya status <run> lists the failed ones)");
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const { rec, s, jobs } = await openRun(project, store, id, io);
+    io.out(`✓ Retrying ${s.retry(step).join(", ")}`);
     await drive(s, jobs, io);
     report(io, rec.state, s.inbox());
     return 0;
