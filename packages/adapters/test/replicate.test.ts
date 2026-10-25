@@ -444,12 +444,12 @@ describe("audio.speech: one voice line (D-58)", () => {
     expect(rec.state.nodes.listen!.status).toBe("awaiting_human");
   });
 
-  it("a line over 8 seconds, measured from the audio, is redone faster: the step's style comes first", async () => {
+  it("a line over 8 seconds, measured from the audio, is redone faster: the step's style comes last", async () => {
     const replicate = fakeReplicate({ seconds: (n) => (n === 1 ? 9.4 : 6.2) });
     const { s, rec, jobs } = start({ graph: voice, inputs: LINE, assets: VOICES, replicate });
     await settle(s, jobs, describeError);
     expect(rec.state.nodes.speak!.versions["1.1"]!.output.seconds).toBe(9.4);
-    expect(speech(replicate)[1]).toMatchObject({ prompt: "Speak about 20% faster than usual.\nemotion: worried\nMitra's voice: warm and slow, a little hoarse" });
+    expect(speech(replicate)[1]).toMatchObject({ prompt: "emotion: worried\nMitra's voice: warm and slow, a little hoarse\nSpeak about 20% faster than usual." }); // leading with it got real lines refused (D-60)
     expect(rec.state.nodes.speak!.versions["2.1"]).toMatchObject({ madeBy: "too_long", output: { seconds: 6.2 } });
     expect(rec.state.nodes.listen!.status).toBe("awaiting_human");
   });

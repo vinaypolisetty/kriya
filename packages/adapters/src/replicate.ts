@@ -321,8 +321,9 @@ async function mediaRequest(
  * Speech: the prompt is the words to say. The voice comes from the speaker's
  * `@voice` facet: a voice name (`Charon`), or `{ voice: Charon, words: "warm,
  * slow" }`. Everything else the step received (the line's emotion, the
- * speaker's `@speech`, the voice's words, a redo note) becomes how to say it,
- * after any style the settings or the step give in `params`.
+ * speaker's `@speech`, the voice's words) becomes how to say it, then any
+ * style the settings or the step give in `params` (Gemini refuses some styles
+ * that lead with it, D-60), then a redo note.
  */
 function speechRequest(
   node: Extract<Node, { kind: "model" }>,
@@ -345,7 +346,7 @@ function speechRequest(
   const voiceField = fields.voice ?? "voice";
   let voice: string | undefined;
   let voiceOf: string | undefined;
-  const how: string[] = [own[styleField], base[styleField]].filter((x): x is string => typeof x === "string").slice(0, 1);
+  const how: string[] = [];
   for (const [ref, v] of Object.entries(ctx.uses)) {
     if (used.has(ref) || v === undefined || v === null) continue;
     for (const one of Array.isArray(v) ? v : [v]) {
@@ -357,6 +358,8 @@ function speechRequest(
       else how.push(`${ref.split(".").pop()}: ${text(one)}`);
     }
   }
+  const given = [own[styleField], base[styleField]].find((x): x is string => typeof x === "string");
+  if (given) how.push(given);
   if (ctx.instruction) how.push(`Change: ${ctx.instruction}`);
 
   // The speaker's voice beats the settings' default voice; a step's own params beat both.
