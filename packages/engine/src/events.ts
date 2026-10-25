@@ -96,7 +96,7 @@ export const EngineEvent = z.discriminatedUnion("type", [
     fix: z.enum(["retry", "regenerate_with_patch", "edit", "transform", "swap_provider", "decompose", "escalate", "waive"]),
     issue: z.string().optional(),
   }),
-  on("Suspended", { node: NodeKey, ticket: z.string().min(1), kind: z.enum(["model_job", "tool_job", "human", "timer", "manual_upload"]) }),
+  on("Suspended", { node: NodeKey, ticket: z.string().min(1), kind: z.enum(["model_job", "tool_job", "check_job", "human", "timer", "manual_upload"]) }),
   on("Resumed", { node: NodeKey, ticket: z.string().min(1) }),
   on("HumanDecision", {
     node: NodeKey,

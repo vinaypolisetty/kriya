@@ -33,6 +33,19 @@ const Base = {
 };
 
 const Trust = z.enum(["ask_me", "when_confident", "always"]);
+
+/** A limit on a number the step makes, e.g. `seconds: { max: 8 }`. */
+const Limit = z.object({ min: z.number().optional(), max: z.number().optional() }).strict();
+
+/**
+ * Checks on every candidate a step makes (Day 20): `rubric` items an LLM judge
+ * looks for in each image, and limits on the step's number outputs. Each check
+ * records a verdict on the version; `trust: when_confident` locks the first
+ * candidate that passes, and edges can read `verdict.pass`.
+ */
+export const Check = z
+  .object({ rubric: z.array(z.string().min(1)).min(1).optional() })
+  .catchall(Limit);
 const ContextMode = z.enum(["full", "local", "isolated"]);
 
 export const ModelNode = z
@@ -48,6 +61,7 @@ export const ModelNode = z
     params: z.record(z.unknown()).optional(),
     uses: z.array(Ref).default([]),
     options: z.number().int().min(1).max(8).default(1),
+    check: Check.optional(),
     /** Unset: `full`, or `local` for a step that `refines` another (D-13, D-55). */
     context: ContextMode.optional(),
     trust: Trust.default("ask_me"),
@@ -84,6 +98,7 @@ export const ToolNode = z
     /** What it works on, like a model step's: an arg naming one of these gets its value (`reel: assemble.reel`). */
     uses: z.array(Ref).default([]),
     args: z.record(z.string(), z.unknown()).default({}),
+    check: Check.optional(),
     out: Fields.default({}),
   })
   .strict();

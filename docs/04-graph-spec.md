@@ -158,6 +158,24 @@ Submission recorded in context as: `pick.action`, `pick.selected`, `pick.note`, 
 
 The creator's note on a locking button is kept as the lock's `why` (D-29).
 
+### `check`: judge every candidate (Day 20, D-63)
+
+Model and tool steps can check what they make, before anyone sees it:
+
+```yaml
+- id: draw
+  kind: model
+  capability: image.generate
+  options: 3
+  check:
+    rubric:                        # an LLM judge looks at each image; it passes only if every rule holds
+      - Every listed character appears, and each looks like their description.
+      - Only the listed characters appear; no extra people.
+    # limits on number outputs are code checks, e.g. on a voice step: seconds: { max: 8 }
+```
+
+Each check records a verdict on each candidate: pass, or issues, each with a `fix` (`crop`, `edit` or `retry`). Screens show them. `trust: when_confident` locks the first candidate that passed (it asks when none did). An edge can route on `verdict.pass` (and `verdict.issues`) like `result`. A rubric needs an image output; a limit needs a number output.
+
 ### `refines`: make versions of another step
 
 A `model`, `agent` or `tool` step can **refine** another step in the same recipe: its output becomes that step's next version instead of its own ([D-44](17-decisions.md)).
@@ -239,7 +257,7 @@ path    := name ('.' name)*
 ```
 
 - Paths read recorded data only: node outputs, screen submissions (`action`, `pick.note`), the current item, inherited context.
-- `<step>.<field>` always means that step's **locked** output. `result.<field>` means the candidate the edge's own source step **just made**, before anyone locks it: route on a fresh draft (`when: "result.seconds > 8"`) without waiting for review ([D-43](17-decisions.md)). `result` needs a single candidate: not on screens, maps or joins, or a step with `options` > 1.
+- `<step>.<field>` always means that step's **locked** output. `result.<field>` means the candidate the edge's own source step **just made**, before anyone locks it: route on a fresh draft (`when: "result.seconds > 8"`) without waiting for review ([D-43](17-decisions.md)). `result` needs a single candidate: not on screens, maps or joins, or a step with `options` > 1. `verdict` is what that candidate's checks said (`when: "not verdict.pass"`); its step needs a `check:`.
 - Missing paths evaluate to `undefined` (never throw).
 - No function calls, assignment, clock or randomness. Parse errors are reported with the reason.
 

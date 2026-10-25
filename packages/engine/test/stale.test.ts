@@ -37,6 +37,8 @@ function finishedPart() {
         default: return [{ done: true }];
       }
     },
+    // The example shot recipe has a rubric; a judge that passes everything (checks.test.ts covers judging).
+    check: (_n, _c, cands) => cands.map((c) => ({ version: c.version, pass: true, issues: [] })),
     decide(node, ctx): Decision {
       if (node.id === "pick") return { action: "lock", selection: [ctx.shows!.at(-1)!.version] };
       return { action: "approve" };

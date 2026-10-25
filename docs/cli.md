@@ -36,6 +36,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 | `kriya lock <run> <step> <version> [--why text]` | Locks a version yourself and lists what went stale |
 | `kriya rebuild <run>` | Redoes stale work from its earliest step; unchanged items are kept |
 | `kriya retry <run> <step>` | Tries a failed step again as a new attempt (a refusal, a bad key, a rate limit). Failed maps around it run again and keep their finished items; naming a failed map retries its failed items. `kriya status <run>` prints the command for each failure |
+| `kriya check <run> <step>` | Judges a step's latest candidates against its rubric again (e.g. after you changed the rubric) and records the verdicts; locks don't move |
 | `kriya library [entity]` | The Library by kind: each entity's facets with their version, what its kind still needs, files that aren't there; or one entity's facets with every version |
 | `kriya adopt <run> <step> <base> <from> --note text` | Makes a new version from `base`, taking what the note says from `from` (two parents, D-30). It waits for you to lock it |
 
@@ -58,6 +59,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
     audio.speech: { params: { language_code: hi-IN } }
   ```
   A clip starts from the one image its step uses (the locked panel). A voice step's prompt is the words to say; the speaker's `@voice` picks the voice, and everything else it uses (the line's emotion, `@speech`, the voice's words) says how, followed by any style the step gives in `params`. Clips and audio are measured from their bytes, so `out: { seconds: number }` gets the real length. Any Replicate model works: name its input `fields:` (`prompt`, `images`, `voice`, `style`) if they differ, and its `price_usd` or `price_per_second_usd`. `kriya show` prints the prompt and references each version got, copies images, clips and audio to `.kriya/view/` and prints the paths to open. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, the next command asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key and run any command to carry on), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
+- **Checks**: a step's `check:` (a rubric for a Claude judge, limits on numbers) runs on every candidate; `kriya inbox` shows `✓ checks passed`, or `✗` with each issue, where it is and the fix. With fake models the judge passes everything; code limits always run for real.
 - **Tools** (`crop`, `compress`, `assemble_reel`) are fake by default. To run them here with ffmpeg:
   ```yaml
   tools:

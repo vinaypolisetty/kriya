@@ -3,6 +3,8 @@
  *
  * - `llm.write` / `llm.vision` model steps: one request per candidate, the
  *   answer constrained to the step's declared outputs (structured outputs).
+ * - Checks (Day 20): a judge looks at each candidate's images against the
+ *   step's `check.rubric` and answers pass or the issues, each with a fix.
  * - Agent steps: one request per turn. The engine owns the loop (D-26); this
  *   rebuilds the conversation from recorded turns, append-only, so Claude's
  *   thinking blocks stay valid and the prompt cache keeps hitting.
@@ -12,8 +14,9 @@
  * come back with each answer and are recorded (rule 6).
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { BUILT_IN_TOOL_SPECS, Pending, type AgentHistory, type AgentTurnResult, type Executors, type Graph, type Node, type StepContext, type Tools } from "@kriya/engine";
+import { BUILT_IN_TOOL_SPECS, Pending, type AgentHistory, type AgentTurnResult, type Executors, type Graph, type Judged, type Node, type StepContext, type Tools } from "@kriya/engine";
 import type { Jobs } from "./jobs.js";
+import type { Media } from "./replicate.js";
 import { fieldsSchema } from "./schema.js";
 
 type Beta = Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
@@ -55,6 +58,8 @@ export type AnthropicOptions = {
   jobs: Jobs;
   /** Where the step's own tools are described (agents). */
   tools?: Tools;
+  /** Where the judge reads the images it checks (`blob:…`, project files). */
+  media?: Media;
   client?: Anthropic;
   /** Used unless a step pins its own `model`. */
   model?: string;
@@ -68,7 +73,34 @@ const SYSTEM_STEP =
 const SYSTEM_AGENT =
   "You are an agent running one step of a kriya recipe: a production pipeline where a person reviews the results. Work toward the goal with your tools. Ask the person with ask_human only when you need a decision or a fact only they have. When you're done, call finish with your result; that ends the step.";
 
-export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "produce" | "turn" | "managesContext"> & { handles(node: Node): boolean } {
+const SYSTEM_JUDGE =
+  "You check one candidate made by a step in a production pipeline, before a person sees it. Look at the image closely. It passes only if every rule holds. For each rule it breaks, give one issue. Be strict about the rules and ignore everything else.";
+
+/** What the judge answers, as a strict JSON Schema: pass, and the issues with a fix for each. */
+const VERDICT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["pass", "issues"],
+  properties: {
+    pass: { type: "boolean" },
+    issues: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["type", "what", "where", "fix"],
+        properties: {
+          type: { type: "string", description: "a short snake_case name, e.g. extra_character, missing_detail, readable_text, wrong_look" },
+          what: { type: "string", description: "the problem in plain words" },
+          where: { type: "string", description: "where in the image (e.g. right edge), or empty if all over" },
+          fix: { type: "string", enum: ["crop", "edit", "retry"], description: "crop if cutting an edge removes it, edit if one detail is wrong, retry if it's wrong overall" },
+        },
+      },
+    },
+  },
+};
+
+export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "produce" | "turn" | "check" | "managesContext"> & { handles(node: Node): boolean } {
   let made: Anthropic | undefined;
   /** The client, made on the first call: a key is needed only when Claude is actually asked something. */
   const client = (): Anthropic => {
@@ -119,6 +151,44 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       return { ticket };
     },
 
+    check(node, ctx, candidates) {
+      if (node.kind === "agent" || !node.check?.rubric) throw new Error(`'${node.id}' has no rubric`);
+      const ticket = `check:${ctx.idempotencyKey}`;
+      const c = client();
+      const media = opts.media;
+      if (!media) throw new Error("the judge has nowhere to read images from");
+      const rubric = node.check.rubric;
+      const fields = Object.entries(node.out).filter(([, t]) => t === "image").map(([f]) => f);
+      const asked = "prompt" in node && node.prompt ? judgeText(node.prompt, ctx) : (node.name ?? node.id);
+      opts.jobs.start(ticket, {
+        kind: "verdicts",
+        run: () =>
+          Promise.all(
+            candidates.map(async (cand): Promise<Judged> => {
+              const images = fields.flatMap((f): Anthropic.Beta.Messages.BetaImageBlockParam[] => {
+                const v = cand.output[f];
+                const img = typeof v === "string" ? media.read(v) : undefined;
+                if (!img) return [];
+                if ("url" in img) return [{ type: "image", source: { type: "url", url: img.url } }];
+                if (!/^image\/(png|jpeg|webp|gif)$/.test(img.mime)) return [];
+                return [{ type: "image", source: { type: "base64", media_type: img.mime as "image/png", data: Buffer.from(img.bytes).toString("base64") } }];
+              });
+              if (images.length === 0) throw new Error(`version ${cand.version} has no image the judge can read`);
+              const m = await request(c, {
+                model: opts.model ?? DEFAULT_MODEL,
+                system: SYSTEM_JUDGE,
+                output_config: { effort, format: { type: "json_schema", schema: VERDICT_SCHEMA } },
+                messages: [{ role: "user", content: [...images, { type: "text" as const, text: `What the step was asked:\n${asked}\n\nRules:\n${rubric.map((r, i) => `${i + 1}. ${r}`).join("\n")}` }] }],
+              });
+              const v = parseJson(m) as { pass: boolean; issues: { type: string; what: string; where: string; fix: string }[] };
+              const issues = v.issues.map(({ where, ...i }) => (where ? { ...i, where } : i));
+              return { version: cand.version, pass: v.pass && issues.length === 0, issues, model: m.model, cost_usd: cost(m) };
+            }),
+          ),
+      });
+      return { ticket };
+    },
+
     turn(node, ctx, history) {
       const ticket = `claude:${ctx.idempotencyKey}`;
       const c = client();
@@ -164,6 +234,20 @@ function fill(text: string, ctx: StepContext): { text: string; used: Set<string>
     return show(ctx.uses[ref]);
   });
   return { text: filled, used };
+}
+
+/** A step's prompt as the judge reads it: Library facets as their words ("Bheem: a very tall bodybuilder…"). */
+function judgeText(prompt: string, ctx: StepContext): string {
+  const words = (v: unknown): string => {
+    if (Array.isArray(v)) return v.map(words).join("; ");
+    if (v && typeof v === "object" && "entity" in v && "value" in v) {
+      const f = v as { entity: string; value: unknown };
+      const w = f.value && typeof f.value === "object" ? (f.value as { words?: unknown }).words : undefined;
+      return typeof w === "string" ? `${f.entity} (${w})` : f.entity;
+    }
+    return show(v);
+  };
+  return prompt.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, ref: string) => words(ctx.uses[ref])).trim();
 }
 
 /** The prompt with its `{{refs}}` filled in, then any other inputs; images first for vision. */

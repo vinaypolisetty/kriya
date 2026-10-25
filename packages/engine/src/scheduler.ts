@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
 import type { Recorder } from "./recorder.js";
-import type { NodeStatus, RunState } from "./state.js";
+import type { NodeStatus, RunState, Verdict } from "./state.js";
 import { promptRefs, startNodes } from "./validate.js";
 
 export type StepContext = {
@@ -43,8 +43,8 @@ export type StepContext = {
   region?: unknown;
   /** For an adopt: the other version to take from ("use its ending"); `parent` is the one it builds on. */
   borrow?: { version: string; output: Record<string, unknown> };
-  /** For a screen: the candidates on show (latest attempt of the step it shows), with the shown field. */
-  shows?: { version: string; value: unknown }[];
+  /** For a screen: the candidates on show (latest attempt of the step it shows), with the shown field and what its checks said. */
+  shows?: Shown[];
   /** For a model, tool or agent call: the same for every try of this attempt, across crashes (`run/step#attempt`). */
   idempotencyKey?: string;
   /** Asset facet versions in what it received, `Entity.facet` → version. */
@@ -56,11 +56,17 @@ export type StepContext = {
 export type Decision = { action: string; selection?: string[]; note?: string; region?: unknown };
 
 /** One thing waiting on a person: a screen, or a generated approval. */
+/** One candidate on a screen: its version, the shown field, and its checks (all passed or not, and the issues). */
+export type Shown = { version: string; value: unknown; verdict?: { pass: boolean; issues: Verdict["issues"] } };
+
+/** What a judge said about one candidate (`check.rubric`). */
+export type Judged = { version: string; pass: boolean; issues: Verdict["issues"]; model?: string; cost_usd?: number };
+
 export type InboxItem = {
   key: string;
   title: string;
   review: ScreenNode["review"];
-  shows: { version: string; value: unknown }[];
+  shows: Shown[];
   buttons: { id: string; label?: string; needs: ("selection" | "note" | "region")[]; locks: boolean }[];
 };
 
@@ -72,6 +78,12 @@ export interface Executors {
    * when submitting to a provider, so asking again after a crash never pays twice.
    */
   produce(node: Node, ctx: StepContext): Record<string, unknown>[] | { ticket: string };
+  /**
+   * Judges a step's candidates against its `check.rubric` (Day 20): one verdict
+   * per candidate, or `{ ticket: "check:" + ctx.idempotencyKey }` for a judge
+   * that answers later (see `deliverVerdicts`). Without it, a rubric fails the step.
+   */
+  check?(node: Producer, ctx: StepContext, candidates: { version: string; output: Record<string, unknown> }[]): Judged[] | { ticket: string };
   /** screen steps: what the human chose, or undefined if there's no answer yet (the step waits; see `answer`). */
   decide(node: ScreenNode, ctx: StepContext): Decision | undefined;
   /**
@@ -656,17 +668,82 @@ export class Scheduler {
       }),
     );
 
-    // Who locks it (D-42): a step a screen shows waits for that screen, even a tool;
-    // otherwise code output and `trust: always` lock themselves; anything else asks.
-    const targetId = node.refines ?? node.id;
-    if (!this.reviewer(targetId, ctx)) {
+    if (node.kind !== "agent" && node.check) {
+      this.codeChecks(target, attempt, outputs, node.check);
+      if (node.check.rubric) return this.judge(key, node, ctx);
+    }
+    this.decideLock(key, node, ctx);
+  }
+
+  /**
+   * Who locks it (D-42): a step a screen shows waits for that screen, even a tool;
+   * otherwise code output and `trust: always` lock themselves, `when_confident`
+   * locks the first candidate that passed its checks, and anything else asks.
+   */
+  private decideLock(key: string, node: Producer, ctx: Context): void {
+    const target = node.refines ? ctx.prefix + node.refines : key;
+    const t = this.rec.state.nodes[target]!;
+    if (!this.reviewer(node.refines ?? node.id, ctx)) {
+      const passed = Object.values(t.versions).find((v) => v.attempt === t.attempts && summary(v)?.pass);
       if (node.kind === "tool" || node.trust === "always") {
-        this.rec.record({ type: "Locked", node: target, version: versionId(attempt, 1), by: "auto" });
+        this.rec.record({ type: "Locked", node: target, version: versionId(t.attempts, 1), by: "auto" });
+      } else if (node.trust === "when_confident" && passed) {
+        this.rec.record({ type: "Locked", node: target, version: passed.id, by: "auto" });
       } else {
         return this.askApproval(key, node, ctx);
       }
     }
     this.finishProduce(key, node, ctx);
+  }
+
+  /** Limits on the numbers each candidate made (`seconds: { max: 8 }`): one code verdict per candidate. */
+  private codeChecks(target: string, attempt: number, outputs: Record<string, unknown>[], check: NonNullable<Extract<Node, { kind: "model" }>["check"]>): void {
+    const { rubric: _r, ...limits } = check;
+    if (Object.keys(limits).length === 0) return;
+    outputs.forEach((output, i) => {
+      const issues: Verdict["issues"] = [];
+      for (const [field, { min, max }] of Object.entries(limits)) {
+        const v = output[field];
+        if (typeof v !== "number") issues.push({ type: "missing", what: `no ${field}` });
+        else if (max !== undefined && v > max) issues.push({ type: `${field}_over`, what: `${field} is ${v}, over ${max}` });
+        else if (min !== undefined && v < min) issues.push({ type: `${field}_under`, what: `${field} is ${v}, under ${min}` });
+      }
+      this.rec.record({ type: "VerdictRecorded", node: target, version: versionId(attempt, i + 1), by: "code", pass: issues.length === 0, issues });
+    });
+  }
+
+  /**
+   * Asks the judge about this attempt's candidates. The wait is recorded before
+   * the call, so a crash mid-judgement asks the judge again rather than
+   * making the step again.
+   */
+  private judge(key: string, node: Producer, ctx: Context): void {
+    if (!this.exec.check) return this.fail(key, "it has a rubric, and nothing here can judge it: set up a vision model (models: { llm: anthropic })");
+    const { sc, candidates } = this.judgeRequest(key, node, ctx);
+    const ticket = `check:${sc.idempotencyKey}`;
+    this.rec.record({ type: "Suspended", node: key, ticket, kind: "check_job" });
+    const r = this.external(() => this.exec.check!(node, sc, candidates));
+    if (Array.isArray(r)) this.finishJudge(key, node, ctx, r);
+  }
+
+  private judgeRequest(key: string, node: Producer, ctx: Context): { sc: StepContext; candidates: { version: string; output: Record<string, unknown> }[] } {
+    const target = this.rec.state.nodes[node.refines ? ctx.prefix + node.refines : key]!;
+    const sc = this.produceRequest(key, node, ctx);
+    sc.idempotencyKey = `${sc.idempotencyKey}/check`;
+    const candidates = Object.values(target.versions).filter((v) => v.attempt === target.attempts).map((v) => ({ version: v.id, output: v.output }));
+    return { sc, candidates };
+  }
+
+  private finishJudge(key: string, node: Producer, ctx: Context, judged: Judged[]): void {
+    this.rec.record({ type: "Resumed", node: key, ticket: this.rec.state.nodes[key]!.ticket! });
+    this.recordJudged(node.refines ? ctx.prefix + node.refines : key, judged);
+    this.decideLock(key, node, ctx);
+  }
+
+  private recordJudged(target: string, judged: Judged[]): void {
+    for (const j of judged) {
+      this.rec.record({ type: "VerdictRecorded", node: target, version: j.version, by: "llm", pass: j.pass, issues: j.issues, ...(j.model ? { model: j.model } : {}), cost_usd: j.cost_usd ?? 0 });
+    }
   }
 
   private finishProduce(key: string, node: Producer, ctx: Context): void {
@@ -711,7 +788,7 @@ export class Scheduler {
 
   /**
    * Asks for approval of a step no screen shows, on a generated screen (D-42).
-   * `when_confident` asks too until checkers exist (Day 20).
+   * `when_confident` asks when no candidate passed its checks.
    */
   private askApproval(key: string, node: Producer, ctx: Context): void {
     const n = this.rec.state.nodes[key]!;
@@ -795,6 +872,34 @@ export class Scheduler {
     });
   }
 
+  /**
+   * For checking a step's latest candidates again (`kriya check`), e.g. after
+   * its rubric changed: the step, what a judge needs, and the candidates.
+   * Nothing is recorded until `recordVerdicts`.
+   */
+  checkRequest(key: string): { node: Producer; ctx: StepContext; candidates: { version: string; output: Record<string, unknown> }[] } {
+    const inst = this.instances().find((x) => x.key === key);
+    if (!inst || !this.rec.state.nodes[key]) throw new Error(`there's no step '${key}' in this run`);
+    if (!isProducer(inst.node) || inst.node.kind === "agent" || !inst.node.check?.rubric) throw new Error(`'${key}' has no rubric to check against; add check: { rubric: [...] } to it`);
+    if (inst.node.refines) throw new Error(`'${key}' makes versions of '${inst.node.refines}'; check that step instead`);
+    const { sc, candidates } = this.judgeRequest(key, inst.node, inst.ctx);
+    return { node: inst.node, ctx: sc, candidates };
+  }
+
+  /** Records a judge's verdicts on a step's candidates (`kriya check`). It doesn't move locks: a person decides. */
+  recordVerdicts(key: string, judged: Judged[]): void {
+    this.atomic(() => this.recordJudged(key, judged));
+  }
+
+  /** The judge answered (`check.rubric`): its verdicts are recorded and the step carries on to its lock. Call `run()` after. */
+  deliverVerdicts(ticket: string, judged: Judged[]): void {
+    this.atomic(() => {
+      const inst = this.waitingOn(ticket);
+      if (!inst || !isProducer(inst.node) || this.rec.state.nodes[inst.key]!.ticketKind !== "check_job") throw new Error(`no step is waiting on a judge with ticket '${ticket}'`);
+      this.finishJudge(inst.key, inst.node, inst.ctx, judged);
+    });
+  }
+
   /** A slow job failed for good (the provider refused, or gave up): the step fails with the reason. Call `run()` after. */
   failJob(ticket: string, reason: string): void {
     this.atomic(() => {
@@ -834,6 +939,10 @@ export class Scheduler {
         this.rec.record({ type: "ToolResult", node: key, turn: last.turn, call: c.call, ok, result: this.blobs.put(result) });
         this.agent(key, node, ctx);
       }
+    } else if (kind === "check_job") {
+      const { sc, candidates } = this.judgeRequest(key, node, ctx);
+      const r = this.external(() => this.exec.check!(node, sc, candidates));
+      if (Array.isArray(r)) this.finishJudge(key, node, ctx, r);
     } else if (kind === "model_job") {
       const r = this.external(() => this.exec.produce(node, this.produceRequest(key, node, ctx)));
       if (Array.isArray(r)) {
@@ -1286,7 +1395,7 @@ export class Scheduler {
   }
 
   /** What a screen shows: the latest attempt's candidates of the shown step, with the shown field. */
-  private onShow(ctx: Context, show: string | undefined): { version: string; value: unknown }[] {
+  private onShow(ctx: Context, show: string | undefined): Shown[] {
     if (!show) return [];
     const [root, ...path] = show.split(".");
     const t = this.rec.state.nodes[ctx.prefix + root];
@@ -1296,7 +1405,8 @@ export class Scheduler {
       .map((v) => {
         let value: unknown = v.output;
         for (const k of path) value = value != null && typeof value === "object" ? (value as Record<string, unknown>)[k] : undefined;
-        return { version: v.id, value };
+        const verdict = summary(v);
+        return verdict ? { version: v.id, value, verdict } : { version: v.id, value };
       });
   }
 
@@ -1565,7 +1675,10 @@ export class Scheduler {
       const id = fromKey.slice(ctx.prefix.length);
       const node = ctx.graph.nodes.find((n) => n.id === id);
       const made = node && "refines" in node && node.refines ? s.nodes[ctx.prefix + node.refines] : from;
-      scope.result = made ? Object.values(made.versions).at(-1)?.output : undefined;
+      const last = made ? Object.values(made.versions).at(-1) : undefined;
+      scope.result = last?.output;
+      // Day 20: and what its checks said, as `verdict.pass` and `verdict.issues`.
+      scope.verdict = last ? summary(last) : undefined;
     }
     return scope;
   }
@@ -1629,6 +1742,17 @@ function reaches(g: Graph, from: string, to: string): boolean {
 }
 
 /** A plain reason for staleness from the inputs that changed. */
+/**
+ * What a version's checks say now: the latest verdict from each kind of checker
+ * (code, llm, human), so judging again after a rubric changes replaces the old
+ * answer instead of piling on. Undefined if nothing checked it.
+ */
+function summary(v: { verdicts: Verdict[] }): { pass: boolean; issues: Verdict["issues"] } | undefined {
+  if (v.verdicts.length === 0) return undefined;
+  const latest = [...new Map(v.verdicts.map((x) => [x.by, x])).values()];
+  return { pass: latest.every((x) => x.pass), issues: latest.flatMap((x) => x.issues) };
+}
+
 function describe(changed: string[], node: Node, facets: string[] = []): string {
   // "its item changed" already covers item.action, item.place, …; a named facet change covers the refs that read facets;
   // "'per_shot' changed" (the step it comes after) covers per_shot.panel and per_shot.clip.

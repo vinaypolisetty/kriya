@@ -38,6 +38,8 @@ function part(library: Library, pick?: (c: StepContext) => Decision | undefined)
         default: return [{ done: true }];
       }
     },
+    // The example shot recipe has a rubric; a judge that passes everything (checks.test.ts covers judging).
+    check: (_n, _c, cands) => cands.map((c) => ({ version: c.version, pass: true, issues: [] })),
     decide(node, c): Decision | undefined {
       if (node.id === "pick") return pick ? pick(c) : { action: "lock", selection: [c.shows!.at(-1)!.version] };
       return { action: "approve" };

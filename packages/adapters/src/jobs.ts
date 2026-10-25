@@ -4,11 +4,12 @@
  * call here and hands the engine a ticket (D-53); `settle` waits for each call
  * and delivers its result, so the run carries on.
  */
-import type { AgentTurnResult, CallMeta, Scheduler } from "@kriya/engine";
+import type { AgentTurnResult, CallMeta, Judged, Scheduler } from "@kriya/engine";
 
 export type Job =
   | { kind: "outputs"; run: () => Promise<{ outputs: Record<string, unknown>[]; meta: CallMeta[] }> }
-  | { kind: "turn"; run: () => Promise<AgentTurnResult> };
+  | { kind: "turn"; run: () => Promise<AgentTurnResult> }
+  | { kind: "verdicts"; run: () => Promise<Judged[]> };
 
 type Settled = { ticket: string; kind: Job["kind"] } & ({ ok: true; value: unknown } | { ok: false; error: unknown });
 
@@ -48,6 +49,7 @@ export async function settle(s: Scheduler, jobs: Jobs, describe: (error: unknown
     const r = await jobs.next();
     if (!r.ok) s.failJob(r.ticket, describe(r.error));
     else if (r.kind === "turn") s.deliverTurn(r.ticket, r.value as AgentTurnResult);
+    else if (r.kind === "verdicts") s.deliverVerdicts(r.ticket, r.value as Judged[]);
     else {
       const v = r.value as { outputs: Record<string, unknown>[]; meta: CallMeta[] };
       s.deliver(r.ticket, v.outputs, v.meta);

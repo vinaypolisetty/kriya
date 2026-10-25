@@ -27,6 +27,8 @@ function fakes(
       calls.push(`${node.id}#${ctx.visit}`);
       return [outputs[node.id]?.(ctx) ?? { done: true }];
     },
+    // The example shot recipe has a rubric; a judge that passes everything (checks.test.ts covers judging).
+    check: (_n, _c, cands) => cands.map((c) => ({ version: c.version, pass: true, issues: [] })),
     decide(node, ctx) {
       calls.push(`${node.id}#${ctx.visit}`);
       const d = decisions[node.id];

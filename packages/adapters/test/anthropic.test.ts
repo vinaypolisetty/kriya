@@ -291,3 +291,75 @@ edges:
     void jobs; // the first process's job died with it
   });
 });
+
+// ── checks: the judge (Day 20) ─────────────────────────────────────────────
+
+describe("a rubric judged by Claude (Day 20)", () => {
+  const shot = load(`graph: shot
+level: shot
+inputs:
+  item: json
+nodes:
+  - id: draw
+    kind: model
+    capability: image.generate
+    options: 2
+    prompt: "{{item.action}}. Characters: {{item.characters@look}}"
+    uses: [item.action, item.characters@look]
+    check:
+      rubric: ["Only the listed characters appear; no extra people.", "No readable text."]
+    out: { image: image }
+  - id: pick
+    kind: screen
+    review: pick_one
+    show: draw.image
+    actions:
+      - { id: lock, needs: [selection], locks: true }
+edges:
+  - { from: draw, to: pick }
+  - { from: pick, to: END }
+`);
+  const png = (tag: string) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, ...new TextEncoder().encode(tag)]);
+  const media = { read: (v: string) => (v.startsWith("blob:") ? { bytes: png(v), mime: "image/png" } : undefined), write: (b: Uint8Array) => `blob:${b.length}` };
+
+  function judged(answers: unknown[]) {
+    const { client, requests } = fakeClient((_p, n) => message([{ type: "text", text: JSON.stringify(answers[n - 1]) }]));
+    const jobs = new Jobs();
+    const claude = anthropicExecutors({ graphs: [shot], jobs, client, media });
+    const exec = { produce: () => [{ image: "blob:p1" }, { image: "blob:p2" }], check: claude.check, decide: () => undefined };
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(shot, rec, exec, [shot], { assets: { facet: (e: string) => ({ version: "v1", value: { image: "x.png", words: e === "Bheem" ? "a very tall bodybuilder" : "a big-bellied man" } }) } });
+    s.start(RELEASE, { item: { action: "Bheem leaps up", characters: ["Bheem", "Dhanpat"] } });
+    return { s, rec, log, jobs, requests };
+  }
+
+  it("each candidate's image goes to Claude with what was asked and the rules; the answer is a verdict with fixes", async () => {
+    const { s, rec, log, jobs, requests } = judged([
+      { pass: false, issues: [{ type: "extra_character", what: "a third man in a red shirt", where: "right edge", fix: "crop" }] },
+      { pass: true, issues: [] },
+    ]);
+    await settle(s, jobs, describeError);
+    expect(requests).toHaveLength(2);
+    const content = requests[0]!.messages[0]!.content as { type: string; source?: { type: string; media_type: string; data: string }; text?: string }[];
+    expect(content[0]).toEqual({ type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from(png("blob:p1")).toString("base64") } });
+    expect(content[1]!.text).toBe(
+      "What the step was asked:\nBheem leaps up. Characters: Bheem (a very tall bodybuilder); Dhanpat (a big-bellied man)\n\nRules:\n1. Only the listed characters appear; no extra people.\n2. No readable text.",
+    );
+    expect((requests[0]!.output_config as { format: { type: string } }).format.type).toBe("json_schema");
+    const vs = rec.state.nodes.draw!.versions;
+    expect(vs["1.1"]!.verdicts).toEqual([{ by: "llm", pass: false, issues: [{ type: "extra_character", what: "a third man in a red shirt", where: "right edge", fix: "crop" }], model: "claude-opus-5-5", cost_usd: 0.008 }]);
+    expect(vs["1.2"]!.verdicts[0]).toMatchObject({ pass: true, issues: [] });
+    expect(s.inbox()[0]!.shows.map((x) => x.verdict?.pass)).toEqual([false, true]);
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+
+  it("a 'pass' that lists issues counts as a fail, and an empty 'where' is left out", async () => {
+    const { s, rec, jobs } = judged([
+      { pass: true, issues: [{ type: "readable_text", what: "a sign says RAJA", where: "", fix: "edit" }] },
+      { pass: true, issues: [] },
+    ]);
+    await settle(s, jobs, describeError);
+    expect(rec.state.nodes.draw!.versions["1.1"]!.verdicts[0]).toMatchObject({ pass: false, issues: [{ type: "readable_text", what: "a sign says RAJA", fix: "edit" }] });
+  });
+});

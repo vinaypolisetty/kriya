@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stringify } from "yaml";
-import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
+import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
 import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
@@ -33,6 +33,7 @@ const HELP = `kriya: run recipes with people in the loop
   kriya lock <run> <step> <version> [--why text]  lock a version yourself
   kriya rebuild <run>                             redo the run's stale work
   kriya retry <run> <step>                        try a failed step again (a new attempt)
+  kriya check <run> <step>                        judge a step's latest candidates against its rubric again
   kriya library [entity]                          the Library: who's in it, what each is missing, every version
   kriya adopt <run> <step> <base> <from> --note text
                                                   merge two versions: base, taking what the note says from <from>
@@ -54,6 +55,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "retry": return await retry(rest, io);
       case "adopt": return await adopt(rest, io);
       case "library": return await library(rest, io);
+      case "check": return await check(rest, io);
       case undefined:
       case "help":
       case "--help":
@@ -320,6 +322,12 @@ function viewable(project: Project, store: Store, output: unknown): string[] {
   });
 }
 
+/** A candidate's checks in one line: ✓, or ✗ and each issue with where it is and the fix. */
+function verdictLine(v: { pass: boolean; issues: { type: string; what?: string; where?: string; fix?: string }[] }): string {
+  if (v.pass) return "✓ checks passed";
+  return `✗ ${v.issues.map((i) => `${i.what ?? i.type}${i.where ? ` (${i.where})` : ""}${i.fix ? ` → ${i.fix}` : ""}`).join("; ")}`;
+}
+
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 
 // ── inbox and decide ────────────────────────────────────────────────────────
@@ -334,7 +342,7 @@ async function inbox(io: IO): Promise<number> {
     if (entries.length === 0) io.out("Nothing is waiting on you.");
     entries.forEach((e, i) => {
       io.out(`${String(i + 1).padStart(2)}  ${e.run} · ${e.key}: ${e.title}`);
-      for (const s of e.shows) io.out(`      ${s.version}  ${preview(s.value)}`);
+      for (const s of e.shows) io.out(`      ${s.version}  ${preview(s.value)}${s.verdict ? `  ${verdictLine(s.verdict)}` : ""}`);
       io.out(`      buttons: ${e.buttons.map(button).join(" · ")}`);
     });
     return 0;
@@ -443,6 +451,36 @@ async function retry(args: string[], io: IO): Promise<number> {
     const { rec, s, jobs } = await openRun(project, store, id, io);
     io.out(`✓ Retrying ${s.retry(step).join(", ")}`);
     await drive(s, jobs, io);
+    report(io, rec.state, s.inbox());
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+// ── check ───────────────────────────────────────────────────────────────────
+
+/** Judges a step's latest candidates against its rubric again, e.g. after the rubric changed. Locks don't move. */
+async function check(args: string[], io: IO): Promise<number> {
+  const [id, step] = args;
+  if (!id || !step) throw new UserError("say which run and step: kriya check <run> <step>");
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const { rec, s } = await openRun(project, store, id, io);
+    const { node, ctx, candidates } = s.checkRequest(step);
+    const jobs = new Jobs();
+    const judge = executors(project, store, jobs, fakeTools()).check!;
+    const first = judge(node, ctx, candidates);
+    io.out(`  ⏳ judging ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}…`);
+    const judged = Array.isArray(first) ? first : await jobs.next().then((r) => {
+      if (!r.ok) throw new UserError(`the judge couldn't answer: ${describeError(r.error)}`);
+      return r.value as Judged[];
+    });
+    s.recordVerdicts(step, judged);
+    for (const j of judged) io.out(`  ${j.version}  ${verdictLine(j)}`);
+    const spent = judged.reduce((a, j) => a + (j.cost_usd ?? 0), 0);
+    if (spent) io.out(`  spent ${usd(spent)}`);
     report(io, rec.state, s.inbox());
     return 0;
   } finally {
@@ -579,7 +617,7 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
   const env = join(project.root, ".env");
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
   const real = [
-    ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, ...(project.settings.claude ?? {}) })] : []),
+    ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, media: projectMedia(project, store), ...(project.settings.claude ?? {}) })] : []),
     ...(toolRun !== "fake"
       ? [mediaTools({
           jobs,
@@ -596,6 +634,7 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
     produce: (node, ctx) => (real.find((p) => p.handles(node)) ?? fake).produce(node, ctx),
     decide: fake.decide,
     turn: claude?.turn ?? fake.turn!,
+    check: claude?.check ?? fake.check!,
     ...(claude ? { managesContext: true } : {}),
   };
 }
