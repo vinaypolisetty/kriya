@@ -110,6 +110,12 @@ export type ReplicateOptions = {
   fetch?: typeof fetch;
   /** How often to check on a running prediction. */
   pollMs?: number;
+  /** How many predictions may be being created at once, across every step in this process (default 2). */
+  concurrency?: number;
+  /** How long to keep waiting out throttling before giving up, in ms (default 10 minutes). */
+  patienceMs?: number;
+  /** Waits; tests pass a fake clock. */
+  sleep?: (ms: number) => Promise<void>;
   /** Which capabilities this adapter runs; the rest go elsewhere. Default: all of them. */
   capabilities?: readonly ReplicateCapability[];
   /** Settings per capability; a step's own `model:` and `params:` win over them. */
@@ -144,10 +150,40 @@ export function replicateExecutors(opts: ReplicateOptions): Pick<Executors, "pro
     return t;
   };
 
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const patience = opts.patienceMs ?? 10 * 60_000;
+
+  /**
+   * One HTTP call. Throttling (429) and a busy server (502, 503, 504) are waited
+   * out, as long as Replicate asks or with growing pauses, instead of failing the
+   * step: approving a 13-shot list starts dozens of jobs at once (Oct 26, Part 3).
+   */
   const call = async <T>(t: string, path: string, init: RequestInit = {}): Promise<T> => {
-    const res = await http(path.startsWith("http") ? path : `${process.env.REPLICATE_BASE_URL ?? API}${path}`, { ...init, headers: { Authorization: `Bearer ${t}`, ...(init.headers ?? {}) } });
-    if (!res.ok) throw new ReplicateError(httpProblem(res.status, await res.text().catch(() => "")));
-    return (await res.json()) as T;
+    const url = path.startsWith("http") ? path : `${process.env.REPLICATE_BASE_URL ?? API}${path}`;
+    for (let attempt = 0, waited = 0; ; attempt++) {
+      const res = await http(url, { ...init, headers: { Authorization: `Bearer ${t}`, ...(init.headers ?? {}) } });
+      if (res.ok) return (await res.json()) as T;
+      const body = await res.text().catch(() => "");
+      if (![429, 502, 503, 504].includes(res.status) || waited >= patience) throw new ReplicateError(httpProblem(res.status, body));
+      const asked = Number(res.headers.get("retry-after")) || Number(/available in (\d+) seconds?/i.exec(body)?.[1]) || 0;
+      const pause = Math.min(60_000, Math.max(asked * 1000, 1000 * 2 ** Math.min(attempt, 5)));
+      waited += pause;
+      await sleep(pause);
+    }
+  };
+
+  /** Creating predictions, a few at a time: the rest wait their turn here rather than in Replicate's throttle. */
+  const slots = { free: Math.max(1, opts.concurrency ?? 2), queue: [] as (() => void)[] };
+  const creating = async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (slots.free === 0) await new Promise<void>((r) => slots.queue.push(r));
+    else slots.free--;
+    try {
+      return await fn();
+    } finally {
+      const next = slots.queue.shift();
+      if (next) next();
+      else slots.free++;
+    }
   };
 
   /** An image as Replicate takes it: small ones inline, large ones uploaded once per process. */
@@ -210,9 +246,11 @@ export function replicateExecutors(opts: ReplicateOptions): Pick<Executors, "pro
               : await mediaRequest(node, ctx, field, opts.media, cap.makes, fields, params, (img) => asInput(t, img));
           if (ids.length < node.options) {
             for (let i = ids.length; i < node.options; i++) {
-              const created = pinned
-                ? await call<Prediction>(t, "/predictions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: pinned, input: ask.input }) })
-                : await call<Prediction>(t, `/models/${name}/predictions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: ask.input }) });
+              const created = await creating(() =>
+                pinned
+                  ? call<Prediction>(t, "/predictions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: pinned, input: ask.input }) })
+                  : call<Prediction>(t, `/models/${name}/predictions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: ask.input }) }),
+              );
               ids.push(created.id);
               opts.ledger.set(key, ids); // before waiting: a restart polls this job instead of paying for another
             }
@@ -392,7 +430,7 @@ function httpProblem(status: number, body: string): string {
   })().slice(0, 200);
   if (status === 401) return "Replicate rejected the token. Check REPLICATE_API_TOKEN in .env";
   if (status === 402) return `Replicate needs billing set up or more credit for this account (${detail})`;
-  if (status === 429) return "Replicate is rate-limiting this token; try the step again in a minute";
+  if (status === 429) return `Replicate kept rate-limiting this token for 10 minutes (${detail}); try the step again later, or add credit (low-credit accounts get a much lower limit)`;
   if (status === 404) return `Replicate has no such model or job (${detail})`;
   return `Replicate returned an error (${status}): ${detail}`;
 }

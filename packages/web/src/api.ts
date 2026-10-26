@@ -38,6 +38,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+export const retry = (run: string, key: string) => call<{ ok: true }>("/api/retry", { method: "POST", body: JSON.stringify({ run, key }) });
+
 export const decide = (d: Decision) => call<{ items: Item[] }>("/api/decide", { method: "POST", body: JSON.stringify(d) }).then((r) => r.items);
 
 /** Whether the server's event stream is connected; every live view refetches when it says something changed. */

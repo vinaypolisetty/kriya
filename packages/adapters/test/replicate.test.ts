@@ -13,8 +13,7 @@ const recipe = (text: string): Graph => {
 };
 const VERSION = "5bdc2c7cd642ae33611d8c33f79615f98ff02509ab8db9d8ec1cc6c36d378fba";
 
-const shot: Graph = (() => {
-  const r = loadText(`graph: shot
+const shotText = `graph: shot
 level: shot
 inputs:
   item: json
@@ -45,7 +44,9 @@ edges:
   - { from: pick, to: edit, when: "action == 'edit'" }
   - { from: edit, to: pick, max_loops: 2 }
   - { from: pick, to: END, when: "action == 'lock'" }
-`);
+`;
+const shot: Graph = (() => {
+  const r = loadText(shotText);
   expect(r.problems).toEqual([]);
   return r.graphs[0]!;
 })();
@@ -90,7 +91,10 @@ function mp4Of(seconds: number, version: 0 | 1 = 0): Uint8Array {
  * fail, if `fail` says so). Image models make bytes named after the
  * prediction; clip models an MP4 and audio models a WAV `seconds(n)` long.
  */
-function fakeReplicate(opts: { fail?: (n: number) => string | undefined; status?: number; version?: string; seconds?: (n: number) => number; metrics?: Record<string, unknown>; bytes?: Uint8Array } = {}) {
+function fakeReplicate(opts: { fail?: (n: number) => string | undefined; status?: number; version?: string; seconds?: (n: number) => number; metrics?: Record<string, unknown>; bytes?: Uint8Array; throttle?: number } = {}) {
+  let throttled = 0;
+  let inFlight = 0;
+  const peak = { creates: 0 };
   const version = opts.version ?? VERSION;
   const calls: Call[] = [];
   const predictions = new Map<string, { polls: number; error?: string; ext: string; seconds: number }>();
@@ -103,7 +107,15 @@ function fakeReplicate(opts: { fail?: (n: number) => string | undefined; status?
     calls.push({ method, url, body });
     if (opts.status) return json({ detail: "nope" }, opts.status);
     if (method === "POST" && url.endsWith("/files")) return json({ id: "f1", urls: { get: "https://api.replicate.com/v1/files/f1" } }, 201);
+    if (method === "POST" && url.endsWith("/predictions") && throttled < (opts.throttle ?? 0)) {
+      throttled++;
+      return json({ detail: "Request was throttled. Expected available in 5 seconds.", status: 429 }, 429);
+    }
     if (method === "POST" && url.endsWith("/predictions")) {
+      inFlight++;
+      peak.creates = Math.max(peak.creates, inFlight);
+      await new Promise((r) => setTimeout(r, 2));
+      inFlight--;
       const id = `p${++n}`;
       const ext = /i2v|video/.test(url) ? "mp4" : /tts|lyria|music/.test(url) ? "wav" : "jpg";
       predictions.set(id, { polls: 0, ext, seconds: opts.seconds?.(n) ?? 5, ...(opts.fail?.(n) ? { error: opts.fail(n) } : {}) });
@@ -124,7 +136,7 @@ function fakeReplicate(opts: { fail?: (n: number) => string | undefined; status?
     }
     throw new Error(`unexpected ${method} ${url}`);
   }) as typeof fetch;
-  return { fetch: fetchFn, calls, creates: () => calls.filter((c) => c.method === "POST" && c.url.endsWith("/predictions")) };
+  return { fetch: fetchFn, calls, peak, creates: () => calls.filter((c) => c.method === "POST" && c.url.endsWith("/predictions")) };
 }
 
 /** Images in memory: `sheets/<Name>.png` are character sheets (`big` makes them 300 KB), `blob:` are kept outputs. */
@@ -157,13 +169,14 @@ const memoryLedger = (): Ledger & { m: Map<string, string[]> } => {
 const ITEM = { item: { id: "P3-08", action: "Bheem leaps up screaming; Dhanpat tumbles into the mud", characters: ["Bheem", "Dhanpat"] } };
 const ASSETS = { facet: (entity: string, facet: string) => ({ version: "v1", value: `sheets/${entity}.png` }) };
 
-function start(o: { graph?: Graph; inputs?: Record<string, unknown>; replicate?: ReturnType<typeof fakeReplicate>; media?: ReturnType<typeof memoryMedia>; ledger?: Ledger; models?: ReplicateOptions["models"]; assets?: Assets; decide?: (screen: string) => unknown; token?: string | null } = {}) {
+function start(o: { graph?: Graph; inputs?: Record<string, unknown>; replicate?: ReturnType<typeof fakeReplicate>; media?: ReturnType<typeof memoryMedia>; ledger?: Ledger; models?: ReplicateOptions["models"]; assets?: Assets; decide?: (screen: string) => unknown; token?: string | null; sleeps?: number[]; patienceMs?: number; concurrency?: number } = {}) {
   const graph = o.graph ?? shot;
   const replicate = o.replicate ?? fakeReplicate();
   const media = o.media ?? memoryMedia();
   const ledger = o.ledger ?? memoryLedger();
   const jobs = new Jobs();
-  const rep = replicateExecutors({ graphs: [graph], jobs, media, ledger, fetch: replicate.fetch, pollMs: 0, ...(o.token === null ? {} : { token: o.token ?? "r8_test" }), ...(o.models ? { models: o.models } : {}) });
+  const sleeps = o.sleeps;
+  const rep = replicateExecutors({ graphs: [graph], jobs, media, ledger, fetch: replicate.fetch, pollMs: 0, ...(sleeps ? { sleep: async (ms: number) => void sleeps.push(ms) } : {}), ...(o.patienceMs !== undefined ? { patienceMs: o.patienceMs } : {}), ...(o.concurrency ? { concurrency: o.concurrency } : {}), ...(o.token === null ? {} : { token: o.token ?? "r8_test" }), ...(o.models ? { models: o.models } : {}) });
   const exec = { produce: rep.produce, decide: (n: { id: string }) => o.decide?.(n.id) as never };
   const log = new SqliteEventLog(openDatabase(":memory:"));
   const rec = Recorder.start(log, "run1");
@@ -303,6 +316,31 @@ describe("crashes and failures", () => {
     const { s, rec, jobs } = start({ replicate: fakeReplicate({ fail: (n) => (n === 2 ? "E005: flagged as sensitive" : undefined) }) });
     await settle(s, jobs, describeError);
     expect(rec.state.nodes.draw).toMatchObject({ status: "failed", failure: "Replicate couldn't make the image: E005: flagged as sensitive" });
+  });
+
+  it("throttling is waited out, as long as Replicate asks, and the step goes on (Oct 26: Part 3 hit the limit)", async () => {
+    const sleeps: number[] = [];
+    const { s, rec, jobs, replicate } = start({ replicate: fakeReplicate({ throttle: 2 }), sleeps });
+    await settle(s, jobs, describeError);
+    expect(rec.state.nodes.draw!.failure).toBeUndefined();
+    expect(Object.keys(rec.state.nodes.draw!.versions)).toEqual(["1.1", "1.2", "1.3"]);
+    expect(sleeps).toEqual([5000, 5000]);
+    expect(replicate.creates()).toHaveLength(5); // two throttled, then three made
+  });
+
+  it("only a few predictions are created at once; the rest wait their turn", async () => {
+    const replicate = fakeReplicate();
+    const g = loadText(shotText.replace("options: 3", "options: 6")).graphs[0]!;
+    const { s, jobs } = start({ graph: g, replicate, concurrency: 2 });
+    await settle(s, jobs, describeError);
+    expect(replicate.creates()).toHaveLength(6);
+    expect(replicate.peak.creates).toBeLessThanOrEqual(2);
+  });
+
+  it("throttled past its patience, the step fails saying what to do", async () => {
+    const { s, rec, jobs } = start({ replicate: fakeReplicate({ throttle: 99 }), sleeps: [], patienceMs: 20_000 });
+    await settle(s, jobs, describeError);
+    expect(rec.state.nodes.draw!.failure).toBe("Replicate kept rate-limiting this token for 10 minutes (Request was throttled. Expected available in 5 seconds.); try the step again later, or add credit (low-credit accounts get a much lower limit)");
   });
 
   it("a bad token fails the step with what to fix", async () => {

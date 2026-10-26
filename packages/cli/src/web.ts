@@ -10,6 +10,7 @@
  *   GET  /api/inbox        what's waiting on you, with each candidate's checks and the suggested fix
  *   GET  /api/media/<sha>  an image, clip or voice line from the blob store
  *   POST /api/decide       press a button: { run, key, action, selection?, note?, region? }
+ *   POST /api/retry        try a failed step again: { run, key } (a for-each step retries its failed items)
  *   GET  /api/events       server-sent events: `changed` whenever any run's log grows,
  *                          from this server or a `kriya` command in another terminal
  *   GET  /*                the web app (packages/web, built)
@@ -214,6 +215,28 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     return { run: id, recipe: g.graph, at, trail, status: rec.state.status, costUsd: rec.state.costUsd, inputs: g.inputs, nodes, edges };
   };
 
+  /** A failed step tried again (`kriya retry`): recorded at once, then the run carries on in the background. */
+  const retry = async (body: { run?: unknown; key?: unknown }) => {
+    const { run, key } = body;
+    if (typeof run !== "string" || typeof key !== "string") throw new BadRequest("say which run and step: { run, key }");
+    const started = queue.then(async () => {
+      const { s, jobs } = await openRun(current(), store, run, quiet, { readOnly: true });
+      s.retry(key);
+      return { s, jobs };
+    });
+    queue = started.then(
+      ({ s, jobs }) => {
+        busy.add(run);
+        s.recover();
+        return drive(s, jobs, quiet)
+          .catch((e) => opts.io.err(`! ${run}: ${describeError(e)}`))
+          .finally(() => busy.delete(run));
+      },
+      () => undefined,
+    );
+    await started;
+  };
+
   const decide = async (body: { run?: unknown; key?: unknown; action?: unknown; selection?: unknown; note?: unknown; region?: unknown }) => {
     const { run, key, action } = body;
     if (typeof run !== "string" || typeof key !== "string" || typeof action !== "string") throw new BadRequest("say which run, step and button: { run, key, action }");
@@ -277,6 +300,10 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     if (req.method === "GET" && url.pathname === "/api/runs") return json(res, 200, { project: first.settings.name, runs: await runs() });
     const graph = /^\/api\/runs\/([^/]+)\/graph$/.exec(url.pathname);
     if (req.method === "GET" && graph) return json(res, 200, await runGraph(decodeURIComponent(graph[1]!), url.searchParams.get("at") ?? ""));
+    if (req.method === "POST" && url.pathname === "/api/retry") {
+      await retry(JSON.parse((await readBody(req)) || "{}"));
+      return json(res, 200, { ok: true });
+    }
     if (req.method === "POST" && url.pathname === "/api/decide") {
       await decide(JSON.parse((await readBody(req)) || "{}"));
       return json(res, 200, { items: await inbox() });
