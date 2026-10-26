@@ -573,6 +573,18 @@ describe("checks from the terminal (Day 20)", () => {
     expect(r.out).toContain("⏳ judging 3 candidates…\n  1.1  ✓ checks passed\n  1.2  ✓ checks passed\n  1.3  ✓ checks passed");
     expect((await kriya(cwd, "check", "shot", "pick")).err).toBe("✗ 'pick' has no rubric to check against; add check: { rubric: [...] } to it");
   });
+  it("the inbox suggests what to press, as a command; a when_confident screen presses it itself (Day 21)", async () => {
+    const cwd = await project();
+    const shot = JSON.stringify({ id: "P3-04", characters: ["Mitra"], place: "Chai stall", action: "Mitra writes", lines: [], animate: false });
+    await kriya(cwd, "run", "shot_recipe", "--input", `item=${shot}`, "--id", "shot");
+    expect((await kriya(cwd, "inbox")).out).toContain("      suggested: 1.1 passed its checks\n        kriya decide 1 lock --pick 1.1");
+
+    const recipe = join(cwd, "recipes", "shot.yaml");
+    writeFileSync(recipe, readFileSync(recipe, "utf8").replace("    review: pick_one\n", "    review: pick_one\n    trust: when_confident\n"));
+    const r = await kriya(cwd, "run", "shot_recipe", "--input", `item=${shot}`, "--id", "auto");
+    expect(r.out).toContain("completed");
+    expect((await kriya(cwd, "status", "auto")).out).toContain("✓ draw · locked 1.1");
+  });
 });
 
 describe("plain errors", () => {

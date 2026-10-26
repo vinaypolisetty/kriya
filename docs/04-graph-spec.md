@@ -176,6 +176,8 @@ Model and tool steps can check what they make, before anyone sees it:
 
 Each check records a verdict on each candidate: pass, or issues, each with a `fix` (`crop`, `edit` or `retry`). Screens show them. `trust: when_confident` locks the first candidate that passed (it asks when none did). An edge can route on `verdict.pass` (and `verdict.issues`) like `result`. A rubric needs an image output; a limit needs a number output.
 
+A screen with `trust: when_confident` follows its candidates' checks for up to 3 rounds (Day 21, D-64): it locks a candidate that passed, or presses the fix the knowledge base suggests (`crop` with the area the judge says to keep, `edit` with the rule's wording, or `retry` with every issue as the note). Its decisions are recorded `by: auto`. Any other screen shows the suggestion in the inbox.
+
 ### `refines`: make versions of another step
 
 A `model`, `agent` or `tool` step can **refine** another step in the same recipe: its output becomes that step's next version instead of its own ([D-44](17-decisions.md)).

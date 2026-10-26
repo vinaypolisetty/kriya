@@ -56,6 +56,7 @@ The event log makes this measurable: which fixes actually worked for which issue
 | A detail goes missing (Bheem's gamcha) | Edit: "Only add the gamcha, keep everything else" |
 | Colors off (brown mud instead of red) | Name the color exactly: "bright brick-red mud" |
 | Garbled writing on signs or notebooks | Add "no text, no signs with writing"; add real text in the edit if needed |
+| Sound effects in the action (`SFX: THUD!`) get drawn as lettering | Prevent: "no sound-effect lettering" in the prompt. Repair: edit "Remove all writing…" (P3-08, Oct 25: all three panels had it; one edit fixed it) |
 | A Wan clip changes scene midway | Use only the good part and hold the last good frame |
 | Wan clip has unwanted audio | Ignore it; strip it in assembly |
 | A voice line is too long | Regenerate at speed 1.1–1.2 (lines over ~8 s make the Reel drag) |

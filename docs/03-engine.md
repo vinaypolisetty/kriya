@@ -123,6 +123,10 @@ Principles:
 - **Fixes have a cost order:** crop (code, free) → edit (one call) → regenerate (N calls) → escalate (human time).
 - **Waive** is a valid outcome, recorded with a reason (e.g. P2-11: gamcha missing, kept).
 
+### In v0.1 (D-64)
+
+The policy is a pure function from a screen's candidates and their verdicts to a button press: a passing candidate is locked; otherwise the candidate cheapest to repair gets its fix (crop < edit < retry; a candidate's fix is its costliest issue's). Knowledge-base rules (seeded from the failure table, doc 12) give the fix and the edit wording for issue types they know; the judge's suggested fix covers the rest. A `trust: when_confident` screen applies it (decisions recorded `by: auto`), up to 3 rounds; otherwise it's a suggestion in the inbox.
+
 ### Fix vocabulary
 
 | Fix | What it does |

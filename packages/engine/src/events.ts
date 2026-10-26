@@ -20,7 +20,8 @@ const Count = z.number().int().min(1);
 const on = <T extends string, S extends z.ZodRawShape>(type: T, shape: S) =>
   z.object({ type: z.literal(type), ...shape }).strict();
 
-const Issue = z.object({ type: z.string(), where: z.string().optional(), what: z.string().optional(), fix: z.string().optional() }).strict();
+/** One thing a check found wrong, with the fix it suggests; `keep` is the area a crop keeps (`x,y,w,h`, fractions). */
+const Issue = z.object({ type: z.string(), where: z.string().optional(), what: z.string().optional(), fix: z.string().optional(), keep: z.string().optional() }).strict();
 
 export const EngineEvent = z.discriminatedUnion("type", [
   on("RunStarted", {
@@ -104,6 +105,8 @@ export const EngineEvent = z.discriminatedUnion("type", [
     selection: z.array(z.string()).optional(),
     note: z.string().optional(),
     region: z.unknown().optional(),
+    /** Who pressed the button: a person, or the screen itself following its checks (`trust: when_confident`, Day 21). */
+    by: z.enum(["human", "auto"]).optional(),
   }),
   on("AgentTurn", {
     node: NodeKey,

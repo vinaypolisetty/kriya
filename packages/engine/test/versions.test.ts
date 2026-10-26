@@ -69,7 +69,7 @@ describe("edits become new versions of the step they refine (D-44)", () => {
     start(example("shot_recipe"), exec, shot);
     const [first, second] = exec.calls["screen:pick"]!;
     expect(first!.shows!.map((s) => s.version)).toEqual(["1.1", "1.2", "1.3"]);
-    expect(second!.shows).toEqual([{ version: "2.1", value: "img:P3-04:a1c3+add the gamcha" }]);
+    expect(second!.shows).toEqual([{ version: "2.1", value: "img:P3-04:a1c3+add the gamcha", verdict: { pass: true, issues: [] } }]); // the edit is judged too
   });
 
   it("the edit step gets the panel it starts from and the instruction", () => {
