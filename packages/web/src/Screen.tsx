@@ -7,9 +7,13 @@
 import { useState } from "react";
 import { decide, type Button, type Item } from "./api";
 import { Media } from "./App";
+import { parseRegion, Region } from "./Region";
 
 const LABELS: Record<string, string> = { lock: "Lock", edit: "Edit", crop: "Crop", retry: "Try again", approve: "Approve", redo: "Redo", fix: "Fix", reply: "Reply" };
 const label = (b: Button) => LABELS[b.id] ?? b.label ?? b.id;
+const cost = (b: Button) => (b.estimateUsd ? ` · ~$${b.estimateUsd.toFixed(2)}` : "");
+/** `item.caption_en` → "caption en": the field, in words. */
+const fieldName = (ref: string) => (ref.split(/[.@]/).pop() ?? ref).replace(/_/g, " ");
 
 export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; batch: Item[]; onDone: (message: string, next?: Item) => void; onError: (message: string) => void; onBack: () => void }) {
   const [picked, setPicked] = useState<string | undefined>(item.suggested?.selection?.[0] ?? (item.shows.length === 1 ? item.shows[0]!.version : undefined));
@@ -23,13 +27,15 @@ export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; b
   const lock = item.buttons.find((b) => b.locks);
   const others = item.buttons.filter((b) => b !== lock);
   const needsRegion = item.buttons.some((b) => b.needs.includes("region"));
+  // An area can narrow an edit too ("only change inside it"), so it's offered wherever there's an image to mark.
+  const marks = needsRegion || item.buttons.some((b) => b.id === "edit");
   const missing = (b: Button) => b.needs.filter((n) => (n === "selection" ? !picked : n === "note" ? !note.trim() : !region.trim()));
 
   const press = async (b: Button) => {
     setSending(b.id);
     setError(undefined);
     try {
-      await decide({ run: item.run, key: item.key, action: b.id, ...(picked && b.needs.includes("selection") ? { selection: [picked] } : {}), ...(note.trim() ? { note: note.trim() } : {}), ...(region.trim() && b.needs.includes("region") ? { region: region.trim() } : {}) });
+      await decide({ run: item.run, key: item.key, action: b.id, ...(picked && b.needs.includes("selection") ? { selection: [picked] } : {}), ...(note.trim() ? { note: note.trim() } : {}), ...(region.trim() && (b.needs.includes("region") || b.id === "edit") ? { region: region.trim() } : {}) });
       const next = batch.slice(at + 1).find((x) => x.id !== item.id) ?? batch.slice(0, at).find((x) => x.id !== item.id);
       onDone(`${label(b)}${picked && b.needs.includes("selection") ? ` ${picked}` : ""} · ${item.item ?? item.key}`, next);
     } catch (e) {
@@ -71,8 +77,30 @@ export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; b
       <main className="review-main">
         {shown && (
           <div className={["big", shown.verdict ? (shown.verdict.pass ? "pass" : "fail") : ""].join(" ")}>
-            <Media shown={shown} />
+            {marks && shown.media?.type.startsWith("image/") ? <Region src={shown.media.url} alt={`version ${shown.version}`} value={region} onChange={setRegion} /> : <Media shown={shown} />}
           </div>
+        )}
+        {marks && shown?.media?.type.startsWith("image/") && (
+          <p className="hint">
+            Drag on the picture to mark an area: what a crop keeps, or the only part an edit changes.
+            {parseRegion(region) && (
+              <>
+                {" "}
+                <button type="button" className="link" onClick={() => setRegion("")}>Clear</button>
+              </>
+            )}
+          </p>
+        )}
+
+        {item.beside.length > 0 && (
+          <dl className="beside">
+            {item.beside.map((b) => (
+              <div key={b.ref}>
+                <dt>{fieldName(b.ref)}</dt>
+                <dd>{typeof b.value === "string" ? b.value : Array.isArray(b.value) && b.value.every((x) => typeof x === "string") ? b.value.join(", ") : JSON.stringify(b.value)}</dd>
+              </div>
+            ))}
+          </dl>
         )}
 
         {item.shows.length > 1 && (
@@ -122,9 +150,9 @@ export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; b
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="e.g. make the tanker bigger in the frame" />
           </label>
         )}
-        {needsRegion && (
+        {marks && (
           <label className="field">
-            <span>Area to keep for a crop: x,y,w,h as fractions (0,0,0.8,1 drops the right fifth)</span>
+            <span>Marked area, as x,y,w,h fractions of the picture (or drag on it above)</span>
             <input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="0,0,0.8,1" inputMode="decimal" />
           </label>
         )}
@@ -134,7 +162,7 @@ export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; b
       <footer className="review-foot">
         {lock && (
           <button type="button" className="primary wide" disabled={!!sending || item.working || missing(lock).length > 0} onClick={() => void press(lock)}>
-            {sending === lock.id ? "…" : `${label(lock)}${picked && lock.needs.includes("selection") ? ` ${picked}` : ""}`}
+            {sending === lock.id ? "…" : `${label(lock)}${picked && lock.needs.includes("selection") ? ` ${picked}` : ""}${cost(lock)}`}
           </button>
         )}
         {others.length > 0 && (
@@ -143,7 +171,7 @@ export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; b
               const need = missing(b);
               return (
                 <button key={b.id} type="button" disabled={!!sending || item.working || need.length > 0} title={need.length ? `needs ${need.map((n) => (n === "selection" ? "a pick" : `a ${n}`)).join(" and ")}` : ""} onClick={() => void press(b)}>
-                  {sending === b.id ? "…" : label(b)}
+                  {sending === b.id ? "…" : `${label(b)}${cost(b)}`}
                 </button>
               );
             })}

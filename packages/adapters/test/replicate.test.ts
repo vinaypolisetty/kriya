@@ -268,6 +268,14 @@ describe("image.edit: the panel being edited goes first", () => {
     expect(edit.input.image_input[0]).toBe(`data:image/jpeg;base64,${Buffer.from(media.blobs.get(parent.slice(5))!).toString("base64")}`);
     expect(rec.state.nodes.draw!.versions["2.1"]).toMatchObject({ parents: ["1.2"], madeBy: "edit" });
   });
+
+  it("an area marked on the screen narrows the edit to it, in words (Day 25)", async () => {
+    let picks = 0;
+    const { s, jobs, replicate } = start({ decide: () => (picks++ === 0 ? { action: "edit", selection: ["1.2"], note: "add the gamcha", region: "0.31,0.18,0.16,0.22" } : undefined) });
+    await settle(s, jobs, describeError);
+    const edit = replicate.creates()[3]!.body as { input: { prompt: string } };
+    expect(edit.input.prompt).toContain("Only change what's inside the marked area (31% to 47% from the left, 18% to 40% from the top); keep everything outside it exactly the same.");
+  });
 });
 
 describe("crashes and failures", () => {
