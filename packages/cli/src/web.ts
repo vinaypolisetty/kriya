@@ -3,6 +3,10 @@
  * server over the same project and store the commands use, so the browser and
  * the terminal can't disagree:
  *
+ *   GET  /api/runs         every run: its recipe, status, what's waiting on you, cost, stale work
+ *   GET  /api/runs/<id>/graph[?at=per_shot[P3-04]]
+ *                          a run as its recipe's graph with each step's live state (Day 24, D-67);
+ *                          `at` opens one item of a for-each step
  *   GET  /api/inbox        what's waiting on you, with each candidate's checks and the suggested fix
  *   GET  /api/media/<sha>  an image, clip or voice line from the blob store
  *   POST /api/decide       press a button: { run, key, action, selection?, note?, region? }
@@ -69,6 +73,95 @@ export async function startWeb(first: Project, opts: { port?: number; host?: str
   };
   const inbox = async (): Promise<WebItem[]> => (await allInbox(current(), store, quiet, { readOnly: true })).map((e) => web(e, busy.has(e.run), typeOf));
 
+  const runs = async () => {
+    const project = current();
+    const out = [];
+    for (const id of store.events.runs()) {
+      const { rec, s } = await openRun(project, store, id, quiet, { readOnly: true });
+      const events = store.events.read(id);
+      const nodes = Object.values(rec.state.nodes);
+      out.push({
+        id,
+        recipe: rec.state.graph,
+        status: rec.state.status,
+        waiting: rec.state.status === "running" ? s.inbox().length : 0,
+        working: busy.has(id),
+        stale: nodes.filter((n) => n.status === "stale").length,
+        failed: nodes.filter((n) => n.status === "failed").length,
+        costUsd: rec.state.costUsd,
+        started: events[0]?.at,
+        updated: events.at(-1)?.at,
+      });
+    }
+    return out.sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+  };
+
+  const runGraph = async (id: string, at: string) => {
+    const project = current();
+    const { rec, s } = await openRun(project, store, id, quiet, { readOnly: true });
+    // `at` names one item of a for-each step (`per_shot[P3-04]`, nested ones chained): walk down to its recipe.
+    let g = project.graphs.find((x) => x.graph === rec.state.graph);
+    let prefix = "";
+    const trail: { label: string; at: string }[] = [{ label: rec.state.graph, at: "" }];
+    for (const [, mapId, item] of at.matchAll(/(\w+)\[([^\]]+)\]/g)) {
+      const map = g?.nodes.find((n) => n.id === mapId);
+      if (!map || map.kind !== "map") throw new BadRequest(`'${mapId}' isn't a for-each step in this run`);
+      prefix += `${mapId}[${item}].`;
+      g = project.graphs.find((x) => x.graph === map.graph);
+      trail.push({ label: item!, at: prefix.slice(0, -1) });
+    }
+    if (!g) throw new BadRequest(`this run's recipe '${rec.state.graph}' isn't in your recipes any more`);
+    const waiting = new Set(s.inbox().map((i) => i.key));
+    const thumb = (output: Record<string, unknown>) => {
+      for (const v of Object.values(output)) {
+        const hash = typeof v === "string" ? /^blob:([0-9a-f]{64})$/.exec(v)?.[1] : undefined;
+        const type = hash ? typeOf(hash) : undefined;
+        if (hash && type) return { url: `/api/media/${hash}`, type };
+      }
+      return undefined;
+    };
+    const nodes = g.nodes.map((n) => {
+      const key = prefix + n.id;
+      const st = rec.state.nodes[key];
+      const items =
+        n.kind === "map" && st?.items
+          ? st.items.keys.map((k) => ({ key: `${key}[${k}]`, label: k, status: itemStatus(rec.state.nodes, `${key}[${k}].`) }))
+          : undefined;
+      const versions = st
+        ? Object.values(st.versions).map((v) => {
+            const t = thumb(v.output);
+            const sum = verdictOf(v.verdicts);
+            return { id: v.id, costUsd: v.costUsd, ...(t ? { thumb: t } : {}), ...(sum ? { verdict: sum } : {}), ...(v.madeBy ? { madeBy: v.madeBy } : {}), ...(v.instruction ? { instruction: v.instruction } : {}), ...(v.model ? { model: v.model } : {}) };
+          })
+        : [];
+      return {
+        id: n.id,
+        key,
+        kind: n.kind,
+        name: n.name ?? n.id,
+        detail: describeNode(n),
+        status: st?.status ?? "not_started",
+        waitingOnYou: waiting.has(key),
+        costUsd: st?.costUsd ?? 0,
+        versions,
+        ...(st?.locked ? { locked: st.locked } : {}),
+        ...(st?.failure ? { failure: st.failure } : {}),
+        ...(st?.staleReason ? { staleReason: st.staleReason } : {}),
+        ...(st?.blockedReason ? { blockedReason: st.blockedReason } : {}),
+        ...(items ? { items } : {}),
+      };
+    });
+    const edges = g.edges.flatMap((e) =>
+      (Array.isArray(e.from) ? e.from : [e.from]).map((from) => ({
+        from,
+        to: e.to,
+        ...(e.when ? { label: edgeLabel(e.when) } : Array.isArray(e.from) && e.from.length > 1 ? { label: "wait for all" } : {}),
+        ...(e.max_loops !== undefined ? { back: true, limit: e.max_loops } : {}),
+      })),
+    );
+    return { run: id, recipe: g.graph, at, trail, status: rec.state.status, costUsd: rec.state.costUsd, inputs: g.inputs, nodes, edges };
+  };
+
   const decide = async (body: { run?: unknown; key?: unknown; action?: unknown; selection?: unknown; note?: unknown; region?: unknown }) => {
     const { run, key, action } = body;
     if (typeof run !== "string" || typeof key !== "string" || typeof action !== "string") throw new BadRequest("say which run, step and button: { run, key, action }");
@@ -120,6 +213,9 @@ export async function startWeb(first: Project, opts: { port?: number; host?: str
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = new URL(req.url ?? "/", "http://kriya");
     if (req.method === "GET" && url.pathname === "/api/inbox") return json(res, 200, { project: first.settings.name, items: await inbox() });
+    if (req.method === "GET" && url.pathname === "/api/runs") return json(res, 200, { project: first.settings.name, runs: await runs() });
+    const graph = /^\/api\/runs\/([^/]+)\/graph$/.exec(url.pathname);
+    if (req.method === "GET" && graph) return json(res, 200, await runGraph(decodeURIComponent(graph[1]!), url.searchParams.get("at") ?? ""));
     if (req.method === "POST" && url.pathname === "/api/decide") {
       await decide(JSON.parse((await readBody(req)) || "{}"));
       return json(res, 200, { items: await inbox() });
@@ -174,6 +270,61 @@ function web(e: Entry, working: boolean, typeOf: (hash: string) => string | unde
     }),
     ...(s ? { suggested: s } : {}),
   };
+}
+
+const VERBS: Record<string, string> = {
+  "image.generate": "draws",
+  "image.edit": "edits",
+  "video.from_image": "animates",
+  "audio.speech": "voices",
+  "audio.music": "scores",
+  "llm.write": "writes",
+  "llm.vision": "looks",
+};
+
+/** What one step is, in a few words, for its box on the graph. */
+function describeNode(n: Project["graphs"][number]["nodes"][number]): string {
+  switch (n.kind) {
+    case "model":
+      return [`AI · ${VERBS[n.capability] ?? n.capability}`, n.options > 1 ? `${n.options} options` : "", n.check ? "checked" : "", n.refines ? `remakes ${n.refines}` : ""].filter(Boolean).join(" · ");
+    case "agent":
+      return `Agent · ${n.tools.length} tool${n.tools.length === 1 ? "" : "s"}`;
+    case "tool":
+      return [`Tool · ${n.tool}`, n.refines ? `remakes ${n.refines}` : ""].filter(Boolean).join(" · ");
+    case "screen":
+      return [`You decide · ${n.actions.length} button${n.actions.length === 1 ? "" : "s"}`, n.trust === "when_confident" ? "auto when confident" : ""].filter(Boolean).join(" · ");
+    case "map":
+      return `For each in ${n.over}`;
+    case "subgraph":
+      return `Runs ${n.graph}`;
+  }
+}
+
+/** An edge's condition, as the words on its arrow: the button it follows, or the check it reads. */
+function edgeLabel(when: string): string {
+  return when
+    .replace(/action == '(\w+)'/g, "$1")
+    .replace(/not verdict\.pass/g, "failed checks")
+    .replace(/verdict\.pass/g, "passed checks")
+    .replace(/ and /g, " · ")
+    .replace(/ == true/g, "")
+    .replace(/ == false/g, " is no");
+}
+
+/** One item of a for-each step, in one word: the most pressing state of any of its steps. */
+function itemStatus(nodes: Record<string, { status: string }>, prefix: string): string {
+  const all = Object.entries(nodes).filter(([k]) => k.startsWith(prefix)).map(([, n]) => n.status);
+  if (all.length === 0) return "not_started";
+  for (const s of ["failed", "awaiting_human", "blocked", "stale"]) if (all.includes(s)) return s;
+  if (all.some((s) => s === "running" || s === "waiting_external" || s === "ready")) return "running";
+  return "done";
+}
+
+/** A version's checks: the latest verdict of each kind of checker. */
+function verdictOf(vs: { by: string; pass: boolean; issues: unknown[] }[]): { pass: boolean; issues: unknown[] } | undefined {
+  if (vs.length === 0) return undefined;
+  const latest = [...new Map(vs.map((v) => [v.by, v])).values()];
+  return { pass: latest.every((v) => v.pass), issues: latest.flatMap((v) => v.issues) };
 }
 
 function serveApp(path: string, res: ServerResponse) {
