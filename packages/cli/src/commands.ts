@@ -33,6 +33,7 @@ const HELP = `kriya: run recipes with people in the loop
   kriya lock <run> <step> <version> [--why text]  lock a version yourself
   kriya rebuild <run>                             redo the run's stale work
   kriya retry <run> <step>                        try a failed step again (a new attempt)
+  kriya web [--port 4317]                         the review inbox in your browser, live
   kriya check <run> <step>                        judge a step's latest candidates against its rubric again
   kriya library [entity]                          the Library: who's in it, what each is missing, every version
   kriya adopt <run> <step> <base> <from> --note text
@@ -56,6 +57,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "adopt": return await adopt(rest, io);
       case "library": return await library(rest, io);
       case "check": return await check(rest, io);
+      case "web": return await webCommand(rest, io);
       case undefined:
       case "help":
       case "--help":
@@ -332,7 +334,7 @@ const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 
 // ── inbox and decide ────────────────────────────────────────────────────────
 
-type Entry = InboxItem & { run: string };
+export type Entry = InboxItem & { run: string };
 
 async function inbox(io: IO): Promise<number> {
   const project = checkedProject(io);
@@ -392,10 +394,10 @@ async function decide(args: string[], io: IO): Promise<number> {
   }
 }
 
-async function allInbox(project: Project, store: Store, io: IO): Promise<Entry[]> {
+export async function allInbox(project: Project, store: Store, io: IO, opts: { readOnly?: boolean } = {}): Promise<Entry[]> {
   const entries: Entry[] = [];
   for (const r of store.events.runs()) {
-    const { s, rec } = await openRun(project, store, r, io, { quiet: true });
+    const { s, rec } = await openRun(project, store, r, io, { quiet: true, ...opts });
     if (rec.state.status === "running") entries.push(...s.inbox().map((i) => ({ ...i, run: r })));
   }
   return entries;
@@ -458,6 +460,21 @@ async function retry(args: string[], io: IO): Promise<number> {
   } finally {
     store.close();
   }
+}
+
+// ── web ─────────────────────────────────────────────────────────────────────
+
+/** Serves the review inbox until you stop it (Ctrl+C). */
+async function webCommand(args: string[], io: IO): Promise<number> {
+  const { values } = parseArgs({ args, options: { port: { type: "string" } } });
+  const project = checkedProject(io);
+  const port = values.port ? Number(values.port) : 4317;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UserError(`--port should be a number like 4317, not '${values.port}'`);
+  const { startWeb } = await import("./web.js");
+  const w = await startWeb(project, { port, io });
+  io.out(`✓ The inbox is at ${w.url}  (Ctrl+C to stop)`);
+  await new Promise<void>((done) => process.once("SIGINT", () => void w.close().then(done)));
+  return 0;
 }
 
 // ── check ───────────────────────────────────────────────────────────────────
@@ -567,7 +584,7 @@ async function adopt(args: string[], io: IO): Promise<number> {
 
 // ── shared ──────────────────────────────────────────────────────────────────
 
-function checkedProject(io: IO): Project {
+export function checkedProject(io: IO): Project {
   const project = loadProject(io.cwd);
   const errors = project.problems.filter((p) => p.severity === "error");
   if (errors.length) throw new UserError(`your recipes have problems:\n${formatProblems(errors)}`);
@@ -693,7 +710,7 @@ function fileLedger(project: Project): Ledger {
 }
 
 /** Runs until nothing is in flight: model calls are awaited and delivered, then the run carries on. */
-async function drive(s: Scheduler, jobs: Jobs, io: IO): Promise<void> {
+export async function drive(s: Scheduler, jobs: Jobs, io: IO): Promise<void> {
   s.run();
   if (jobs.size > 0) io.out("  ⏳ waiting on the models…");
   await settle(s, jobs, describeError);
@@ -711,8 +728,12 @@ function jsonBlobs(store: Store): Blobs {
   };
 }
 
-/** Opens a run in this process: replays its log and asks again for anything in flight. */
-async function openRun(project: Project, store: Store, id: string, io: IO, opts: { quiet?: boolean } = {}): Promise<{ rec: Recorder; s: Scheduler; jobs: Jobs; changed: boolean }> {
+/**
+ * Opens a run in this process: replays its log and asks again for anything in
+ * flight. `readOnly` only replays (the web inbox reads often; it must never
+ * call a model or write).
+ */
+export async function openRun(project: Project, store: Store, id: string, io: IO, opts: { quiet?: boolean; readOnly?: boolean } = {}): Promise<{ rec: Recorder; s: Scheduler; jobs: Jobs; changed: boolean }> {
   if (store.events.read(id).length === 0) throw new UserError(`there's no run '${id}'. See your runs with: kriya status`);
   const rec = Recorder.resume(store.events, id);
   const changed = rec.state.release !== releaseOf(project.graphs, rec.state.graph);
@@ -720,6 +741,7 @@ async function openRun(project: Project, store: Store, id: string, io: IO, opts:
     io.err(`! ${id}: its recipes changed since it started; it carries on with the current ones (run upgrades come later)`);
   }
   const { s, jobs } = scheduler(project, rec.state.graph, rec, store);
+  if (opts.readOnly) return { rec, s, jobs, changed };
   // A sheet redrawn or a look reworded since the last command: the work that used it goes stale.
   s.assetsChanged();
   if (rec.state.status === "running") {

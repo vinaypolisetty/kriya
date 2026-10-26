@@ -53,7 +53,7 @@ Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya r
 
 | Day | Date | Focus | Done when |
 |---|---|---|---|
-| 22 | Tue Nov 3 | Web scaffold (Vite + React + small API), SSE live updates | Inbox lists waiting decisions |
+| 22 | Tue Nov 3 | Web scaffold ✅ (D-65): `kriya web` (node:http API over the same project and store as the CLI, media, SSE from the event log) + `packages/web` (Vite + React). Real run Oct 25: P3's three waiting items, with verdicts and suggestions, live | Inbox lists waiting decisions |
 | 23 | Wed Nov 4 | Pick-one screen: grid, Lock/Edit/Crop/Try again, note feeds prompt | Lock a panel from the browser |
 | 24 | Thu Nov 5 | Region tool (crop, local edit) and audio players | Crop and approve a line in the UI |
 | 25 | Fri Nov 6 | Run view: steps, status, stale markers, plan-and-cost card | A whole Part at a glance |
