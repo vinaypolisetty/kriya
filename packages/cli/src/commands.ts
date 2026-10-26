@@ -33,7 +33,7 @@ const HELP = `kriya: run recipes with people in the loop
   kriya lock <run> <step> <version> [--why text]  lock a version yourself
   kriya rebuild <run>                             redo the run's stale work
   kriya retry <run> <step>                        try a failed step again (a new attempt)
-  kriya web [--port 4317]                         the review inbox in your browser, live
+  kriya web [--port 4317] [--lan]                 kriya in your browser, live; --lan pairs your phone over wifi
   kriya check <run> <step>                        judge a step's latest candidates against its rubric again
   kriya library [entity]                          the Library: who's in it, what each is missing, every version
   kriya adopt <run> <step> <base> <from> --note text
@@ -469,13 +469,20 @@ async function retry(args: string[], io: IO): Promise<number> {
 
 /** Serves the review inbox until you stop it (Ctrl+C). */
 async function webCommand(args: string[], io: IO): Promise<number> {
-  const { values } = parseArgs({ args, options: { port: { type: "string" } } });
+  const { values } = parseArgs({ args, options: { port: { type: "string" }, lan: { type: "boolean" } } });
   const project = checkedProject(io);
   const port = values.port ? Number(values.port) : 4317;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UserError(`--port should be a number like 4317, not '${values.port}'`);
   const { startWeb } = await import("./web.js");
-  const w = await startWeb(project, { port, io });
-  io.out(`✓ The inbox is at ${w.url}  (Ctrl+C to stop)`);
+  const w = await startWeb(project, { port, io, ...(values.lan ? { lan: true } : {}) });
+  io.out(`✓ kriya is at ${w.url}  (Ctrl+C to stop)`);
+  if (w.lan) {
+    const { default: QR } = await import("qrcode");
+    io.out(`\nOn your phone (same wifi), scan this once to pair it, or open:\n  ${w.lan.pair}\n`);
+    io.out(await QR.toString(w.lan.pair, { type: "terminal", small: true }));
+    if (w.lan.urls.length > 1) io.out(`Also reachable at: ${w.lan.urls.slice(1).join(", ")}`);
+    io.out("Anyone on this network with the link can review and decide; keep it to your own devices.");
+  }
   await new Promise<void>((done) => process.once("SIGINT", () => void w.close().then(done)));
   return 0;
 }

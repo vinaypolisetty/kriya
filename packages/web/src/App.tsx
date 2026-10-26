@@ -72,7 +72,7 @@ export function App() {
       {route.page === "inbox" ? (
         <InboxPage />
       ) : route.page === "review" ? (
-        <ReviewPage id={route.id} onDone={(m) => (setToast(m), history.back())} />
+        <ReviewPage id={route.id} onToast={setToast} />
       ) : (
         <div className="home">
           <RunList runs={runs.data?.runs} current={runId} />
@@ -147,7 +147,7 @@ function InboxPage() {
           <a className="card" href={`#/review/${encodeURIComponent(item.id)}`}>
             <span className="card-head">
               <span className="run-name">{item.run}</span>
-              <b>{item.title}</b>
+              <b>{item.item ? `${item.item} · ` : ""}{item.title}</b>
               {item.working && <span className="tone-work">working…</span>}
             </span>
             <span className="thumbs">
@@ -167,14 +167,33 @@ function InboxPage() {
   );
 }
 
-function ReviewPage({ id, onDone }: { id: string; onDone: (m: string) => void }) {
+/** One review, and the rest of its batch: after a decision the next one opens; the last goes back to the inbox. */
+function ReviewPage({ id, onToast }: { id: string; onToast: (m: string) => void }) {
   const inbox = useLive<{ items: Item[] }>("/api/inbox");
   const [failed, setFailed] = useState<string>();
+  const [batchOf, setBatchOf] = useState<Item[]>();
   const item = inbox.data?.items.find((i) => i.id === id);
-  if (failed) return <p className="error pad">{failed}</p>;
+  // The batch is fixed when you open it, so "Shot 2 of 5" keeps counting as items leave the inbox.
+  useEffect(() => {
+    if (item && !batchOf?.some((b) => b.id === item.id)) setBatchOf(inbox.data!.items.filter((i) => i.batch === item.batch));
+  }, [item, batchOf, inbox.data]);
+  if (failed) return <p className="error pad">{failed} <a href="#/inbox">Back to what's waiting</a></p>;
   if (!inbox.data) return <p className="muted pad">Loading…</p>;
   if (!item) return <p className="muted pad">This isn't waiting on you any more. <a href="#/inbox">See what is</a>.</p>;
-  return <Screen key={item.id + item.shows.map((s) => s.version).join()} item={item} onBack={() => history.back()} onError={setFailed} onDone={onDone} />;
+  const batch = batchOf?.some((b) => b.id === item.id) ? batchOf : [item];
+  return (
+    <Screen
+      key={item.id + item.shows.map((s) => s.version).join()}
+      item={item}
+      batch={batch}
+      onBack={() => go("/inbox")}
+      onError={setFailed}
+      onDone={(m, next) => {
+        onToast(m);
+        go(next ? `/review/${encodeURIComponent(next.id)}` : "/inbox");
+      }}
+    />
+  );
 }
 
 /** One candidate, small: its image (or a player, or the text), its version and its checks. */

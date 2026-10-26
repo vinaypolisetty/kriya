@@ -156,6 +156,8 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       expect(one.trail.map((t) => t.label)).toEqual(["part_recipe", "S2"]);
       expect(one.nodes.find((n) => n.key === "per_shot[S2].pick")!.status).toBe("awaiting_human");
       expect((await fetch(`${web.url}/api/runs/part/graph?at=nope[x]`)).status).toBe(400);
+      const picks = ((await (await fetch(`${web.url}/api/inbox`)).json()) as { items: WebItem[] }).items.filter((i) => i.key.endsWith(".pick"));
+      expect(picks.map((i) => [i.batch, i.item])).toEqual([["part:per_shot[].pick", "S1"], ["part:per_shot[].pick", "S2"], ["part:per_shot[].pick", "S3"]]); // one batch: every shot's pick
     } finally {
       await web.close();
     }
@@ -183,6 +185,61 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       expect((await get(web, "/api/inbox")).body.items).toEqual([]);
     } finally {
       await web.close();
+    }
+  });
+});
+
+describe("kriya web --lan: a phone pairs once, everyone else is turned away (D-68)", () => {
+  it("needs the pairing cookie from another device; the pairing link sets it; the token survives a restart", async () => {
+    const { cwd, web: local } = await waitingShot();
+    await local.close();
+    const io: IO = { out: () => {}, err: () => {}, cwd };
+    // As a phone: requests from this machine don't count as paired here.
+    const web = await startWeb(loadProject(cwd), { port: 0, io, lan: true, trustLoopback: false });
+    try {
+      const token = readFileSync(join(cwd, ".kriya", "web-token"), "utf8").trim();
+      expect(token.length).toBeGreaterThanOrEqual(32);
+      expect(web.lan!.pair).toMatch(new RegExp(`/pair\\?token=${token}$`));
+
+      const api = await fetch(`${web.url}/api/inbox`);
+      expect(api.status).toBe(401);
+      expect(((await api.json()) as { error: string }).error).toContain("this device isn't paired");
+      expect((await fetch(`${web.url}/`)).status).toBe(401);
+      expect((await fetch(`${web.url}/api/media/${"0".repeat(64)}`)).status).toBe(401);
+      expect((await fetch(`${web.url}/pair?token=nope`)).status).toBe(403);
+
+      const pair = await fetch(`${web.url}/pair?token=${token}`, { redirect: "manual" });
+      expect(pair.status).toBe(302);
+      const cookie = pair.headers.get("set-cookie")!;
+      expect(cookie).toMatch(/^kriya_pair=[^;]+; HttpOnly; SameSite=Strict/);
+      const paired = await fetch(`${web.url}/api/inbox`, { headers: { cookie: cookie.split(";")[0]! } });
+      expect(paired.status).toBe(200);
+      const item = ((await paired.json()) as { items: WebItem[] }).items[0]!;
+      expect(item).toMatchObject({ batch: "shot:pick" });
+    } finally {
+      await web.close();
+    }
+    const again = await startWeb(loadProject(cwd), { port: 0, io, lan: true, trustLoopback: false });
+    try {
+      expect(again.lan!.pair.endsWith(readFileSync(join(cwd, ".kriya", "web-token"), "utf8").trim())).toBe(true); // the same phone stays paired
+    } finally {
+      await again.close();
+    }
+  });
+
+  it("this machine needs no token; without --lan nothing else can reach it", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      expect(web.lan).toBeUndefined();
+      expect((await fetch(`${web.url}/api/inbox`)).status).toBe(200);
+    } finally {
+      await web.close();
+    }
+    const lan = await startWeb(loadProject(cwd), { port: 0, io: { out: () => {}, err: () => {}, cwd }, lan: true });
+    try {
+      expect((await fetch(`${lan.url}/api/inbox`)).status).toBe(200);
+    } finally {
+      await lan.close();
     }
   });
 });
