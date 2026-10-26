@@ -1,7 +1,22 @@
+import { useEffect, useState } from "react";
 import { useInbox, type Item, type Shown } from "./api";
+import { Screen } from "./Screen";
+
+/** The open screen lives in the URL (`#run:step`), so back works and a link opens it. */
+const openId = () => decodeURIComponent(location.hash.slice(1));
 
 export function App() {
   const { project, items, error, live } = useInbox();
+  const [open, setOpen] = useState(openId);
+  const [toast, setToast] = useState<string | undefined>();
+  const [failed, setFailed] = useState<string | undefined>();
+  useEffect(() => {
+    const on = () => setOpen(openId());
+    addEventListener("hashchange", on);
+    return () => removeEventListener("hashchange", on);
+  }, []);
+  const go = (id: string) => (location.hash = id ? encodeURIComponent(id) : "");
+  const item = items?.find((i) => i.id === open);
   return (
     <div className="app">
       <header>
@@ -12,8 +27,17 @@ export function App() {
           {live ? "live" : "offline"}
         </span>
       </header>
-      {error && <p className="error">{error}</p>}
-      {items === undefined ? <p className="muted">Loading…</p> : items.length === 0 ? <Empty /> : <Inbox items={items} />}
+      {(error ?? failed) && <p className="error">{error ?? failed}</p>}
+      {toast && <p className="toast" onAnimationEnd={() => setToast(undefined)}>✓ {toast}</p>}
+      {item ? (
+        <Screen key={item.id + item.shows.map((s) => s.version).join()} item={item} onBack={() => go("")} onError={setFailed} onDone={(m) => (setFailed(undefined), setToast(m), go(""))} />
+      ) : items === undefined ? (
+        <p className="muted">Loading…</p>
+      ) : items.length === 0 ? (
+        <Empty />
+      ) : (
+        <Inbox items={items} onOpen={go} />
+      )}
     </div>
   );
 }
@@ -27,11 +51,11 @@ function Empty() {
   );
 }
 
-function Inbox({ items }: { items: Item[] }) {
+function Inbox({ items, onOpen }: { items: Item[]; onOpen: (id: string) => void }) {
   return (
     <ul className="inbox">
       {items.map((item) => (
-        <li key={item.id} className="card">
+        <li key={item.id} className="card" role="button" tabIndex={0} onClick={() => onOpen(item.id)} onKeyDown={(e) => e.key === "Enter" && onOpen(item.id)}>
           <div className="card-head">
             <span className="run">{item.run}</span>
             <span className="title">{item.title}</span>

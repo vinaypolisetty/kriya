@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { describeError, sniff, suggestFix } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
 import { allInbox, drive, openRun, type Entry, type IO } from "./commands.js";
-import type { Project } from "./project.js";
+import { loadProject, type Project } from "./project.js";
 
 /** The built web app. */
 const APP = fileURLToPath(new URL("../../web/dist", import.meta.url));
@@ -42,8 +42,15 @@ export type WebItem = {
 
 export type Web = { url: string; close(): Promise<void> };
 
-export async function startWeb(project: Project, opts: { port?: number; host?: string; io: IO }): Promise<Web> {
-  const store = openStore(join(project.root, ".kriya"));
+export async function startWeb(first: Project, opts: { port?: number; host?: string; io: IO }): Promise<Web> {
+  const store = openStore(join(first.root, ".kriya"));
+  /** The project as it is now: recipes and the Library are files the creator edits while the server runs. */
+  const current = (): Project => {
+    const p = loadProject(first.root);
+    const errors = p.problems.filter((x) => x.severity === "error");
+    if (errors.length || p.library.problems.length) throw new Error(`the project has problems; run kriya status in a terminal to see them`);
+    return p;
+  };
   const quiet: IO = { out: () => {}, err: () => {}, cwd: opts.io.cwd };
   /** Decisions and the work after them, one at a time: two schedulers on one run would disagree. */
   let queue: Promise<unknown> = Promise.resolve();
@@ -60,13 +67,15 @@ export async function startWeb(project: Project, opts: { port?: number; host?: s
     }
     return t;
   };
-  const inbox = async (): Promise<WebItem[]> => (await allInbox(project, store, quiet, { readOnly: true })).map((e) => web(e, busy.has(e.run), typeOf));
+  const inbox = async (): Promise<WebItem[]> => (await allInbox(current(), store, quiet, { readOnly: true })).map((e) => web(e, busy.has(e.run), typeOf));
 
   const decide = async (body: { run?: unknown; key?: unknown; action?: unknown; selection?: unknown; note?: unknown; region?: unknown }) => {
     const { run, key, action } = body;
     if (typeof run !== "string" || typeof key !== "string" || typeof action !== "string") throw new BadRequest("say which run, step and button: { run, key, action }");
     const answered = queue.then(async () => {
-      const { s, jobs } = await openRun(project, store, run, quiet);
+      // Read-only first: the person's answer is recorded before anything else runs, so nothing
+      // (an automatic screen, a recovered job) can answer in their place.
+      const { s, jobs } = await openRun(current(), store, run, quiet, { readOnly: true });
       s.answer(key, {
         action,
         ...(Array.isArray(body.selection) && body.selection.length ? { selection: body.selection.map(String) } : {}),
@@ -80,6 +89,7 @@ export async function startWeb(project: Project, opts: { port?: number; host?: s
       ({ s, jobs }) => {
         // The decision is on the record; what follows (models, tools) carries on without the browser waiting.
         busy.add(run);
+        s.recover();
         return drive(s, jobs, quiet)
           .catch((e) => opts.io.err(`! ${run}: ${describeError(e)}`))
           .finally(() => busy.delete(run));
@@ -109,7 +119,7 @@ export async function startWeb(project: Project, opts: { port?: number; host?: s
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = new URL(req.url ?? "/", "http://kriya");
-    if (req.method === "GET" && url.pathname === "/api/inbox") return json(res, 200, { project: project.settings.name, items: await inbox() });
+    if (req.method === "GET" && url.pathname === "/api/inbox") return json(res, 200, { project: first.settings.name, items: await inbox() });
     if (req.method === "POST" && url.pathname === "/api/decide") {
       await decide(JSON.parse((await readBody(req)) || "{}"));
       return json(res, 200, { items: await inbox() });

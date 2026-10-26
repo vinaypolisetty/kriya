@@ -634,7 +634,7 @@ export class Scheduler {
   private produceRequest(key: string, node: Producer, ctx: Context): StepContext {
     const n = this.rec.state.nodes[key]!;
     const target = node.refines ? ctx.prefix + node.refines : key;
-    const { parent, instruction, region } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined, region: undefined };
+    const { parent, instruction, region } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: this.retryNote(key, node, ctx), region: undefined };
     const sc = this.context(key, node, ctx, n.attempts, target, parent, instruction);
     if (region !== undefined) sc.region = region;
     sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}`;
@@ -644,7 +644,7 @@ export class Scheduler {
   /** Records a call's outputs as candidates and applies the lock policy. */
   private accept(key: string, node: Producer, ctx: Context, outputs: Record<string, unknown>[], meta: CallMeta[] = []): void {
     const target = node.refines ? ctx.prefix + node.refines : key;
-    const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: undefined };
+    const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: this.retryNote(key, node, ctx) };
     const attempt = this.rec.state.nodes[target]!.attempts;
     const inputs = this.inputsOf(key, node, ctx);
     const assets = this.received(key, node, ctx).assets;
@@ -749,6 +749,17 @@ export class Scheduler {
   private finishProduce(key: string, node: Producer, ctx: Context): void {
     if (node.refines) this.rec.record({ type: "NodeCompleted", node: ctx.prefix + node.refines });
     this.complete(key, ctx);
+  }
+
+  /**
+   * A step made again from the screen that reviews it ("Try again" with a
+   * note): the note is its instruction, so the next try knows what was wrong
+   * (Day 23). Recorded on the new versions like an edit's.
+   */
+  private retryNote(key: string, node: Producer, ctx: Context): string | undefined {
+    if (this.rec.state.nodes[key]!.attempts < 2) return undefined;
+    const screen = this.reviewer(node.id, ctx);
+    return screen ? this.rec.state.nodes[ctx.prefix + screen.id]?.decisions.at(-1)?.note : undefined;
   }
 
   /** Where a refining step starts from: what the reviewing screen last selected, else the locked or newest version. */
@@ -1136,9 +1147,12 @@ export class Scheduler {
   /** Tries blocked steps again, e.g. after the missing look was added to the Library. Call `run()` after. */
   unblock(): string[] {
     return this.atomic(() => {
-      const blocked = Object.entries(this.rec.state.nodes).filter(([, n]) => n.status === "blocked").map(([k]) => k);
-      for (const k of blocked) this.rec.record({ type: "NodeReady", node: k });
-      return blocked;
+      // Only steps whose missing facets exist now: calling this on every command records nothing for the rest.
+      const ready = this.instances()
+        .filter((x) => this.status(x.key) === "blocked" && this.received(x.key, x.node, x.ctx).missing.length === 0)
+        .map((x) => x.key);
+      for (const k of ready) this.rec.record({ type: "NodeReady", node: k });
+      return ready;
     });
   }
 

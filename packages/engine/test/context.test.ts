@@ -99,6 +99,7 @@ describe("asset facets", () => {
     expect(rec.state.nodes["per_shot[P3-02].draw"]).toMatchObject({ status: "blocked", blockedReason: "@Bheem has no look yet; add it to the Library" });
     expect(rec.state.nodes["per_shot[P3-01].draw"]?.status).not.toBe("blocked"); // the other shot carries on
 
+    expect(s.unblock()).toEqual([]); // still missing: nothing to try, nothing recorded
     lib.facets["Bheem.look"] = ["v1", "bheem-sheet.png"];
     expect(s.unblock()).toEqual(["per_shot[P3-02].draw"]);
     s.run();

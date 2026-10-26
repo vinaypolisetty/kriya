@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "@kriya/store";
@@ -92,6 +92,25 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       const bad = await fetch(`${web.url}/api/decide`, { method: "POST", body: JSON.stringify({ run: "shot" }) });
       expect(bad.status).toBe(400);
       expect(((await bad.json()) as { error: string }).error).toBe("say which run, step and button: { run, key, action }");
+    } finally {
+      await web.close();
+    }
+  });
+
+  it("your answer wins: a screen that has since become automatic can't answer in your place (Day 23)", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      // The recipe changes while the server runs: the pick screen now follows its checks.
+      const recipe = join(cwd, "recipes", "shot.yaml");
+      writeFileSync(recipe, readFileSync(recipe, "utf8").replace("    review: pick_one\n", "    review: pick_one\n    trust: when_confident\n"));
+      const r = await fetch(`${web.url}/api/decide`, { method: "POST", body: JSON.stringify({ run: "shot", key: "pick", action: "lock", selection: ["1.2"], note: "the clearest one" }) });
+      expect(r.status, await r.clone().text()).toBe(200);
+      await new Promise((ok) => setTimeout(ok, 50));
+      const store = openStore(join(cwd, ".kriya"));
+      const decided = store.events.read("shot").filter((e) => e.type === "HumanDecision").map((e) => e.payload);
+      store.close();
+      expect(decided).toEqual([{ node: "pick", action: "lock", selection: ["1.2"], note: "the clearest one", by: "human" }]);
+      expect((await kriya(cwd, "status", "shot")).out).toContain("✓ draw · locked 1.2 (\"the clearest one\")");
     } finally {
       await web.close();
     }
