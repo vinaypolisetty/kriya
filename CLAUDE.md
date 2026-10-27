@@ -55,6 +55,7 @@ packages/adapters/src/
   schema.ts        a step's `out` types as a strict JSON Schema
   tools.ts         local tools on ffmpeg: crop, compress, assemble_reel, run as jobs (D-62)
   files.ts         a file's type from its bytes or extension
+  fixes.ts         the fix loop: verdicts → crop / edit / retry / lock; KB rules from the failure table (D-64)
 packages/adapters/workers/assemble_reel.py   the Reel assembler (Python + Pillow + ffmpeg)
 packages/cli/src/
   commands.ts      init, run, status, show, inbox, decide, lock, rebuild, retry, adopt, check, library (each a fresh process over .kriya/)

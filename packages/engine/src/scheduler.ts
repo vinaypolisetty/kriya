@@ -53,7 +53,7 @@ export type StepContext = {
   notes?: Record<string, string>;
 };
 
-export type Decision = { action: string; selection?: string[]; note?: string; region?: unknown };
+export type Decision = { action: string; selection?: string[]; note?: string; region?: unknown; by?: "human" | "auto" };
 
 /** One thing waiting on a person: a screen, or a generated approval. */
 /** One candidate on a screen: its version, the shown field, and its checks (all passed or not, and the issues). */
@@ -811,7 +811,7 @@ export class Scheduler {
     const target = node.refines ? ctx.prefix + node.refines : key;
     const version = this.chooseVersion(target, d, this.rec.state.nodes[target]!.attempts, key);
     if (!version) return;
-    this.rec.record({ type: "Locked", node: target, version, by: "human", ...(d.note ? { why: d.note } : {}) });
+    this.rec.record({ type: "Locked", node: target, version, by: d.by === "auto" ? "auto" : "human", ...(d.note ? { why: d.note } : {}) });
     this.finishProduce(key, node, ctx);
   }
 
@@ -1425,7 +1425,7 @@ export class Scheduler {
     }
     const version = this.chooseVersion(target, d, t.attempts, screenKey);
     if (!version) return false;
-    this.rec.record({ type: "Locked", node: target, version, by: "human", ...(d.note ? { why: d.note } : {}) });
+    this.rec.record({ type: "Locked", node: target, version, by: d.by === "auto" ? "auto" : "human", ...(d.note ? { why: d.note } : {}) });
     return true;
   }
 

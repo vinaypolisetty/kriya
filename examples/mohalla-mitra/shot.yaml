@@ -22,10 +22,11 @@ nodes:
       Characters: {{item.characters@look}}
       Place: {{item.place@look}}
       Only these characters. No other people. Exactly one of each.
+      No text, no speech bubbles, no sound-effect lettering.
     uses: [item.action, item.characters@look, item.place@look, series.style]
     params: { aspect_ratio: "16:9" }   # panels are 16:9; the Reel crops and pans
     check:                             # a judge looks at every panel before you do (the failure table)
-      rubric:
+      rubric: &rubric
         - Every listed character appears, and each looks like their description.
         - Only the listed characters appear; no extra people.
         - Exactly one of each character; no duplicates.
@@ -38,6 +39,7 @@ nodes:
     name: Pick one panel
     review: pick_one
     show: draw.image
+    # trust: when_confident  # follow the checks for up to 3 rounds: lock a panel that passed, or crop/edit/retry as suggested
     beside: [item.action, item.lines, item.characters]
     batch: true
     actions:
@@ -56,6 +58,7 @@ nodes:
       Edit the first image. Keep everything exactly the same.
       Exactly one of each character. Only change: {{pick.note}}
     uses: [pick.selected]
+    check: { rubric: *rubric }         # the edited panel is judged the same way
     out:
       image: image
 

@@ -88,12 +88,13 @@ const VERDICT_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["type", "what", "where", "fix"],
+        required: ["type", "what", "where", "fix", "keep"],
         properties: {
           type: { type: "string", description: "a short snake_case name, e.g. extra_character, missing_detail, readable_text, wrong_look" },
           what: { type: "string", description: "the problem in plain words" },
           where: { type: "string", description: "where in the image (e.g. right edge), or empty if all over" },
           fix: { type: "string", enum: ["crop", "edit", "retry"], description: "crop if cutting an edge removes it, edit if one detail is wrong, retry if it's wrong overall" },
+          keep: { type: "string", description: "for a crop: the area to keep, as x,y,w,h fractions of the image (e.g. 0,0,0.8,1 drops the right fifth); empty otherwise" },
         },
       },
     },
@@ -180,8 +181,8 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
                 output_config: { effort, format: { type: "json_schema", schema: VERDICT_SCHEMA } },
                 messages: [{ role: "user", content: [...images, { type: "text" as const, text: `What the step was asked:\n${asked}\n\nRules:\n${rubric.map((r, i) => `${i + 1}. ${r}`).join("\n")}` }] }],
               });
-              const v = parseJson(m) as { pass: boolean; issues: { type: string; what: string; where: string; fix: string }[] };
-              const issues = v.issues.map(({ where, ...i }) => (where ? { ...i, where } : i));
+              const v = parseJson(m) as { pass: boolean; issues: { type: string; what: string; where: string; fix: string; keep: string }[] };
+              const issues = v.issues.map(({ where, keep, ...i }) => ({ ...i, ...(where ? { where } : {}), ...(keep && i.fix === "crop" ? { keep } : {}) }));
               return { version: cand.version, pass: v.pass && issues.length === 0, issues, model: m.model, cost_usd: cost(m) };
             }),
           ),

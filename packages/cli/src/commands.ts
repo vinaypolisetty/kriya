@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stringify } from "yaml";
 import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
-import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
+import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
@@ -344,6 +344,8 @@ async function inbox(io: IO): Promise<number> {
       io.out(`${String(i + 1).padStart(2)}  ${e.run} · ${e.key}: ${e.title}`);
       for (const s of e.shows) io.out(`      ${s.version}  ${preview(s.value)}${s.verdict ? `  ${verdictLine(s.verdict)}` : ""}`);
       io.out(`      buttons: ${e.buttons.map(button).join(" · ")}`);
+      const s = suggestFix({ actions: e.buttons }, e.shows);
+      if (s) io.out(`      suggested: ${s.why}\n        kriya decide ${i + 1} ${s.action}${s.selection ? ` --pick ${s.selection[0]}` : ""}${s.region ? ` --region ${String(s.region)}` : ""}${s.note ? ` --note ${JSON.stringify(s.note)}` : ""}`);
     });
     return 0;
   } finally {
@@ -594,6 +596,22 @@ function assetsOf(project: Project, store: Store): ReturnType<typeof libraryAsse
   return a;
 }
 
+/** How many times a `trust: when_confident` screen presses its own buttons before it asks you. */
+const AUTO_ROUNDS = 3;
+
+/**
+ * Screens wait for `kriya decide`, except a `trust: when_confident` screen,
+ * which follows its checks for a few rounds (D-64): locks a candidate that
+ * passed, or presses the fix the knowledge base suggests.
+ */
+const autoDecide: Executors["decide"] = (node, ctx) => {
+  if (node.trust !== "when_confident" || ctx.visit > AUTO_ROUNDS) return undefined;
+  const s = suggestFix(node, ctx.shows ?? []);
+  if (!s) return undefined;
+  const { why: _w, ...d } = s;
+  return { ...d, by: "auto" };
+};
+
 /** Steps of each kind of media that Replicate runs, from `models:` in kriya.yaml. */
 const MEDIA: Record<"image" | "video" | "audio", ReplicateCapability[]> = {
   image: ["image.generate", "image.edit"],
@@ -613,7 +631,7 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
   const models = project.settings.models;
   const media = realMedia(project);
   const toolRun = project.settings.tools;
-  if (models.llm !== "anthropic" && media.length === 0 && toolRun === "fake") return fake;
+  if (models.llm !== "anthropic" && media.length === 0 && toolRun === "fake") return { ...fake, decide: autoDecide };
   const env = join(project.root, ".env");
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
   const real = [
@@ -632,7 +650,7 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
   const claude = models.llm === "anthropic" ? (real.find((r) => "turn" in r) as ReturnType<typeof anthropicExecutors>) : undefined;
   return {
     produce: (node, ctx) => (real.find((p) => p.handles(node)) ?? fake).produce(node, ctx),
-    decide: fake.decide,
+    decide: autoDecide,
     turn: claude?.turn ?? fake.turn!,
     check: claude?.check ?? fake.check!,
     ...(claude ? { managesContext: true } : {}),
