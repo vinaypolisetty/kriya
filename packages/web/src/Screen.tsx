@@ -43,7 +43,7 @@ export function Screen({ item, onDone, onError, onBack }: { item: Item; onDone: 
   return (
     <div className="screen">
       <div className="screen-head">
-        <button className="link" onClick={onBack}>← Inbox</button>
+        <button type="button" className="link" onClick={onBack}>← Back</button>
         <span className="run">{item.run}</span>
         <h2>{item.title}</h2>
         {item.working && <span className="badge">working…</span>}

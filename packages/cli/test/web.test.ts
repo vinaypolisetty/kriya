@@ -116,6 +116,51 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
     }
   });
 
+  it("a run as its recipe's graph: each step's kind and live state, the arrows with their words, loops marked (Day 24)", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      const runs = (await (await fetch(`${web.url}/api/runs`)).json()) as { runs: { id: string; recipe: string; status: string; waiting: number }[] };
+      expect(runs.runs).toEqual([expect.objectContaining({ id: "shot", recipe: "shot_recipe", status: "running", waiting: 1 })]);
+
+      const g = (await (await fetch(`${web.url}/api/runs/shot/graph`)).json()) as {
+        recipe: string;
+        nodes: { id: string; kind: string; detail: string; status: string; waitingOnYou: boolean; versions: { id: string; verdict?: { pass: boolean } }[] }[];
+        edges: { from: string; to: string; label?: string; back?: boolean; limit?: number }[];
+      };
+      expect(g.recipe).toBe("shot_recipe");
+      const node = (id: string) => g.nodes.find((n) => n.id === id)!;
+      expect(node("draw")).toMatchObject({ kind: "model", detail: "AI · draws · 3 options · checked", status: "completed", waitingOnYou: false });
+      expect(node("draw").versions.map((v) => [v.id, v.verdict?.pass])).toEqual([["1.1", true], ["1.2", true], ["1.3", true]]);
+      expect(node("pick")).toMatchObject({ kind: "screen", detail: "You decide · 4 buttons", status: "awaiting_human", waitingOnYou: true });
+      expect(node("animate")).toMatchObject({ status: "not_started" });
+      expect(g.edges).toContainEqual({ from: "pick", to: "draw", label: "retry", back: true, limit: 4 });
+      expect(g.edges).toContainEqual({ from: "pick", to: "animate", label: "lock · item.animate" });
+    } finally {
+      await web.close();
+    }
+  });
+
+  it("a for-each step shows each item's state, and opening one shows that item's own steps", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-web-"));
+    await kriya(dir, "init", "p3", "--example", "mohalla-mitra");
+    const cwd = join(dir, "p3");
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x", "--id", "part");
+    await kriya(cwd, "decide", "1", "approve");
+    const web = await startWeb(loadProject(cwd), { port: 0, io: { out: () => {}, err: () => {}, cwd } });
+    try {
+      const g = (await (await fetch(`${web.url}/api/runs/part/graph`)).json()) as { nodes: { id: string; items?: { key: string; label: string; status: string }[] }[] };
+      const shots = g.nodes.find((n) => n.id === "per_shot")!.items!;
+      expect(shots.map((i) => [i.key, i.status])).toEqual([["per_shot[S1]", "awaiting_human"], ["per_shot[S2]", "awaiting_human"], ["per_shot[S3]", "awaiting_human"]]);
+      const one = (await (await fetch(`${web.url}/api/runs/part/graph?at=${encodeURIComponent("per_shot[S2]")}`)).json()) as { recipe: string; trail: { label: string }[]; nodes: { key: string; status: string }[] };
+      expect(one.recipe).toBe("shot_recipe");
+      expect(one.trail.map((t) => t.label)).toEqual(["part_recipe", "S2"]);
+      expect(one.nodes.find((n) => n.key === "per_shot[S2].pick")!.status).toBe("awaiting_human");
+      expect((await fetch(`${web.url}/api/runs/part/graph?at=nope[x]`)).status).toBe(400);
+    } finally {
+      await web.close();
+    }
+  });
+
   it("media from the store comes back with its type", async () => {
     const { cwd, web } = await waitingShot();
     try {

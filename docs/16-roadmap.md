@@ -55,8 +55,8 @@ Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya r
 |---|---|---|---|
 | 22 | Tue Nov 3 | Web scaffold ✅ (D-65): `kriya web` (node:http API over the same project and store as the CLI, media, SSE from the event log) + `packages/web` (Vite + React). Real run Oct 25: P3's three waiting items, with verdicts and suggestions, live | Inbox lists waiting decisions |
 | 23 | Wed Nov 4 | Pick-one screen ✅ (D-66): candidates with their issues, the screen's own buttons (enabled by what they need), "Use suggestion"; the note feeds an edit's prompt and now a retry's too; your answer is recorded before anything else runs. Real run Oct 25: P3-01 locked from Chrome with a why, `by: human` | Lock a panel from the browser |
-| 24 | Thu Nov 5 | Region tool (crop, local edit) and audio players | Crop and approve a line in the UI |
-| 25 | Fri Nov 6 | Run view: steps, status, stale markers, plan-and-cost card | A whole Part at a glance |
+| 24 | Thu Nov 5 | Run graph ✅ (pulled forward from Day 25, D-67): home is the run as its recipe's live graph in the mocks' look; step panel with versions, verdicts and locks; for-each strips you click into; the inbox and review screen restyled | A whole Part at a glance |
+| 25 | Fri Nov 6 | Region tool (crop, local edit) and audio players; plan-and-cost card | Crop and approve a line in the UI |
 | 26 | Sat Nov 7 | Version tree panel (branch, switch); read-only Library | Switch branches from the UI |
 | 27 | Sun Nov 8 | Phone layout; batch review; LAN access with a pairing token (D-38) | Review a batch on a phone over home wifi |
 | 28 | Mon Nov 9 | Buffer + write-up: locks and stale tracking | Draft saved |
