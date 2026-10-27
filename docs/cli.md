@@ -58,7 +58,17 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
     audio.speech: { params: { language_code: hi-IN } }
   ```
   A clip starts from the one image its step uses (the locked panel). A voice step's prompt is the words to say; the speaker's `@voice` picks the voice, and everything else it uses (the line's emotion, `@speech`, the voice's words) says how, followed by any style the step gives in `params`. Clips and audio are measured from their bytes, so `out: { seconds: number }` gets the real length. Any Replicate model works: name its input `fields:` (`prompt`, `images`, `voice`, `style`) if they differ, and its `price_usd` or `price_per_second_usd`. `kriya show` prints the prompt and references each version got, copies images, clips and audio to `.kriya/view/` and prints the paths to open. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, the next command asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key and run any command to carry on), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
-- **`kriya.yaml`** holds the project's name, the models, the inherited context (e.g. `series: { style, rules, cast }`) and the Library's `kinds:`.
+- **Tools** (`crop`, `compress`, `assemble_reel`) are fake by default. To run them here with ffmpeg:
+  ```yaml
+  tools:
+    python: ~/mitra/.venv/bin/python   # runs the Reel assembler; needs Pillow (default python3)
+    font: fonts/Poppins-Bold.ttf       # captions and the end card
+  context:
+    series:
+      music: { main: music/main-theme.mp3, villain: music/villain.mp3 }   # by cue; each shot's `music` picks one
+  ```
+  `kriya decide <n> crop --pick 1.2 --region 0.1,0,0.8,1` crops a panel (fractions of the image, or pixels); the crop becomes the panel's next version. `assemble_reel` times each shot to its voice lines, pans over stills, plays clips and holds their last frame, adds captions (`caption_en`) and an end card (the hook), ducks the music under the voices, and keeps the copy under `max_mb`. Tools cost nothing and are recorded as `local:<tool>`.
+- **`kriya.yaml`** holds the project's name, the models, the tools, the inherited context (e.g. `series: { style, rules, cast }`) and the Library's `kinds:`.
 - **The Library** is the `library/` folder: one YAML file per character, place or track, with its `name` (what recipes use, like `item.speaker`), its `kind`, and its facets (D-61):
   ```yaml
   # library/mitra.yaml

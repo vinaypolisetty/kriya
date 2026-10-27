@@ -81,6 +81,8 @@ export const ToolNode = z
     /** This step's outputs are new versions of another step (`edit` refines `draw`), D-44. */
     refines: Id.optional(),
     tool: z.string().min(1),
+    /** What it works on, like a model step's: an arg naming one of these gets its value (`reel: assemble.reel`). */
+    uses: z.array(Ref).default([]),
     args: z.record(z.string(), z.unknown()).default({}),
     out: Fields.default({}),
   })

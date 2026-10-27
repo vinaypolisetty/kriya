@@ -56,6 +56,14 @@ export const ProjectFile = z
           .strict(),
       )
       .optional(),
+    /**
+     * Tool steps (crop, compress, assemble_reel): `fake` (the default) makes up outputs;
+     * `{ python, font }` runs them here with ffmpeg. `python` runs the Reel assembler and
+     * needs Pillow (`~/…` is fine); `font` is a .ttf in the project for captions.
+     */
+    tools: z
+      .union([z.literal("fake"), z.object({ python: z.string().optional(), font: z.string().optional() }).strict()])
+      .default("fake"),
     /** Claude settings for `models: anthropic`; steps can still pin their own `model`. */
     claude: z.object({ model: z.string().optional(), effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional() }).strict().optional(),
     recipes: z.string().default("recipes"),

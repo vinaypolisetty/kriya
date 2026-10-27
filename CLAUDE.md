@@ -53,6 +53,9 @@ packages/adapters/src/
   replicate.ts     Replicate: images (Nano Banana), clips (Wan), voice (Gemini TTS), music (Lyria); job ledger (D-56, D-58)
   duration.ts      length of a WAV or MP4 from its bytes
   schema.ts        a step's `out` types as a strict JSON Schema
+  tools.ts         local tools on ffmpeg: crop, compress, assemble_reel, run as jobs (D-62)
+  files.ts         a file's type from its bytes or extension
+packages/adapters/workers/assemble_reel.py   the Reel assembler (Python + Pillow + ffmpeg)
 packages/cli/src/
   commands.ts      init, run, status, show, inbox, decide, lock, rebuild, retry, adopt, library (each a fresh process over .kriya/)
   project.ts       kriya.yaml + recipes folder

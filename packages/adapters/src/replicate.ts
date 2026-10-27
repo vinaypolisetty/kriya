@@ -277,7 +277,7 @@ async function mediaRequest(
   const add = (label: string, v: unknown): string | undefined => {
     if (typeof v !== "string" || makes === "audio") return undefined;
     const img = media.read(v);
-    if (!img) return undefined;
+    if (!img || ("mime" in img && !img.mime.startsWith("image/"))) return undefined; // a voice or a clip isn't a reference image
     images.push({ label, img });
     return makes === "image" ? `image ${images.length}` : "the start frame";
   };

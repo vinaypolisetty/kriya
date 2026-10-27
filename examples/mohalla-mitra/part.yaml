@@ -17,6 +17,7 @@ types:
       action: text
       lines: list<line>
       animate: boolean
+      music: text        # the music cue under this shot: main, clue, villain or chase
   line:
     fields:
       id: text
@@ -36,6 +37,7 @@ nodes:
     prompt: |
       Turn these pages into 10 to 13 shots named P{{inputs.part_no}}-NN.
       Mark the 4 shots with the biggest motion as animate.
+      Give each shot a music cue: main, clue, villain or chase.
       Write a voice table and an end-card hook.
     uses: [inputs.story_pages, series.rules, series.cast]
     out:
@@ -68,13 +70,20 @@ nodes:
     kind: tool
     name: Assemble the Reel
     tool: assemble_reel
+    uses: [shot_list.shots, shot_list.lines, shot_list.hook, per_shot.panel, per_shot.clip, voices.audio, series.music]
     args:
-      aspect: "9:16"
+      shots: shot_list.shots
+      lines: shot_list.lines
+      panels: per_shot.panel
+      clips: per_shot.clip     # a shot with a clip plays it; the rest pan over the panel
+      voices: voices.audio
+      hook: shot_list.hook     # the end card
+      music: series.music      # the series' tracks, by cue; ducked under the voices
+      title: MOHALLA MITRA
       max_mb: 30
-      captions: english
-      music: duck_under_voices
     out:
       reel: video
+      seconds: number
 
   - id: watch
     kind: screen

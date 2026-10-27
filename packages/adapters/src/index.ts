@@ -3,3 +3,5 @@ export * from "./schema.js";
 export * from "./anthropic.js";
 export * from "./replicate.js";
 export * from "./duration.js";
+export * from "./files.js";
+export * from "./tools.js";

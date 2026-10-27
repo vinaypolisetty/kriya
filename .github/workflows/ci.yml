@@ -16,6 +16,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # the media tools are tested on real files: ffmpeg, and Pillow plus a font for the Reel's captions
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg python3-pil fonts-dejavu-core
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm validate:examples

@@ -70,7 +70,7 @@ describe("changing one shot marks only its work stale", () => {
     expect(s.stale()).toEqual([
       { key: "per_shot", reason: "'shot_list.shots' changed" },
       { key: "per_shot[P3-02].draw", reason: "its item changed" },
-      { key: "assemble", reason: "'per_shot' changed" },
+      { key: "assemble", reason: "'shot_list.shots' changed; 'per_shot' changed" }, // the Reel reads the shot list too (D-62)
     ]);
   });
 
