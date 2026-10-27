@@ -135,6 +135,11 @@ export const EngineEvent = z.discriminatedUnion("type", [
   on("MarkedStale", { node: NodeKey, reason: z.string().min(1) }),
   /** Its inputs match again (e.g. the original upstream version was re-locked): the work is valid again. */
   on("MarkedFresh", { node: NodeKey }),
+  /**
+   * The creator looked at stale work and kept it as it is (D-72): its locked version
+   * is judged against these inputs from now on, so it stays fresh until one of them moves.
+   */
+  on("StaleKept", { node: NodeKey, version: z.string(), inputs: z.record(z.string()), why: z.string().optional() }),
   on("NodeCompleted", { node: NodeKey }),
   on("NodeFailed", { node: NodeKey, reason: z.string().min(1) }),
   on("RunCompleted", { status: z.enum(["completed", "failed", "cancelled"]) }),

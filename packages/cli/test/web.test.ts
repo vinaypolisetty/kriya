@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { openStore } from "@kriya/store";
 import { main, type IO } from "../src/commands.js";
 import { loadProject } from "../src/project.js";
-import { estimates, startWeb, type WebItem } from "../src/web.js";
+import { estimates, mediaIn, startWeb, type WebItem } from "../src/web.js";
 
 async function kriya(cwd: string, ...argv: string[]) {
   const out: string[] = [];
@@ -269,6 +269,17 @@ describe("the Library, read-only, in the browser (Day 26)", () => {
     } finally {
       await web.close();
     }
+  });
+});
+
+describe("media on a review (Oct 26, real Part 3)", () => {
+  const h = "a".repeat(64);
+  const types = (hash: string) => (hash === h ? "video/mp4" : undefined);
+  it("finds the clip inside an approval's whole output, not just a bare value", () => {
+    expect(mediaIn(`blob:${h}`, types)).toEqual({ url: `/api/media/${h}`, type: "video/mp4" });
+    expect(mediaIn({ clip: `blob:${h}` }, types)).toEqual({ url: `/api/media/${h}`, type: "video/mp4" });
+    expect(mediaIn({ note: "hi", clip: `blob:${"b".repeat(64)}` }, types)).toBeUndefined(); // a blob the store doesn't have
+    expect(mediaIn("words", types)).toBeUndefined();
   });
 });
 

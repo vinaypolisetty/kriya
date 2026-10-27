@@ -46,6 +46,8 @@ export type Version = {
   assets?: Record<string, string>;
   /** One content hash per input it was made from; see `CandidateProduced.inputs`. */
   inputs?: Record<string, string>;
+  /** Why the creator kept it when it went stale (D-72); its `inputs` are then the ones it was kept under. */
+  kept?: string;
 };
 
 /** One agent turn of the current attempt: the model's reply, its cost, and the tool calls it asked for. */
@@ -277,6 +279,14 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       if (n.status !== "stale") fail(e, "it isn't stale");
       const { staleReason: _s, ...rest } = n;
       return withNode(state, e.node, { ...rest, status: "completed" });
+    }
+
+    case "StaleKept": {
+      if (n.status !== "stale") fail(e, "it isn't stale");
+      if (n.locked?.version !== e.version) fail(e, `${e.version} isn't its locked version`);
+      const v = { ...n.versions[e.version]!, inputs: e.inputs, kept: e.why ?? "kept as it is" };
+      const { staleReason: _s, ...rest } = n;
+      return withNode(state, e.node, { ...rest, status: "completed", versions: { ...n.versions, [e.version]: v } });
     }
 
     case "NodeCompleted":
