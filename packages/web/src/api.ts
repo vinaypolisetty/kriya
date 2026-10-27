@@ -7,11 +7,11 @@ export type Media = { url: string; type: string };
 export type Shown = { version: string; value: unknown; media?: Media; verdict?: Verdict };
 export type Button = { id: string; label?: string; needs: ("selection" | "note" | "region")[]; locks: boolean; estimateUsd?: number };
 export type Suggestion = { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
-export type Item = { id: string; run: string; key: string; title: string; review: string; buttons: Button[]; shows: Shown[]; beside: { ref: string; value: unknown }[]; suggested?: Suggestion; working: boolean; batch: string; item?: string };
+export type Item = { id: string; run: string; key: string; title: string; review: string; buttons: Button[]; shows: Shown[]; beside: { ref: string; value: unknown }[]; suggested?: Suggestion; working: boolean; batch: string; item?: string; branch?: string };
 export type Decision = { run: string; key: string; action: string; selection?: string[]; note?: string; region?: string };
 
 export type Run = { id: string; recipe: string; status: string; waiting: number; working: boolean; stale: number; failed: number; costUsd: number; started?: string; updated?: string };
-export type GVersion = { id: string; costUsd: number; thumb?: Media; verdict?: Verdict; madeBy?: string; instruction?: string; model?: string };
+export type GVersion = { id: string; costUsd: number; branch: string; parents: string[]; thumb?: Media; verdict?: Verdict; madeBy?: string; instruction?: string; model?: string };
 export type GNode = {
   id: string;
   key: string;
@@ -22,6 +22,9 @@ export type GNode = {
   waitingOnYou: boolean;
   costUsd: number;
   versions: GVersion[];
+  /** The branch new versions go on, and every branch with the version it started from (D-71). */
+  branch?: string;
+  branches?: { name: string; from?: string }[];
   locked?: { version: string; by: string; why?: string };
   failure?: string;
   staleReason?: string;
@@ -37,6 +40,15 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   if (!r.ok) throw new Error(body.error ?? `the server said ${r.status}`);
   return body;
 }
+
+/** A facet value as the server sends it: words, or a file (as media, or missing), or an object of those. */
+export type FacetFile = { file: string; url?: string; type?: string; missing?: true };
+export type Facet = { facet: string; value: unknown; n?: number; missing?: string[]; history: { n: number; at: string; value: unknown; current: boolean }[] };
+export type Entity = { name: string; kind?: string; file: string; needs: string[]; facets: Facet[] };
+export type LibraryView = { project: string; kinds: Record<string, string[]>; entities: Entity[] };
+
+export const branchOff = (run: string, key: string, name: string, from: string) => call<{ ok: true }>("/api/branch", { method: "POST", body: JSON.stringify({ run, key, name, from }) });
+export const switchBranch = (run: string, key: string, branch: string) => call<{ ok: true }>("/api/switch", { method: "POST", body: JSON.stringify({ run, key, branch }) });
 
 export const retry = (run: string, key: string) => call<{ ok: true }>("/api/retry", { method: "POST", body: JSON.stringify({ run, key }) });
 

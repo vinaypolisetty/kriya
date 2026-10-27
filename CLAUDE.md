@@ -69,7 +69,7 @@ docs/                   design docs (numbered)
 ```
 
 packages/cli/src/web.ts   `kriya web`: the inbox API (node:http), media, server-sent events (D-65)
-packages/web/            kriya in a browser (Vite + React), served by `kriya web`: the run graph, step panel, inbox, review screen
+packages/web/            kriya in a browser (Vite + React), served by `kriya web`: the run graph, step panel with the version tree, inbox, review screen, read-only Library
 
 Local run data lives in `.kriya/` at the project root (gitignored): `kriya.db` and `blobs/`. A project's Library lives in `library/` (one YAML file per entity).
 

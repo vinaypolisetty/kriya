@@ -72,6 +72,7 @@ export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; b
           </div>
         )}
         {item.working && <span className="tone-work">working…</span>}
+        {item.branch && <span className="muted">On branch <b>{item.branch}</b>: only its versions are here. Switch in the run's step panel.</span>}
       </header>
 
       <main className="review-main">

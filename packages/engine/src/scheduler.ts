@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
 import type { Recorder } from "./recorder.js";
-import type { NodeStatus, RunState, Verdict } from "./state.js";
+import type { NodeState, NodeStatus, RunState, Verdict, Version } from "./state.js";
 import { promptRefs, startNodes } from "./validate.js";
 
 export type StepContext = {
@@ -764,12 +764,17 @@ export class Scheduler {
     return screen ? this.rec.state.nodes[ctx.prefix + screen.id]?.decisions.at(-1)?.note : undefined;
   }
 
-  /** Where a refining step starts from: what the reviewing screen last selected, else the locked or newest version. */
+  /**
+   * Where a refining step starts from: what the reviewing screen last selected,
+   * else the locked version if it's on the branch you're on, else the newest
+   * there (D-71).
+   */
   private refineSource(ctx: Context, targetId: string): { parent: string; instruction?: string; region?: unknown } {
     const t = this.rec.state.nodes[ctx.prefix + targetId]!;
     const screen = this.reviewer(targetId, ctx);
     const d = screen ? this.rec.state.nodes[ctx.prefix + screen.id]?.decisions.at(-1) : undefined;
-    const parent = d?.selection?.[0] ?? t.locked?.version ?? Object.keys(t.versions).at(-1)!;
+    const locked = t.locked && t.versions[t.locked.version]?.branch === t.branch ? t.locked.version : undefined;
+    const parent = d?.selection?.[0] ?? locked ?? onBranch(t).at(-1)?.id ?? Object.keys(t.versions).at(-1)!;
     return { parent, ...(d?.note ? { instruction: d.note } : {}), ...(d?.region !== undefined ? { region: d.region } : {}) };
   }
 
@@ -822,7 +827,7 @@ export class Scheduler {
     this.rec.record({ type: "HumanDecision", node: key, ...clean(d) });
     this.rec.record({ type: "Resumed", node: key, ticket: this.rec.state.nodes[key]!.ticket! });
     const target = node.refines ? ctx.prefix + node.refines : key;
-    const version = this.chooseVersion(target, d, this.rec.state.nodes[target]!.attempts, key);
+    const version = this.chooseVersion(target, d, key);
     if (!version) return;
     this.rec.record({ type: "Locked", node: target, version, by: d.by === "auto" ? "auto" : "human", ...(d.note ? { why: d.note } : {}) });
     this.finishProduce(key, node, ctx);
@@ -1425,20 +1430,18 @@ export class Scheduler {
     return ready;
   }
 
-  /** What a screen shows: the latest attempt's candidates of the shown step, with the shown field. */
+  /** What a screen shows: the shown step's latest candidates on the branch it's on, with the shown field. */
   private onShow(ctx: Context, show: string | undefined): Shown[] {
     if (!show) return [];
     const [root, ...path] = show.split(".");
     const t = this.rec.state.nodes[ctx.prefix + root];
     if (!t) return [];
-    return Object.values(t.versions)
-      .filter((v) => v.attempt === t.attempts)
-      .map((v) => {
-        let value: unknown = v.output;
-        for (const k of path) value = value != null && typeof value === "object" ? (value as Record<string, unknown>)[k] : undefined;
-        const verdict = summary(v);
-        return verdict ? { version: v.id, value, verdict } : { version: v.id, value };
-      });
+    return onBranch(t).map((v) => {
+      let value: unknown = v.output;
+      for (const k of path) value = value != null && typeof value === "object" ? (value as Record<string, unknown>)[k] : undefined;
+      const verdict = summary(v);
+      return verdict ? { version: v.id, value, verdict } : { version: v.id, value };
+    });
   }
 
   /** The screen in this recipe that shows a step, if any. */
@@ -1454,17 +1457,18 @@ export class Scheduler {
       this.fail(screenKey, `there's nothing from '${screen.show}' to lock yet`);
       return false;
     }
-    const version = this.chooseVersion(target, d, t.attempts, screenKey);
+    const version = this.chooseVersion(target, d, screenKey);
     if (!version) return false;
     this.rec.record({ type: "Locked", node: target, version, by: d.by === "auto" ? "auto" : "human", ...(d.note ? { why: d.note } : {}) });
     return true;
   }
 
   /**
-   * Which version a decision means: the one selected, or the only candidate of
-   * the latest attempt. Fails plainly when it's ambiguous or doesn't exist.
+   * Which version a decision means: the one selected, or the only one on show
+   * (the latest candidates on the branch you're on). Fails plainly when it's
+   * ambiguous or doesn't exist.
    */
-  private chooseVersion(target: string, d: Decision, attempt: number, failKey = target): string | undefined {
+  private chooseVersion(target: string, d: Decision, failKey = target): string | undefined {
     const t = this.rec.state.nodes[target]!;
     if (d.selection && d.selection.length > 0) {
       if (d.selection.length > 1) return void this.fail(failKey, "pick exactly one version to lock");
@@ -1472,7 +1476,7 @@ export class Scheduler {
       if (!t.versions[id]) return void this.fail(failKey, `version ${id} of '${target}' doesn't exist`);
       return id;
     }
-    const latest = Object.values(t.versions).filter((v) => v.attempt === attempt);
+    const latest = onBranch(t);
     if (latest.length !== 1) return void this.fail(failKey, `pick one of the ${latest.length} options of '${target}' to lock`);
     return latest[0]!.id;
   }
@@ -1770,6 +1774,22 @@ function reaches(g: Graph, from: string, to: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * A step's latest candidates on the branch it's on (D-71): the newest attempt
+ * that made versions there. Switching branches changes what its screen shows.
+ * A branch with nothing on it yet shows the version it started from, so the
+ * first edit there has something to start from.
+ */
+export function onBranch(t: NodeState): Version[] {
+  const mine = Object.values(t.versions).filter((v) => v.branch === t.branch);
+  if (mine.length === 0) {
+    const from = t.branches[t.branch]?.from;
+    return from && t.versions[from] ? [t.versions[from]] : [];
+  }
+  const last = Math.max(...mine.map((v) => v.attempt));
+  return mine.filter((v) => v.attempt === last);
 }
 
 /** A plain reason for staleness from the inputs that changed. */

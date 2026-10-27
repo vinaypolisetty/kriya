@@ -48,6 +48,8 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 .top-right { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .waiting-chip { display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; border-radius: 10px; background: var(--amber-soft); color: var(--amber-ink); font-size: 14px; font-weight: 600; text-decoration: none; }
 .waiting-chip.none { background: var(--tool); color: var(--muted); font-weight: 500; }
+.nav-link { font-size: 14px; font-weight: 600; color: var(--ink); text-decoration: none; padding: 8px 4px; }
+.nav-link.on { color: var(--teal); }
 .live { font-size: 12px; color: var(--muted); }
 .live.on::before { content: "●"; color: var(--teal); margin-right: 4px; }
 /* Floats over the page: a toast that pushed content down moved buttons under a tap (S2 got locked as 1.1, not 1.3). */
@@ -150,6 +152,17 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 .version .lock { color: var(--teal); font-weight: 600; }
 .version .ok { color: var(--teal); }
 .version .bad { color: var(--fail); }
+.small { font-size: 12px; margin: 0 0 6px; }
+.branch { display: grid; gap: 6px; padding: 8px 0; }
+.branch + .branch { border-top: 1px dashed var(--line); }
+.branch-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+.branch-head .pill { font-size: 11px; padding: 1px 8px; }
+.branch:not(.on) .versions { opacity: 0.75; }
+.branch-form { display: grid; gap: 8px; padding: 10px; border-radius: 8px; background: var(--teal-soft); margin-bottom: 6px; }
+.branch-form label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
+.branch-form input { font: inherit; font-size: 16px; min-height: 40px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.branch-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.version .branch-off { font-size: 12px; padding: 0 8px 6px; }
 .version .why { margin: 0; padding: 0 8px 6px; font-size: 11px; line-height: 15px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* buttons */
@@ -230,3 +243,33 @@ button.icon { min-height: 32px; width: 32px; padding: 0; border: 0; font-size: 2
 .beside div { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
 .beside dt { font-size: 12px; color: var(--muted); text-transform: capitalize; }
 .beside dd { margin: 0; font-size: 15px; }
+
+/* The Library (Day 26): read-only, by kind */
+.library { padding: 20px 32px 40px; display: grid; gap: 24px; max-width: 1200px; }
+.library h2 { margin: 0 0 10px; font-size: 18px; text-transform: capitalize; }
+.entities { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.entity { display: grid; grid-template-rows: auto 1fr; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; text-decoration: none; color: var(--ink); }
+.entity:hover { box-shadow: 0 2px 10px rgba(28, 27, 25, 0.12); }
+.entity-pic { position: relative; overflow: hidden; aspect-ratio: 16 / 10; background: var(--tool); display: grid; place-items: center; color: var(--muted); font-size: 28px; font-weight: 700; }
+.entity-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+.entity-body { padding: 10px 12px; display: grid; gap: 4px; align-content: start; }
+.entity-body b { font-size: 15px; }
+.facet-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--teal-soft); color: var(--ink); }
+.chip.missing { background: var(--fail-soft); color: var(--fail); }
+.chip.needs { background: var(--tool); color: var(--muted); }
+.entity-page { padding: 20px 32px 40px; display: grid; gap: 16px; max-width: 900px; }
+.entity-page h1 { margin: 0; font-size: 24px; }
+.facet { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 14px; display: grid; gap: 8px; }
+.facet h2 { margin: 0; font-size: 16px; display: flex; gap: 8px; align-items: baseline; }
+.facet-value { display: grid; gap: 6px; font-size: 14px; }
+.facet-value img { max-width: 100%; max-height: 320px; border-radius: 8px; justify-self: start; }
+.facet-value audio, .facet-value video { max-width: 100%; }
+.history { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13px; }
+.history li { display: flex; gap: 8px; color: var(--muted); }
+.history li b { color: var(--ink); }
+.history .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+@media (max-width: 640px) {
+  .library, .entity-page { padding: 16px; }
+  .entities { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
