@@ -363,3 +363,39 @@ edges:
     expect(rec.state.nodes.draw!.versions["1.1"]!.verdicts[0]).toMatchObject({ pass: false, issues: [{ type: "readable_text", what: "a sign says RAJA", fix: "edit" }] });
   });
 });
+
+describe("fields typed library.<kind>: only names the Library has", () => {
+  it("the schema Claude answers to lists the Library's places and characters; a kind with none is a plain error", async () => {
+    const g = load(`graph: part
+level: part
+types:
+  shot:
+    fields: { id: text, place: library.place, characters: list<library.character> }
+nodes:
+  - id: shot_list
+    kind: model
+    capability: llm.write
+    prompt: Break it into shots.
+    trust: always
+    out: { shots: list<shot> }
+edges:
+  - { from: shot_list, to: END }
+`);
+    const { client, requests } = fakeClient(() => message([{ type: "text", text: JSON.stringify({ shots: [{ id: "S1", place: "Reservoir", characters: ["Mitra"] }] }) }]));
+    const jobs = new Jobs();
+    const names = (kind: string) => (kind === "place" ? ["Mitra's chai stall", "Reservoir"] : kind === "character" ? ["Mitra", "Bheem"] : []);
+    const exec = { ...anthropicExecutors({ graphs: [g], jobs, client, names }), decide: () => undefined };
+    const rec = Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run1");
+    const s = new Scheduler(g, rec, exec, [g]);
+    s.start(RELEASE, {});
+    await settle(s, jobs, describeError);
+    const shot = (requests[0]!.output_config as { format: { schema: { properties: { shots: { items: { properties: Record<string, unknown> } } } } } }).format.schema.properties.shots.items.properties;
+    expect(shot.place).toMatchObject({ type: "string", enum: ["Mitra's chai stall", "Reservoir"] });
+    expect(shot.characters).toMatchObject({ type: "array", items: { type: "string", enum: ["Mitra", "Bheem"] } });
+
+    const none = anthropicExecutors({ graphs: [g], jobs: new Jobs(), client, names: () => [] });
+    const s2 = new Scheduler(g, Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run2"), { ...none, decide: () => undefined }, [g]);
+    s2.start(RELEASE, {});
+    expect(() => s2.run()).toThrow("the Library has no place for this step to choose from; add one to library/ (kind: place)");
+  });
+});

@@ -623,6 +623,9 @@ function assetsOf(project: Project, store: Store): ReturnType<typeof libraryAsse
   return a;
 }
 
+/** The Library's names by kind, in file order, for fields typed `library.<kind>`. */
+const namesOf = (project: Project) => (kind: string) => [...project.library.entities.values()].filter((e) => e.kind === kind).map((e) => e.name);
+
 /** How many times a `trust: when_confident` screen presses its own buttons before it asks you. */
 const AUTO_ROUNDS = 3;
 
@@ -654,7 +657,7 @@ const realMedia = (project: Project): ReplicateCapability[] =>
  * runs images, clips and audio, per kind (keys from `.env`).
  */
 function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType<typeof fakeTools>): Executors {
-  const fake = fakeExecutors(project.graphs);
+  const fake = fakeExecutors(project.graphs, namesOf(project));
   const models = project.settings.models;
   const media = realMedia(project);
   const toolRun = project.settings.tools;
@@ -662,7 +665,7 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
   const env = join(project.root, ".env");
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
   const real = [
-    ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, media: projectMedia(project, store), ...(project.settings.claude ?? {}) })] : []),
+    ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, media: projectMedia(project, store), names: namesOf(project), ...(project.settings.claude ?? {}) })] : []),
     ...(toolRun !== "fake"
       ? [mediaTools({
           jobs,

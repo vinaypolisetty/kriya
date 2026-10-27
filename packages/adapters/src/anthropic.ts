@@ -17,7 +17,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { BUILT_IN_TOOL_SPECS, Pending, type AgentHistory, type AgentTurnResult, type Executors, type Graph, type Judged, type Node, type StepContext, type Tools } from "@kriya/engine";
 import type { Jobs } from "./jobs.js";
 import type { Media } from "./replicate.js";
-import { fieldsSchema } from "./schema.js";
+import { fieldsSchema, type LibraryNames } from "./schema.js";
 
 type Beta = Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
 type Message = Anthropic.Beta.Messages.BetaMessage;
@@ -60,6 +60,8 @@ export type AnthropicOptions = {
   tools?: Tools;
   /** Where the judge reads the images it checks (`blob:…`, project files). */
   media?: Media;
+  /** The Library's names by kind, for fields typed `library.<kind>`. */
+  names?: LibraryNames;
   client?: Anthropic;
   /** Used unless a step pins its own `model`. */
   model?: string;
@@ -129,7 +131,7 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       if (node.kind !== "model") throw new Error(`Claude doesn't run ${node.kind} steps`);
       const ticket = `claude:${ctx.idempotencyKey}`;
       const c = client(); // before the ticket: no key, nothing starts and the step stays as it was
-      const schema = fieldsSchema(node.out, graphOf(node)?.types ?? {});
+      const schema = fieldsSchema(node.out, graphOf(node)?.types ?? {}, opts.names);
       opts.jobs.start(ticket, {
         kind: "outputs",
         run: async () => {
@@ -203,7 +205,7 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
             cache_control: { type: "ephemeral" },
             context_management: { edits: [{ type: "clear_tool_uses_20250919" }] },
             output_config: { effort },
-            tools: agentTools(node.tools, opts.tools, fieldsSchema(node.out, types)),
+            tools: agentTools(node.tools, opts.tools, fieldsSchema(node.out, types, opts.names)),
             messages: agentMessages(node.goal, ctx, history),
           });
           return turnResult(m, node.out);

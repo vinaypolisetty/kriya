@@ -555,6 +555,22 @@ describe("the Library (Day 18)", () => {
     );
   });
 
+  it("a shot list's characters and places come from the Library's names (fields typed library.<kind>)", async () => {
+    const cwd = await cast();
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x", "--id", "part");
+    const shown = (await kriya(cwd, "show", "part", "shot_list")).out;
+    expect(shown).toContain("place: Chai stall");
+    expect(shown).toMatch(/characters:\n\s+- Mitra\n\s+- Tiwari/);
+    expect(shown).toMatch(/speaker: (Mitra|Tiwari)/);
+  });
+
+  it("a recipe naming a kind the project doesn't have is told the nearest", async () => {
+    const cwd = await project();
+    const recipe = join(cwd, "recipes", "part.yaml");
+    writeFileSync(recipe, readFileSync(recipe, "utf8").replace("place: library.place", "place: library.plac"));
+    expect((await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x")).err).toContain("a recipe uses library.plac, and there's no kind 'plac'. Did you mean 'place'?");
+  });
+
   it("a project with the old library: in kriya.yaml is told where it went", async () => {
     const cwd = await project();
     writeFileSync(join(cwd, "kriya.yaml"), `${readFileSync(join(cwd, "kriya.yaml"), "utf8")}library:\n  Mitra.look: x\n`);
