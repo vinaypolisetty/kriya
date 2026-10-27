@@ -1,12 +1,9 @@
 /**
- * Fake models and a fake Library, so a whole episode runs from the terminal
+ * Fake models, so a whole episode runs from the terminal
  * with no keys and no cost. Outputs are made up from each step's declared
  * `out` types, so the recipe's own conditions and maps still work.
  */
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { resolve } from "node:path";
-import type { Assets, Executors, Graph, Node, StepContext, Tools } from "@kriya/engine";
+import type { Executors, Graph, Node, StepContext, Tools } from "@kriya/engine";
 
 export function fakeExecutors(graphs: Graph[]): Executors {
   const graphOf = (node: Node) => graphs.find((g) => g.nodes.includes(node));
@@ -65,41 +62,4 @@ function fakeRecord(types: Graph["types"], type: string, ctx: StepContext, candi
   return Object.fromEntries(
     Object.entries(types[type]!.fields).map(([f, t]) => [f, f === "id" ? id : t.startsWith("list<") && !types[t.slice(5, -1)] ? [] : fakeValue(t, f, types, ctx, candidate, index)]),
   );
-}
-
-/**
- * The project's Library (kriya.yaml `library:`), and a fake facet for anything
- * missing in fake mode. A facet is a path (`sheets/mitra.png`), words, or both:
- * `{ image: sheets/mitra.png, words: "a thin 60-year-old bald man…" }`.
- * Its version is a hash of the image's bytes and the words, so redrawing a
- * sheet in place makes the shots that used it stale. A sheet that isn't there
- * counts as missing: the step waits for it instead of drawing a stranger.
- */
-export function projectAssets(library: Record<string, unknown>, fake: boolean, root: string): Assets {
-  const IMAGE = /\.(png|jpe?g|webp|gif)$/i;
-  /** Sheet hashes by path, size and modified time: a run with many shots doesn't rehash the same files. */
-  const hashes = new Map<string, string>();
-  const sheetHash = (file: string) => {
-    const st = statSync(file);
-    const k = `${file}|${st.size}|${st.mtimeMs}`;
-    let h = hashes.get(k);
-    if (!h) hashes.set(k, (h = createHash("sha256").update(readFileSync(file)).digest("hex")));
-    return h;
-  };
-  return {
-    facet(entity, facet) {
-      const key = `${entity}.${facet}`;
-      if (!(key in library)) return fake ? { version: "fake", value: `fake:${key}` } : undefined;
-      const value = library[key];
-      const look = (value && typeof value === "object" ? value : IMAGE.test(String(value)) ? { image: value } : { words: value }) as { image?: unknown; words?: unknown };
-      const h = createHash("sha256");
-      if (typeof look.image === "string") {
-        const file = resolve(root, look.image);
-        if (!file.startsWith(root + "/") || !existsSync(file)) return fake ? { version: "fake", value } : undefined;
-        h.update(sheetHash(file));
-      }
-      h.update(JSON.stringify(look.words ?? null));
-      return { version: h.digest("hex").slice(0, 12), value };
-    },
-  };
 }

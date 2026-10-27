@@ -43,7 +43,7 @@ Mitra (chaiwala, round glasses, white mustache, brown vest over kurta) · Kamla 
 **Edit prompt pattern:** "Edit the first image. Keep everything exactly the same. Exactly one of each character. Only change X."
 **Wan prompt ending:** "Camera static. Keep the 2D cartoon style, flat colors, no 3D. Ambient sound only, no music, no speech."
 **Music kit (current, Bollywood-style):** main theme, emotional clue, villain, comedy chase. (Older Part 1 kit: morning, villain, clue.)
-**Voices:** one Gemini voice per character, never changed. Narrator, Mitra, Kamla fixed since Part 1; Pinki, Bheem, Tinku, Pinku chosen in Part 2.
+**Voices:** one Gemini voice per character, never changed. The source of truth is `cast/characters.md` in the production folder (`~/mitra`); kriya's P3 Library matches it (Gemini 3.1 Flash TTS on Replicate, `hi-IN`): Mitra **Achird** · Bheem **Alnilam** · Kamla **Zephyr** · Pinki **Callirrhoe** · Tiwari **Rasalgethi** · Dhanpat **Puck** · Tinku **Zubenelgenubi** · Pinku **Umbriel** · Narrator **Algenib** · Driver **Charon** · Woman **Autonoe** · Kids **Leda** (the last three are story-one picks, unconfirmed against Parts 1–2).
 
 ## The Episode Algorithm (the workflow being automated)
 

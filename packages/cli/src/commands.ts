@@ -9,11 +9,12 @@ import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stringify } from "yaml";
-import { formatProblems, Recorder, Scheduler, type Blobs, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
+import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
 import { anthropicExecutors, describeError, Jobs, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
-import { fakeExecutors, fakeTools, projectAssets } from "./fake.js";
+import { fakeExecutors, fakeTools } from "./fake.js";
+import { libraryAssets } from "./library.js";
 import { loadProject, releaseOf, UserError, type Project } from "./project.js";
 
 export type IO = { out: (line: string) => void; err: (line: string) => void; cwd: string };
@@ -31,6 +32,7 @@ const HELP = `kriya: run recipes with people in the loop
   kriya lock <run> <step> <version> [--why text]  lock a version yourself
   kriya rebuild <run>                             redo the run's stale work
   kriya retry <run> <step>                        try a failed step again (a new attempt)
+  kriya library [entity]                          the Library: who's in it, what each is missing, every version
   kriya adopt <run> <step> <base> <from> --note text
                                                   merge two versions: base, taking what the note says from <from>
 
@@ -50,6 +52,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "rebuild": return await rebuild(rest, io);
       case "retry": return await retry(rest, io);
       case "adopt": return await adopt(rest, io);
+      case "library": return await library(rest, io);
       case undefined:
       case "help":
       case "--help":
@@ -106,13 +109,14 @@ function init(args: string[], io: IO): number {
   if (example && !examples().includes(example)) throw new UserError(`there's no example called '${example}'. Examples: ${examples().join(", ")}`);
 
   mkdirSync(join(root, "recipes"), { recursive: true });
+  mkdirSync(join(root, "library"), { recursive: true });
   if (example) cpSync(join(EXAMPLES, example), join(root, "recipes"), { recursive: true });
   const settings = {
     name: basename(root),
     models: "fake",
     recipes: "recipes",
     context: example ? (EXAMPLE_CONTEXT[example] ?? {}) : {},
-    library: {},
+    kinds: { character: ["look", "voice", "speech", "rules"], place: ["look"], music: ["track"] },
   };
   writeFileSync(join(root, "kriya.yaml"), `# kriya project settings\n${stringify(settings)}`);
   writeFileSync(join(root, ".gitignore"), ".kriya/\n.env\n");
@@ -218,8 +222,8 @@ function line(key: string, n: NodeState): string {
 }
 
 function summary(state: RunState, waiting: number): string {
-  if (state.status !== "running") return state.status;
   const stale = Object.values(state.nodes).filter((n) => n.status === "stale").length;
+  if (state.status !== "running") return [state.status, stale ? `${stale} stale` : ""].filter(Boolean).join(" · ");
   const blocked = Object.values(state.nodes).filter((n) => n.status === "blocked").length;
   return ["running", waiting ? `${waiting} waiting on you` : "", blocked ? `${blocked} blocked` : "", stale ? `${stale} stale` : ""].filter(Boolean).join(" · ");
 }
@@ -444,6 +448,63 @@ async function retry(args: string[], io: IO): Promise<number> {
   }
 }
 
+// ── library ─────────────────────────────────────────────────────────────────
+
+/** Who's in the Library, by kind, with each facet's version and what's missing; or one entity's facets and every version. */
+async function library(args: string[], io: IO): Promise<number> {
+  const project = loadProject(io.cwd);
+  const lib = project.library;
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const assets = libraryAssets(lib, project.root, store, false);
+    const kinds = project.settings.kinds;
+    const version = (name: string, facet: string) => {
+      const r = assets.resolve(name, facet);
+      if (!r) return undefined;
+      if ("missing" in r) return `${facet} ✗ (${r.missing.join(", ")} isn't there)`;
+      return `${facet} v${store.library.history(name, facet).find((v) => v.version === r.version)!.n}`;
+    };
+    const [name] = args;
+    if (!name) {
+      if (lib.entities.size === 0) io.out("The Library is empty. Add one file per character, place or track to library/, e.g. library/mitra.yaml:\n  name: Mitra\n  kind: character\n  look: { image: sheets/mitra.png, words: a thin 60-year-old bald man }\n  voice: Charon");
+      const groups = new Map<string, string[]>();
+      for (const e of lib.entities.values()) groups.set(e.kind ?? "(no kind)", [...(groups.get(e.kind ?? "(no kind)") ?? []), e.name]);
+      const width = Math.max(0, ...[...lib.entities.keys()].map((n) => n.length));
+      for (const [kind, names] of groups) {
+        io.out(kind);
+        for (const n of names) {
+          const e = lib.entities.get(n)!;
+          const have = Object.keys(e.facets).map((f) => version(n, f)!);
+          const missing = (kinds[kind] ?? []).filter((f) => !(f in e.facets));
+          io.out(`  ${n.padEnd(width)}  ${[...have, missing.length ? `needs: ${missing.join(", ")}` : ""].filter(Boolean).join(" · ")}`);
+        }
+      }
+    } else {
+      const e = lib.entities.get(name);
+      if (!e) throw new UserError(`there's no '${name}' in the Library${suggest(name, [...lib.entities.keys()])} See who's there with: kriya library`);
+      io.out(`${e.name}${e.kind ? ` · ${e.kind}` : ""} · ${e.file}`);
+      for (const f of Object.keys(e.facets)) {
+        const current = assets.resolve(name, f);
+        io.out(`\n  ${version(name, f)}`);
+        for (const v of [...store.library.history(name, f)].reverse()) {
+          const now = current && "version" in current && current.version === v.version;
+          io.out(`    v${v.n} · ${v.at.slice(0, 10)}${now ? " · current" : ""} · ${brief(v.value)}`);
+        }
+      }
+    }
+    for (const p of lib.problems) io.err(`✗ ${p}`);
+    return lib.problems.length ? 1 : 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** A facet value in one line: words cut short, files as they are. */
+function brief(v: unknown): string {
+  const s = typeof v === "string" ? v : Object.entries((v ?? {}) as Record<string, unknown>).map(([k, x]) => `${k}: ${typeof x === "string" ? x : JSON.stringify(x)}`).join(" · ");
+  return s.length > 90 ? `${s.slice(0, 89)}…` : s;
+}
+
 async function adopt(args: string[], io: IO): Promise<number> {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { note: { type: "string" } } });
   const [id, step, base, from] = positionals;
@@ -468,6 +529,7 @@ function checkedProject(io: IO): Project {
   const project = loadProject(io.cwd);
   const errors = project.problems.filter((p) => p.severity === "error");
   if (errors.length) throw new UserError(`your recipes have problems:\n${formatProblems(errors)}`);
+  if (project.library.problems.length) throw new UserError(`your Library has problems:\n${project.library.problems.map((p) => `  ${p}`).join("\n")}`);
   return project;
 }
 
@@ -477,11 +539,19 @@ function scheduler(project: Project, graphId: string, rec: Recorder, store: Stor
   const jobs = new Jobs();
   const tools = fakeTools();
   const s = new Scheduler(graph, rec, executors(project, store, jobs, tools), project.graphs, {
-    assets: projectAssets(project.settings.library, realMedia(project).length === 0, project.root),
+    assets: assetsOf(project, store),
     tools,
     blobs: jsonBlobs(store),
   });
   return { s, jobs };
+}
+
+/** One view of the Library per command, so its files are hashed once however many runs it opens. */
+const assetsCache = new WeakMap<Project, ReturnType<typeof libraryAssets>>();
+function assetsOf(project: Project, store: Store): ReturnType<typeof libraryAssets> {
+  let a = assetsCache.get(project);
+  if (!a) assetsCache.set(project, (a = libraryAssets(project.library, project.root, store, realMedia(project).length === 0)));
+  return a;
 }
 
 /** Steps of each kind of media that Replicate runs, from `models:` in kriya.yaml. */

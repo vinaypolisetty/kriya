@@ -45,6 +45,7 @@ packages/engine/test/   vitest tests
 packages/store/src/
   blobs.ts         content-addressed blob store (sha256, write-once)
   events.ts        append-only event log on SQLite (better-sqlite3), schema migrations
+  library.ts       Library history: every facet version seen, numbered v1, v2…
   index.ts         openStore(dir): .kriya/kriya.db + .kriya/blobs/
 packages/adapters/src/
   jobs.ts          in-flight provider calls as tickets; settle() delivers them (D-53)
@@ -53,8 +54,9 @@ packages/adapters/src/
   duration.ts      length of a WAV or MP4 from its bytes
   schema.ts        a step's `out` types as a strict JSON Schema
 packages/cli/src/
-  commands.ts      init, run, status, inbox, decide, lock, rebuild, adopt (each a fresh process over .kriya/)
+  commands.ts      init, run, status, show, inbox, decide, lock, rebuild, retry, adopt, library (each a fresh process over .kriya/)
   project.ts       kriya.yaml + recipes folder
+  library.ts       library/ folder: entities, kinds, facet versions
   fake.ts          fake models and Library for keyless runs
 bin/kriya          runs the CLI from this checkout in your current folder
 examples/mohalla-mitra/ reference recipes (part, shot, voice)
@@ -63,7 +65,7 @@ docs/                   design docs (numbered)
 
 Planned packages (not created yet): `web` (review inbox).
 
-Local run data lives in `.kriya/` at the project root (gitignored): `kriya.db` and `blobs/`.
+Local run data lives in `.kriya/` at the project root (gitignored): `kriya.db` and `blobs/`. A project's Library lives in `library/` (one YAML file per entity).
 
 ## Non-negotiable design rules
 
