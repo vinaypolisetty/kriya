@@ -337,3 +337,13 @@ edges:
     expect(rec.state.status).toBe("completed");
   });
 });
+
+describe("Try again with a note (Day 23)", () => {
+  it("the note reaches the next try as its instruction, and is recorded on its versions", () => {
+    const exec = fakes({ draw: panels }, { pick: (c) => (c.visit === 1 ? { action: "retry", note: "Bheem is missing; draw him leaping" } : { action: "lock", selection: [c.shows!.at(-1)!.version] }) });
+    const { rec } = start(example("shot_recipe"), exec, { item: { id: "P3-04", animate: false } });
+    expect(exec.calls.draw!.map((c) => c.instruction)).toEqual([undefined, "Bheem is missing; draw him leaping"]);
+    expect(rec.state.nodes.draw!.versions["2.1"]!.instruction).toBe("Bheem is missing; draw him leaping");
+    expect(rec.state.nodes.draw!.versions["1.1"]!.instruction).toBeUndefined();
+  });
+});

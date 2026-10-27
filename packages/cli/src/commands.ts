@@ -375,7 +375,8 @@ async function decide(args: string[], io: IO): Promise<number> {
     const entries = await allInbox(project, store, io);
     const entry = /^\d+$/.test(item) ? entries[Number(item) - 1] : entries.find((e) => `${e.run}:${e.key}` === item);
     if (!entry) throw new UserError(`there's no inbox item '${item}'. See them with: kriya inbox`);
-    const { rec, s, jobs } = await openRun(project, store, entry.run, io);
+    // Your answer is recorded before anything else runs, so an automatic screen can't answer in your place.
+    const { rec, s, jobs } = await openRun(project, store, entry.run, io, { readOnly: true });
     // A button that needs a pick, with exactly one option on show: that's the pick.
     const needsPick = entry.buttons.find((b) => b.id === action)?.needs.includes("selection");
     const pick = values.pick ?? (needsPick && entry.shows.length === 1 ? entry.shows[0]!.version : undefined);
@@ -384,8 +385,10 @@ async function decide(args: string[], io: IO): Promise<number> {
       ...(pick ? { selection: [pick] } : {}),
       ...(values.note ? { note: values.note } : {}),
       ...(values.region ? { region: values.region } : {}),
+      by: "human",
     });
     io.out(`✓ ${action} on ${entry.key}`);
+    s.recover();
     await drive(s, jobs, io);
     report(io, rec.state, s.inbox());
     return 0;
@@ -742,8 +745,10 @@ export async function openRun(project: Project, store: Store, id: string, io: IO
   }
   const { s, jobs } = scheduler(project, rec.state.graph, rec, store);
   if (opts.readOnly) return { rec, s, jobs, changed };
-  // A sheet redrawn or a look reworded since the last command: the work that used it goes stale.
+  // A sheet redrawn or a look reworded since the last command: the work that used it goes stale;
+  // a look added since then lets the steps waiting for it go on.
   s.assetsChanged();
+  s.unblock();
   if (rec.state.status === "running") {
     try {
       s.recover();

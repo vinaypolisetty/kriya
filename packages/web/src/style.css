@@ -42,3 +42,29 @@ code { background: var(--line); padding: 1px 5px; border-radius: 4px; }
 .thumb.pass figcaption span:last-child { color: var(--pass); }
 .text { margin: 0; padding: 8px; font-size: 12px; max-height: 120px; overflow: auto; white-space: pre-wrap; }
 .suggested { margin: 8px 0 0; font-size: 13px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card { cursor: pointer; }
+.card:hover { border-color: var(--accent); }
+button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.link { border: none; background: none; padding: 0; color: var(--accent); }
+.screen-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.screen-head h2 { font-size: 18px; margin: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.candidate { text-align: left; padding: 0; overflow: hidden; border-width: 3px; display: flex; flex-direction: column; }
+.candidate.pass { border-color: color-mix(in srgb, var(--pass) 45%, var(--line)); }
+.candidate.fail { border-color: color-mix(in srgb, var(--fail) 45%, var(--line)); }
+.candidate.picked { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+.candidate img, .candidate video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: var(--bg); }
+.candidate audio { width: 100%; margin: 8px 0; }
+.candidate-foot { display: flex; justify-content: space-between; padding: 6px 10px; font-size: 13px; }
+.candidate.pass .verdict { color: var(--pass); }
+.candidate.fail .verdict { color: var(--fail); }
+.issues { margin: 0; padding: 0 10px 10px 26px; font-size: 12px; line-height: 1.4; }
+.fix { color: var(--accent); }
+.suggestion { display: flex; gap: 12px; align-items: center; margin: 14px 0; font-size: 14px; }
+.field { display: grid; gap: 6px; margin: 12px 0; font-size: 13px; color: var(--muted); }
+.field textarea, .field input { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.toast { background: color-mix(in srgb, var(--pass) 15%, var(--panel)); border: 1px solid var(--pass); padding: 8px 12px; border-radius: 8px; animation: fade 4s forwards; }
+@keyframes fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
