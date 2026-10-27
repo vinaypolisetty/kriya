@@ -14,11 +14,18 @@
  *                          from this server or a `kriya` command in another terminal
  *   GET  /*                the web app (packages/web, built)
  *
+ * With `lan`, it listens on the home network too, so a phone can review over
+ * wifi (D-38, D-68): a request from another device needs the pairing cookie,
+ * set by opening `/pair?token=<token>` once (the token lives in
+ * `.kriya/web-token`). This machine never needs it.
+ *
  * Reading never calls a model or writes. A decision is recorded at once; the
  * run then carries on in the background (models, tools), one at a time.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeError, sniff, suggestFix } from "@kriya/adapters";
@@ -42,12 +49,48 @@ export type WebItem = {
   suggested?: { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
   /** Its run is still working after a decision (models, tools); the item may change. */
   working: boolean;
+  /** Reviews of the same step across a for-each step's items share a batch (`part:per_shot[].pick`); `item` names this one (P3-04). */
+  batch: string;
+  item?: string;
 };
 
-export type Web = { url: string; close(): Promise<void> };
+export type Web = {
+  url: string;
+  /** With `lan`: this machine's addresses on the network, and the link that pairs a phone. */
+  lan?: { urls: string[]; pair: string };
+  close(): Promise<void>;
+};
 
-export async function startWeb(first: Project, opts: { port?: number; host?: string; io: IO }): Promise<Web> {
+export type WebOptions = {
+  port?: number;
+  io: IO;
+  /** Listen on the home network too; other devices need the pairing token. */
+  lan?: boolean;
+  /** Treat requests from this machine as paired (default true). Tests turn it off to act as a phone. */
+  trustLoopback?: boolean;
+};
+
+/** The pairing token, made once and kept in `.kriya/web-token`. */
+function pairingToken(root: string): string {
+  const file = join(root, ".kriya", "web-token");
+  if (existsSync(file)) return readFileSync(file, "utf8").trim();
+  mkdirSync(join(root, ".kriya"), { recursive: true });
+  const token = randomBytes(24).toString("base64url");
+  writeFileSync(file, `${token}\n`, { mode: 0o600 });
+  return token;
+}
+
+export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
   const store = openStore(join(first.root, ".kriya"));
+  const token = opts.lan ? pairingToken(first.root) : undefined;
+  const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  const local = (req: IncomingMessage) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
+  const paired = (req: IncomingMessage) => {
+    if (!token) return true; // only this machine can reach it
+    if (local(req) && opts.trustLoopback !== false) return true;
+    const cookie = /(?:^|;\s*)kriya_pair=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
+    return cookie !== undefined && same(decodeURIComponent(cookie), token);
+  };
   /** The project as it is now: recipes and the Library are files the creator edits while the server runs. */
   const current = (): Project => {
     const p = loadProject(first.root);
@@ -212,6 +255,15 @@ export async function startWeb(first: Project, opts: { port?: number; host?: str
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = new URL(req.url ?? "/", "http://kriya");
+    if (token && url.pathname === "/pair") {
+      if (!same(url.searchParams.get("token") ?? "", token)) return page(res, 403, "That pairing link isn't right. Open the one `kriya web --lan` printed (or scan its QR code) on this phone.");
+      res.writeHead(302, { "set-cookie": `kriya_pair=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 90}`, location: "/" });
+      return res.end();
+    }
+    if (!paired(req)) {
+      if (url.pathname.startsWith("/api/")) return json(res, 401, { error: "this device isn't paired: open the link `kriya web --lan` printed, or scan its QR code" });
+      return page(res, 401, "This phone isn't paired with kriya yet. On the computer running `kriya web --lan`, scan the QR code (or open the link it printed) with this phone.");
+    }
     if (req.method === "GET" && url.pathname === "/api/inbox") return json(res, 200, { project: first.settings.name, items: await inbox() });
     if (req.method === "GET" && url.pathname === "/api/runs") return json(res, 200, { project: first.settings.name, runs: await runs() });
     const graph = /^\/api\/runs\/([^/]+)\/graph$/.exec(url.pathname);
@@ -238,10 +290,17 @@ export async function startWeb(first: Project, opts: { port?: number; host?: str
     json(res, 404, { error: `no ${req.method} ${url.pathname}` });
   }
 
-  await new Promise<void>((ok) => server.listen(opts.port ?? 4317, opts.host ?? "127.0.0.1", ok));
+  await new Promise<void>((ok) => server.listen(opts.port ?? 4317, opts.lan ? "0.0.0.0" : "127.0.0.1", ok));
   const addr = server.address() as { port: number };
+  const lanUrls = opts.lan
+    ? Object.values(networkInterfaces())
+        .flat()
+        .filter((i) => i && i.family === "IPv4" && !i.internal)
+        .map((i) => `http://${i!.address}:${addr.port}`)
+    : [];
   return {
-    url: `http://${opts.host ?? "127.0.0.1"}:${addr.port}`,
+    url: `http://127.0.0.1:${addr.port}`,
+    ...(token ? { lan: { urls: lanUrls, pair: `${lanUrls[0] ?? `http://127.0.0.1:${addr.port}`}/pair?token=${token}` } } : {}),
     async close() {
       clearInterval(ticker);
       for (const c of clients) c.end();
@@ -269,6 +328,8 @@ function web(e: Entry, working: boolean, typeOf: (hash: string) => string | unde
       return { version: x.version, value: x.value, ...(hash && type ? { media: { url: `/api/media/${hash}`, type } } : {}), ...(x.verdict ? { verdict: x.verdict } : {}) };
     }),
     ...(s ? { suggested: s } : {}),
+    batch: `${e.run}:${e.key.replace(/\[[^\]]*\]/g, "[]")}`,
+    ...(/\[([^\]]+)\][^[]*$/.test(e.key) ? { item: /\[([^\]]+)\][^[]*$/.exec(e.key)![1]! } : {}),
   };
 }
 
@@ -336,6 +397,12 @@ function serveApp(path: string, res: ServerResponse) {
   const target = file.startsWith(APP) && existsSync(file) && statSync(file).isFile() ? file : join(APP, "index.html");
   res.writeHead(200, { "content-type": TYPES[extname(target)] ?? "application/octet-stream" });
   res.end(readFileSync(target));
+}
+
+/** A plain page for a person (pairing), in the app's look. */
+function page(res: ServerResponse, status: number, text: string) {
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8" });
+  res.end(`<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>kriya</title><body style="font-family:system-ui,sans-serif;background:#f5f4f0;color:#1c1b19;padding:32px;max-width:520px;margin:auto;line-height:1.5"><h1 style="font-size:22px">kriya</h1><p>${text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]!).replace(/`([^`]+)`/g, "<code>$1</code>")}</p></body>`);
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {

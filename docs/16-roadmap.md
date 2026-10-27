@@ -58,7 +58,7 @@ Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya r
 | 24 | Thu Nov 5 | Run graph ✅ (pulled forward from Day 25, D-67): home is the run as its recipe's live graph in the mocks' look; step panel with versions, verdicts and locks; for-each strips you click into; the inbox and review screen restyled | A whole Part at a glance |
 | 25 | Fri Nov 6 | Region tool (crop, local edit) and audio players; plan-and-cost card | Crop and approve a line in the UI |
 | 26 | Sat Nov 7 | Version tree panel (branch, switch); read-only Library | Switch branches from the UI |
-| 27 | Sun Nov 8 | Phone layout; batch review; LAN access with a pairing token (D-38) | Review a batch on a phone over home wifi |
+| 27 | Sun Nov 8 | Phone layout; batch review; LAN access with a pairing token ✅ (D-38, D-68), pulled forward: `kriya web --lan` with a QR code; the mocks' review screen; a batch steps through every shot's pick. Checked Oct 25 in Chrome over the LAN address (unpaired → paired → three shots locked in a row); the phone itself is the creator's check | Review a batch on a phone over home wifi |
 | 28 | Mon Nov 9 | Buffer + write-up: locks and stale tracking | Draft saved |
 
 ### Week 5 · Two real use cases (Nov 10–16)
