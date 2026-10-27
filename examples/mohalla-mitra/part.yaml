@@ -12,8 +12,8 @@ types:
   shot:
     fields:
       id: text
-      characters: list<text>
-      place: text
+      characters: list<library.character>   # names from the Library, exactly: a look and a voice exist for each
+      place: library.place
       action: text
       lines: list<line>
       animate: boolean
@@ -21,7 +21,7 @@ types:
   line:
     fields:
       id: text
-      speaker: text
+      speaker: library.character
       hinglish: text
       emotion: text
       caption_en: text
@@ -38,6 +38,7 @@ nodes:
       Turn these pages into 10 to 13 shots named P{{inputs.part_no}}-NN.
       Mark the 4 shots with the biggest motion as animate.
       Give each shot a music cue: main, clue, villain or chase.
+      Use the Library's names for characters and places; put time of day, crowds and details in the action.
       Write a voice table and an end-card hook.
     uses: [inputs.story_pages, series.rules, series.cast]
     out:

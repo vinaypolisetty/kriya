@@ -3,9 +3,12 @@
  * with no keys and no cost. Outputs are made up from each step's declared
  * `out` types, so the recipe's own conditions and maps still work.
  */
-import type { Executors, Graph, Node, StepContext, Tools } from "@kriya/engine";
+import { libraryKind, type Executors, type Graph, type Node, type StepContext, type Tools } from "@kriya/engine";
 
-export function fakeExecutors(graphs: Graph[]): Executors {
+/** The Library's names by kind; fake outputs use real names where a field is typed `library.<kind>`. */
+type Names = (kind: string) => string[];
+
+export function fakeExecutors(graphs: Graph[], names: Names = () => []): Executors {
   const graphOf = (node: Node) => graphs.find((g) => g.nodes.includes(node));
   const exec: Executors = {
     produce(node, ctx) {
@@ -14,7 +17,7 @@ export function fakeExecutors(graphs: Graph[]): Executors {
       if (Object.keys(out).length === 0) return Array.from({ length: n }, () => ({ done: true }));
       const types = graphOf(node)?.types ?? {};
       return Array.from({ length: n }, (_, i) =>
-        Object.fromEntries(Object.entries(out).map(([field, type]) => [field, fakeValue(type, field, types, ctx, i + 1)])),
+        Object.fromEntries(Object.entries(out).map(([field, type]) => [field, fakeValue(type, field, types, ctx, i + 1, 1, names)])),
       );
     },
     // People answer through `kriya decide`: every screen waits.
@@ -42,15 +45,21 @@ export function fakeTools(): Tools {
   };
 }
 
-function fakeValue(type: string, field: string, types: Graph["types"], ctx: StepContext, candidate: number, index = 1): unknown {
+function fakeValue(type: string, field: string, types: Graph["types"], ctx: StepContext, candidate: number, index = 1, names: Names = () => []): unknown {
+  const kind = libraryKind(type);
+  if (kind) {
+    const known = names(kind);
+    const pick = (i: number) => (known.length ? known[(i - 1) % known.length]! : `${kind} ${i}`);
+    return type.startsWith("list<") ? (known.length ? [pick(index), pick(index + 1)].filter((x, i, a) => a.indexOf(x) === i) : []) : pick(index);
+  }
   const list = /^list<(.+)>$/.exec(type);
   if (list) {
     const inner = list[1]!;
     if (!types[inner]) return [];
     const prefix = inner[0]!.toUpperCase();
-    return [1, 2, 3].map((i) => fakeRecord(types, inner, ctx, candidate, i, `${prefix}${i}`));
+    return [1, 2, 3].map((i) => fakeRecord(types, inner, ctx, candidate, i, `${prefix}${i}`, names));
   }
-  if (types[type]) return fakeRecord(types, type, ctx, candidate, index, `${type[0]!.toUpperCase()}${index}`);
+  if (types[type]) return fakeRecord(types, type, ctx, candidate, index, `${type[0]!.toUpperCase()}${index}`, names);
   switch (type) {
     case "text": return `${field} (fake) for ${ctx.key}`;
     case "number": return field === "seconds" ? 4 : index;
@@ -60,8 +69,8 @@ function fakeValue(type: string, field: string, types: Graph["types"], ctx: Step
   }
 }
 
-function fakeRecord(types: Graph["types"], type: string, ctx: StepContext, candidate: number, index: number, id: string): Record<string, unknown> {
+function fakeRecord(types: Graph["types"], type: string, ctx: StepContext, candidate: number, index: number, id: string, names: Names): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(types[type]!.fields).map(([f, t]) => [f, f === "id" ? id : t.startsWith("list<") && !types[t.slice(5, -1)] ? [] : fakeValue(t, f, types, ctx, candidate, index)]),
+    Object.entries(types[type]!.fields).map(([f, t]) => [f, f === "id" ? id : t.startsWith("list<") && !types[t.slice(5, -1)] && !libraryKind(t) ? [] : fakeValue(t, f, types, ctx, candidate, index, names)]),
   );
 }

@@ -13,13 +13,20 @@ const Id = z
   .string()
   .regex(/^[a-z][a-z0-9_]*$/, "use lower_snake_case: letters, digits and _, starting with a letter");
 
-/** A field type: text, number, boolean, image, audio, video, a declared type, or list<...> of any of those. */
+/**
+ * A field type: text, number, boolean, image, audio, video, a declared type,
+ * `library.<kind>` (the name of something in the Library, e.g. `library.place`),
+ * or list<...> of any of those.
+ */
 export const TypeRef = z
   .string()
-  .regex(/^(list<)?[a-z][a-z0-9_]*(>)?$/, "a type is a name like text or image, or list<name>")
+  .regex(/^(list<)?(library\.)?[a-z][a-z0-9_]*(>)?$/, "a type is a name like text or image, library.place, or list<name>")
   .refine((s) => s.startsWith("list<") === s.endsWith(">"), "unbalanced list<...>");
 
 export const PRIMITIVE_TYPES = ["text", "number", "boolean", "image", "audio", "video", "file", "json"] as const;
+
+/** The Library kind a field names (`library.place` → "place"), or undefined for any other type. */
+export const libraryKind = (type: string): string | undefined => /^(?:list<)?library\.([a-z][a-z0-9_]*)>?$/.exec(type)?.[1];
 
 const Fields = z.record(Id, TypeRef);
 

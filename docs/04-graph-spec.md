@@ -36,7 +36,7 @@ edges: [ ... ]
 
 ## Types
 
-`text`, `number`, `boolean`, `image`, `audio`, `video`, `file`, `json`, any declared type name, or `list<…>` of any of those. Undeclared types are a validation error with a suggestion.
+`text`, `number`, `boolean`, `image`, `audio`, `video`, `file`, `json`, any declared type name, `library.<kind>` (the name of something in the Library, e.g. `place: library.place`, `characters: list<library.character>`), or `list<…>` of any of those. Undeclared types are a validation error with a suggestion. A model writing a `library.<kind>` field can only use names that kind has in the Library (its answer's schema lists them), so a shot list can't invent "Reservoir valve, morning" when the Library has "Reservoir valve" ([D-70](17-decisions.md)).
 
 ## References
 

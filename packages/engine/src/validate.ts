@@ -68,6 +68,7 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
   const typeNames = new Set(Object.keys(g.types));
   const checkType = (t: string, path: Issue["path"]) => {
     const base = t.replace(/^list<|>$/g, "");
+    if (base.startsWith("library.")) return; // a Library kind; the project checks it exists
     const primitives = ["text", "number", "boolean", "image", "audio", "video", "file", "json"];
     if (!primitives.includes(base) && !typeNames.has(base)) {
       err(path, `type '${base}' isn't declared${suggest(base, [...primitives, ...typeNames])}`);

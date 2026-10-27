@@ -12,7 +12,7 @@ import { dirname, join, resolve } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
 import { REPLICATE_CAPABILITIES } from "@kriya/adapters";
-import { loadDir, type Graph, type Problem } from "@kriya/engine";
+import { libraryKind, loadDir, suggest, type Graph, type Problem } from "@kriya/engine";
 import { loadLibrary, type Library } from "./library.js";
 
 export const ProjectFile = z
@@ -128,7 +128,14 @@ export function loadProject(from: string): Project {
   const dir = join(root, parsed.data.recipes);
   if (!existsSync(dir)) throw new UserError(`the recipes folder '${parsed.data.recipes}' doesn't exist`);
   const { graphs, problems } = loadDir(dir);
-  return { root, settings: parsed.data, graphs, problems, library: loadLibrary(root, parsed.data.kinds) };
+  const library = loadLibrary(root, parsed.data.kinds);
+  // A recipe field typed `library.<kind>` needs that kind (when the project names its kinds).
+  const kinds = Object.keys(parsed.data.kinds);
+  if (kinds.length) {
+    const used = new Set(graphs.flatMap((g) => [...Object.values(g.types).flatMap((t) => Object.values(t.fields)), ...g.nodes.flatMap((n) => ("out" in n ? Object.values(n.out) : []))]).flatMap((t) => libraryKind(t) ?? []));
+    for (const k of used) if (!kinds.includes(k)) library.problems.push(`a recipe uses library.${k}, and there's no kind '${k}'${suggest(k, kinds)} Kinds: ${kinds.join(", ")} (kinds: in kriya.yaml)`);
+  }
+  return { root, settings: parsed.data, graphs, problems, library };
 }
 
 /** An error meant for the person at the terminal: printed as-is, no stack trace. */
