@@ -21,3 +21,4 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm validate:examples
+      - run: pnpm --filter @kriya/web build

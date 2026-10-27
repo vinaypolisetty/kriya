@@ -23,6 +23,7 @@ pnpm install
 pnpm test                 # vitest, all packages
 pnpm typecheck            # tsc --noEmit, all packages
 pnpm validate:examples    # validate every recipe in examples/
+pnpm --filter @kriya/web build   # the browser inbox, served by `kriya web`
 bin/kriya help            # the CLI (docs/cli.md)
 ```
 
@@ -67,7 +68,8 @@ examples/mohalla-mitra/ reference recipes (part, shot, voice)
 docs/                   design docs (numbered)
 ```
 
-Planned packages (not created yet): `web` (review inbox).
+packages/cli/src/web.ts   `kriya web`: the inbox API (node:http), media, server-sent events (D-65)
+packages/web/            the review inbox in a browser (Vite + React), served by `kriya web`
 
 Local run data lives in `.kriya/` at the project root (gitignored): `kriya.db` and `blobs/`. A project's Library lives in `library/` (one YAML file per entity).
 
