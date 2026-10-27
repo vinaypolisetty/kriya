@@ -1,5 +1,6 @@
 /** One step of a run, beside the graph: its state, why, what it made, and a way in if it's waiting on you. */
-import type { GNode } from "./api";
+import { useState } from "react";
+import { retry, type GNode } from "./api";
 import { statusOf } from "./Graph";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
@@ -21,6 +22,7 @@ export function NodePanel({ n, run, onClose, onOpenItem }: { n: GNode; run: stri
         <a className="button primary" href={`#/review/${encodeURIComponent(`${run}:${n.key}`)}`}>Review now</a>
       )}
       {n.failure && <p className="note fail">{n.failure}</p>}
+      {n.status === "failed" && <RetryButton run={run} n={n} />}
       {n.blockedReason && <p className="note fail">{n.blockedReason}</p>}
       {n.staleReason && <p className="note">Stale: {n.staleReason}</p>}
       {n.locked && (
@@ -80,5 +82,32 @@ export function NodePanel({ n, run, onClose, onOpenItem }: { n: GNode; run: stri
         </section>
       )}
     </aside>
+  );
+}
+
+/** Try a failed step again; a for-each step tries again every item that failed. */
+function RetryButton({ run, n }: { run: string; n: GNode }) {
+  const [state, setState] = useState<"idle" | "sending" | "sent" | string>("idle");
+  const failedItems = n.items?.filter((i) => i.status === "failed").length;
+  return (
+    <>
+      <button
+        type="button"
+        className="primary"
+        disabled={state === "sending" || state === "sent"}
+        onClick={async () => {
+          setState("sending");
+          try {
+            await retry(run, n.key);
+            setState("sent");
+          } catch (e) {
+            setState(e instanceof Error ? e.message : String(e));
+          }
+        }}
+      >
+        {state === "sent" ? "Trying again…" : failedItems ? `Try again: ${failedItems} failed item${failedItems === 1 ? "" : "s"}` : "Try again"}
+      </button>
+      {state !== "idle" && state !== "sending" && state !== "sent" && <p className="note fail">{state}</p>}
+    </>
   );
 }

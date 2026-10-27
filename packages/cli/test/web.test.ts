@@ -163,6 +163,18 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
     }
   });
 
+  it("retry from the browser: plain refusals for a step that hasn't failed or a request that names none", async () => {
+    const { web } = await waitingShot();
+    try {
+      const r = await fetch(`${web.url}/api/retry`, { method: "POST", body: JSON.stringify({ run: "shot", key: "draw" }) });
+      expect(r.status).toBe(409);
+      expect(((await r.json()) as { error: string }).error).toBe("'draw' hasn't failed (it's completed), so there's nothing to retry");
+      expect((await fetch(`${web.url}/api/retry`, { method: "POST", body: "{}" })).status).toBe(400);
+    } finally {
+      await web.close();
+    }
+  });
+
   it("media from the store comes back with its type", async () => {
     const { cwd, web } = await waitingShot();
     try {
