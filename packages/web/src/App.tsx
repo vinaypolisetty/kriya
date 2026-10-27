@@ -4,19 +4,22 @@
  * details on the right. "Waiting for you" opens the inbox; a waiting step
  * opens its review screen.
  *
- * Routes live in the hash: #/run/<id>[/<item>], #/inbox, #/review/<run>:<step>.
+ * Routes live in the hash: #/run/<id>[/<item>], #/inbox, #/review/<run>:<step>,
+ * #/library[/<name>].
  */
 import { useEffect, useState } from "react";
 import { useLive, useLiveFlag, type Item, type Run, type RunGraph, type Shown } from "./api";
 import { Graph, statusOf } from "./Graph";
+import { LibraryPage } from "./Library";
 import { NodePanel } from "./NodePanel";
 import { Screen } from "./Screen";
 
-type Route = { page: "run"; run?: string; at: string } | { page: "inbox" } | { page: "review"; id: string };
+type Route = { page: "run"; run?: string; at: string } | { page: "inbox" } | { page: "review"; id: string } | { page: "library"; name?: string };
 
 function parse(): Route {
   const [page, a = "", b = ""] = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   if (page === "inbox") return { page: "inbox" };
+  if (page === "library") return { page: "library", ...(a ? { name: a } : {}) };
   if (page === "review" && a) return { page: "review", id: a };
   return { page: "run", ...(page === "run" && a ? { run: a } : {}), at: b };
 }
@@ -51,6 +54,18 @@ export function App() {
               <b>{runId}</b>
             </>
           )}
+          {route.page === "library" && (
+            <>
+              <span aria-hidden="true">›</span>
+              {route.name ? <a href="#/library">Library</a> : <b>Library</b>}
+              {route.name && (
+                <>
+                  <span aria-hidden="true">›</span>
+                  <b>{route.name}</b>
+                </>
+              )}
+            </>
+          )}
           {route.page === "inbox" && (
             <>
               <span aria-hidden="true">›</span>
@@ -59,6 +74,7 @@ export function App() {
           )}
         </nav>
         <div className="top-right">
+          <a className={route.page === "library" ? "nav-link on" : "nav-link"} href="#/library">Library</a>
           <span className="mono muted">Spent {usd(spent)}</span>
           <a className={waiting ? "waiting-chip" : "waiting-chip none"} href="#/inbox">
             {waiting ? `${waiting} waiting for you` : "Nothing waiting"}
@@ -69,7 +85,9 @@ export function App() {
       {runs.error && <p className="error">{runs.error}</p>}
       {toast && <p className="toast" onAnimationEnd={() => setToast(undefined)}>✓ {toast}</p>}
 
-      {route.page === "inbox" ? (
+      {route.page === "library" ? (
+        <LibraryPage {...(route.name ? { name: route.name } : {})} />
+      ) : route.page === "inbox" ? (
         <InboxPage />
       ) : route.page === "review" ? (
         <ReviewPage id={route.id} onToast={setToast} />

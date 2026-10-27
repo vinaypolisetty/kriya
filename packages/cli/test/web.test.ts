@@ -201,6 +201,77 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
   });
 });
 
+describe("versions and branches from the browser (Day 26, D-71)", () => {
+  const post = async (web: { url: string }, path: string, body: unknown) => {
+    const r = await fetch(web.url + path, { method: "POST", body: JSON.stringify(body) });
+    return { status: r.status, body: (await r.json()) as { error?: string } };
+  };
+  const shown = async (web: { url: string }) => (await get(web, "/api/inbox")).body.items[0]!.shows.map((s) => s.version);
+
+  it("branching off a version and switching back changes what the review shows; the graph has the tree", async () => {
+    const { web } = await waitingShot();
+    try {
+      expect((await post(web, "/api/branch", { run: "shot", key: "draw", name: "darker", from: "1.2" })).status).toBe(200);
+      expect(await shown(web)).toEqual(["1.2"]);
+      expect((await get(web, "/api/inbox")).body.items[0]!.branch).toBe("darker");
+      const g = (await (await fetch(`${web.url}/api/runs/shot/graph`)).json()) as { nodes: { id: string; branch?: string; branches?: unknown; versions: { id: string; branch: string; parents: string[] }[] }[] };
+      const draw = g.nodes.find((n) => n.id === "draw")!;
+      expect(draw).toMatchObject({ branch: "darker", branches: [{ name: "main" }, { name: "darker", from: "1.2" }] });
+      expect(draw.versions[0]).toMatchObject({ id: "1.1", branch: "main", parents: [] });
+
+      expect((await post(web, "/api/switch", { run: "shot", key: "draw", branch: "main" })).status).toBe(200);
+      expect(await shown(web)).toEqual(["1.1", "1.2", "1.3"]);
+      expect((await get(web, "/api/inbox")).body.items[0]!.branch).toBeUndefined();
+    } finally {
+      await web.close();
+    }
+  });
+
+  it("plain refusals: a branch that exists, one that doesn't, a bad name, no version to start from", async () => {
+    const { web } = await waitingShot();
+    try {
+      await post(web, "/api/branch", { run: "shot", key: "draw", name: "darker", from: "1.2" });
+      expect(await post(web, "/api/branch", { run: "shot", key: "draw", name: "darker", from: "1.1" })).toEqual({ status: 409, body: { error: expect.stringContaining("already a branch called 'darker'") } });
+      expect(await post(web, "/api/switch", { run: "shot", key: "draw", branch: "brighter" })).toEqual({ status: 409, body: { error: expect.stringContaining("no branch called 'brighter'") } });
+      expect((await post(web, "/api/branch", { run: "shot", key: "draw", name: "Darker Sky", from: "1.1" })).body.error).toMatch(/lowercase letters/);
+      expect((await post(web, "/api/branch", { run: "shot", key: "draw", name: "warm" })).status).toBe(400);
+      expect(await shown(web)).toEqual(["1.2"]); // nothing above changed anything
+    } finally {
+      await web.close();
+    }
+  });
+});
+
+describe("the Library, read-only, in the browser (Day 26)", () => {
+  it("lists who's in it with each facet's version, files as media, history newest first, and what's missing", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+      writeFileSync(join(cwd, "mitra.png"), png);
+      writeFileSync(join(cwd, "library", "mitra.yaml"), "name: Mitra\nkind: character\nlook: { image: mitra.png, words: a thin bald man }\nvoice: Charon\n");
+      writeFileSync(join(cwd, "library", "bheem.yaml"), "name: Bheem\nkind: character\nlook: { image: sheets/bheem.png }\n");
+      await get(web, "/api/library");
+      writeFileSync(join(cwd, "library", "mitra.yaml"), "name: Mitra\nkind: character\nlook: { image: mitra.png, words: a thin bald man }\nvoice: Achird\n");
+
+      const r = await fetch(`${web.url}/api/library`);
+      const body = (await r.json()) as { entities: { name: string; needs: string[]; facets: { facet: string; n?: number; missing?: string[]; value: unknown; history: { n: number; current: boolean; value: unknown }[] }[] }[] };
+      const mitra = body.entities.find((e) => e.name === "Mitra")!;
+      expect(mitra.needs).toEqual(["speech", "rules"]);
+      const look = mitra.facets.find((f) => f.facet === "look")!;
+      expect(look).toMatchObject({ n: 1, value: { image: { file: "mitra.png", type: "image/png", url: expect.stringMatching(/^\/api\/media\/[0-9a-f]{64}$/) }, words: "a thin bald man" } });
+      expect((await fetch(web.url + (look.value as { image: { url: string } }).image.url)).status).toBe(200);
+      expect(mitra.facets.find((f) => f.facet === "voice")!.history).toEqual([
+        expect.objectContaining({ n: 2, current: true, value: "Achird" }),
+        expect.objectContaining({ n: 1, current: false, value: "Charon" }),
+      ]);
+      const bheem = body.entities.find((e) => e.name === "Bheem")!.facets[0]!;
+      expect(bheem).toMatchObject({ facet: "look", missing: ["sheets/bheem.png"], value: { image: { file: "sheets/bheem.png", missing: true } } });
+    } finally {
+      await web.close();
+    }
+  });
+});
+
 describe("kriya web --lan: a phone pairs once, everyone else is turned away (D-68)", () => {
   it("needs the pairing cookie from another device; the pairing link sets it; the token survives a restart", async () => {
     const { cwd, web: local } = await waitingShot();

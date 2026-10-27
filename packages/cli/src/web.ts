@@ -11,6 +11,10 @@
  *   GET  /api/media/<sha>  an image, clip or voice line from the blob store
  *   POST /api/decide       press a button: { run, key, action, selection?, note?, region? }
  *   POST /api/retry        try a failed step again: { run, key } (a for-each step retries its failed items)
+ *   POST /api/branch       branch off from a version: { run, key, name, from } (Day 26, D-71)
+ *   POST /api/switch       switch a step to another of its branches: { run, key, branch }
+ *   GET  /api/library      the Library, read-only: who's in it by kind, each facet's current version
+ *                          (files as media), its history, and what each is missing
  *   GET  /api/events       server-sent events: `changed` whenever any run's log grows,
  *                          from this server or a `kriya` command in another terminal
  *   GET  /*                the web app (packages/web, built)
@@ -27,12 +31,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
-import { extname, join, normalize } from "node:path";
+import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeError, sniff, suggestFix } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
 import type { RunState } from "@kriya/engine";
 import { allInbox, drive, openRun, type Entry, type IO } from "./commands.js";
+import { libraryAssets, MEDIA } from "./library.js";
 import { loadProject, type Project } from "./project.js";
 
 /** The built web app. */
@@ -51,6 +56,8 @@ export type WebItem = {
   beside: Entry["beside"];
   shows: { version: string; value: unknown; media?: { url: string; type: string }; verdict?: Entry["shows"][number]["verdict"] }[];
   suggested?: { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
+  /** The branch of the step on show, when it's not main: the review shows only that branch's candidates (D-71). */
+  branch?: string;
   /** Its run is still working after a decision (models, tools); the item may change. */
   working: boolean;
   /** Reviews of the same step across a for-each step's items share a batch (`part:per_shot[].pick`); `item` names this one (P3-04). */
@@ -123,7 +130,11 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     const entries = await allInbox(project, store, quiet, { readOnly: true });
     const states = new Map<string, RunState>();
     for (const e of entries) if (!states.has(e.run)) states.set(e.run, (await openRun(project, store, e.run, quiet, { readOnly: true })).rec.state);
-    return entries.map((e) => web(e, busy.has(e.run), typeOf, estimates(project, states.get(e.run)!, e.key)));
+    return entries.map((e) => {
+      const item = web(e, busy.has(e.run), typeOf, estimates(project, states.get(e.run)!, e.key));
+      const branch = shownBranch(project, states.get(e.run)!, e.key);
+      return branch && branch !== "main" ? { ...item, branch } : item;
+    });
   };
 
   const runs = async () => {
@@ -184,7 +195,7 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
         ? Object.values(st.versions).map((v) => {
             const t = thumb(v.output);
             const sum = verdictOf(v.verdicts);
-            return { id: v.id, costUsd: v.costUsd, ...(t ? { thumb: t } : {}), ...(sum ? { verdict: sum } : {}), ...(v.madeBy ? { madeBy: v.madeBy } : {}), ...(v.instruction ? { instruction: v.instruction } : {}), ...(v.model ? { model: v.model } : {}) };
+            return { id: v.id, costUsd: v.costUsd, branch: v.branch, parents: v.parents, ...(t ? { thumb: t } : {}), ...(sum ? { verdict: sum } : {}), ...(v.madeBy ? { madeBy: v.madeBy } : {}), ...(v.instruction ? { instruction: v.instruction } : {}), ...(v.model ? { model: v.model } : {}) };
           })
         : [];
       return {
@@ -197,6 +208,7 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
         waitingOnYou: waiting.has(key),
         costUsd: st?.costUsd ?? 0,
         versions,
+        ...(st ? { branch: st.branch, branches: Object.entries(st.branches).map(([name, b]) => ({ name, ...(b.from ? { from: b.from } : {}) })) } : {}),
         ...(st?.locked ? { locked: st.locked } : {}),
         ...(st?.failure ? { failure: st.failure } : {}),
         ...(st?.staleReason ? { staleReason: st.staleReason } : {}),
@@ -235,6 +247,55 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
       () => undefined,
     );
     await started;
+  };
+
+  /** Branching and switching record one event each; nothing runs until a button is pressed on the branch. */
+  const branch = async (body: { run?: unknown; key?: unknown; name?: unknown; from?: unknown; branch?: unknown }) => {
+    const { run, key } = body;
+    if (typeof run !== "string" || typeof key !== "string") throw new BadRequest("say which run and step: { run, key }");
+    const done = queue.then(async () => {
+      const { s } = await openRun(current(), store, run, quiet, { readOnly: true });
+      if (typeof body.branch === "string") return s.switchBranch(key, body.branch);
+      if (typeof body.name !== "string" || typeof body.from !== "string") throw new BadRequest("say what to call the branch and which version it starts from: { name, from }");
+      s.branch(key, body.name, body.from);
+    });
+    queue = done.catch(() => undefined);
+    await done;
+  };
+
+  /** The Library as it is on disk now, with every version kriya has seen of each facet. */
+  const library = () => {
+    const project = current();
+    const assets = libraryAssets(project.library, project.root, store, false);
+    const kinds = project.settings.kinds;
+    /** A facet value for the browser: each file it names as media from the store, or missing. */
+    const media = (v: unknown, files: { path: string; hash: string }[]): unknown => {
+      if (typeof v === "string" && MEDIA.test(v)) {
+        const f = files.find((x) => x.path === relative(project.root, resolve(project.root, v)));
+        const type = f ? typeOf(f.hash) : undefined;
+        return f && type ? { file: v, url: `/api/media/${f.hash}`, type } : { file: v, missing: true };
+      }
+      if (Array.isArray(v)) return v.map((x) => media(x, files));
+      if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, media(x, files)]));
+      return v;
+    };
+    return [...project.library.entities.values()].map((e) => ({
+      name: e.name,
+      ...(e.kind ? { kind: e.kind } : {}),
+      file: e.file,
+      needs: (kinds[e.kind ?? ""] ?? []).filter((f) => !(f in e.facets)),
+      facets: Object.keys(e.facets).map((facet) => {
+        const r = assets.resolve(e.name, facet)!;
+        const history = store.library.history(e.name, facet);
+        const files = "files" in r ? r.files : [];
+        return {
+          facet,
+          value: media(e.facets[facet], files),
+          ...("missing" in r ? { missing: r.missing } : { n: history.find((h) => h.version === r.version)!.n }),
+          history: [...history].reverse().map((h) => ({ n: h.n, at: h.at, value: h.value, current: "version" in r && h.version === r.version })),
+        };
+      }),
+    }));
   };
 
   const decide = async (body: { run?: unknown; key?: unknown; action?: unknown; selection?: unknown; note?: unknown; region?: unknown }) => {
@@ -304,6 +365,13 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
       await retry(JSON.parse((await readBody(req)) || "{}"));
       return json(res, 200, { ok: true });
     }
+    if (req.method === "POST" && (url.pathname === "/api/branch" || url.pathname === "/api/switch")) {
+      const body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
+      if (url.pathname === "/api/switch" && typeof body.branch !== "string") throw new BadRequest("say which branch to switch to: { run, key, branch }");
+      await branch(url.pathname === "/api/switch" ? body : { ...body, branch: undefined });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "GET" && url.pathname === "/api/library") return json(res, 200, { project: first.settings.name, kinds: first.settings.kinds, entities: library() });
     if (req.method === "POST" && url.pathname === "/api/decide") {
       await decide(JSON.parse((await readBody(req)) || "{}"));
       return json(res, 200, { items: await inbox() });
@@ -347,6 +415,27 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
   };
 }
 
+/** The recipe a step key is in, walking down for-each items: `per_shot[P3-04].pick` → shot_recipe and `per_shot[P3-04].`. */
+function recipeOf(project: Project, state: RunState, key: string) {
+  let g = project.graphs.find((x) => x.graph === state.graph);
+  let prefix = "";
+  for (const [, mapId, item] of key.matchAll(/(\w+)\[([^\]]+)\]\./g)) {
+    const map = g?.nodes.find((n) => n.id === mapId);
+    if (!map || map.kind !== "map") return undefined;
+    prefix += `${mapId}[${item}].`;
+    g = project.graphs.find((x) => x.graph === map.graph);
+  }
+  return g ? { g, prefix } : undefined;
+}
+
+/** Which branch a screen's candidates come from: the branch of the step it shows. */
+function shownBranch(project: Project, state: RunState, key: string): string | undefined {
+  const r = recipeOf(project, state, key);
+  const screen = r?.g.nodes.find((n) => n.id === key.slice(r.prefix.length));
+  const shown = screen?.kind === "screen" ? screen.show?.split(".")[0] : undefined;
+  return shown ? state.nodes[r!.prefix + shown]?.branch : undefined;
+}
+
 /** An inbox entry for the browser: blobs as media URLs, the suggested fix, and whether its run is still working. */
 /**
  * What each of a screen's buttons will cost, before you press it: the step its
@@ -354,16 +443,9 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
  * far. A step that hasn't run yet has no estimate (rather than a guess).
  */
 export function estimates(project: Project, state: RunState, key: string): Record<string, number> {
-  // Walk down for-each items to the recipe the screen is in: `per_shot[P3-04].pick` → shot_recipe, `per_shot[P3-04].`.
-  let g = project.graphs.find((x) => x.graph === state.graph);
-  let prefix = "";
-  for (const [, mapId, item] of key.matchAll(/(\w+)\[([^\]]+)\]\./g)) {
-    const map = g?.nodes.find((n) => n.id === mapId);
-    if (!map || map.kind !== "map") return {};
-    prefix += `${mapId}[${item}].`;
-    g = project.graphs.find((x) => x.graph === map.graph);
-  }
-  if (!g) return {};
+  const r = recipeOf(project, state, key);
+  if (!r) return {};
+  const { g, prefix } = r;
   const screenId = key.slice(prefix.length);
   const out: Record<string, number> = {};
   for (const e of g.edges) {

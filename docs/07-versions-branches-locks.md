@@ -40,7 +40,7 @@ story:
   branching: allowed    # conversational: branch when the user wants
 ```
 
-Branch operations: **branch off** (save current path, copy its conversation and context to this point, start a new named path), **switch** (each path keeps its history), **compare** (latest of each side by side), **adopt** (borrow from another path into this one), **lock** (one path's version becomes the output; the others are **parked**: kept in history, out of context).
+Branch operations: **branch off** (save current path, copy its conversation and context to this point, start a new named path), **switch** (each path keeps its history; the review shows the branch you're on, [D-71](17-decisions.md)), **compare** (latest of each side by side), **adopt** (borrow from another path into this one), **lock** (one path's version becomes the output; the others are **parked**: kept in history, out of context).
 
 Branches are cheap: they store only what changes after the branch point.
 

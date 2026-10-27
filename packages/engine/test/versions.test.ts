@@ -186,6 +186,33 @@ describe("branches", () => {
     expect(rec.state.nodes.draw?.locked).toEqual({ version: "2.1", by: "human", why: "the darker one" });
   });
 
+  it("the review shows the branch you're on: a new one starts at the version it came from (D-71)", () => {
+    const { s } = paused();
+    const shown = () => s.inbox().find((i) => i.key === "pick")!.shows.map((x) => x.version);
+    expect(shown()).toEqual(["1.1", "1.2", "1.3"]);
+    s.branch("draw", "darker", "1.2");
+    expect(shown()).toEqual(["1.2"]);
+    s.answer("pick", { action: "edit", selection: ["1.2"], note: "darker sky" });
+    s.run();
+    expect(shown()).toEqual(["2.1"]);
+    s.switchBranch("draw", "main");
+    expect(shown()).toEqual(["1.1", "1.2", "1.3"]);
+    s.switchBranch("draw", "darker");
+    expect(shown()).toEqual(["2.1"]);
+  });
+
+  it("a retry on a branch puts its candidates there; the other branch still locks as before", () => {
+    const { s, rec } = paused();
+    s.branch("draw", "darker", "1.2");
+    s.answer("pick", { action: "retry", note: "darker sky" });
+    s.run();
+    const draw = rec.state.nodes.draw!;
+    expect(Object.values(draw.versions).filter((v) => v.branch === "darker").map((v) => v.id)).toEqual(["2.1", "2.2", "2.3"]);
+    s.switchBranch("draw", "main");
+    s.answer("pick", { action: "lock", selection: ["1.3"] });
+    expect(rec.state.nodes.draw?.locked?.version).toBe("1.3");
+  });
+
   it("refuses a duplicate branch, an unknown branch and a bad name", () => {
     const { s } = paused();
     s.branch("draw", "darker", "1.2");
