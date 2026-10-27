@@ -24,6 +24,12 @@ nodes:
       Only these characters. No other people. Exactly one of each.
     uses: [item.action, item.characters@look, item.place@look, series.style]
     params: { aspect_ratio: "16:9" }   # panels are 16:9; the Reel crops and pans
+    check:                             # a judge looks at every panel before you do (the failure table)
+      rubric:
+        - Every listed character appears, and each looks like their description.
+        - Only the listed characters appear; no extra people.
+        - Exactly one of each character; no duplicates.
+        - No readable text, signs or speech bubbles.
     out:
       image: image
 

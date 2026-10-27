@@ -15,6 +15,7 @@ nodes:
     capability: audio.speech
     prompt: "{{item.hinglish}}"
     uses: [item.hinglish, item.emotion, item.speaker@voice, item.speaker@speech]
+    check: { seconds: { max: 8 } }   # a line over 8 s makes the Reel drag
     out:
       audio: audio
       seconds: number
@@ -43,8 +44,8 @@ nodes:
       - { id: redo, needs: [note] }
 
 edges:
-  - { from: speak, to: too_long, when: "result.seconds > 8" }
-  - { from: speak, to: listen, when: "result.seconds <= 8" }
+  - { from: speak, to: too_long, when: "not verdict.pass" }
+  - { from: speak, to: listen, when: "verdict.pass" }
   - { from: too_long, to: listen }
   - { from: listen, to: speak, when: "action == 'redo'", max_loops: 4 }
   - { from: listen, to: END, when: "action == 'approve'" }

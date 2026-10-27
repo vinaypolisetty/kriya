@@ -62,6 +62,8 @@ function executors(provider: Provider): Executors {
       // Video and speech are slow: the provider answers with a ticket, and the job is delivered later.
       return node.kind === "model" && (node.capability === "video.from_image" || node.capability === "audio.speech") ? { ticket: key } : out;
     },
+    // The example shot recipe has a rubric; a judge that passes everything (checks.test.ts covers judging).
+    check: (_n, _c, cands) => cands.map((c) => ({ version: c.version, pass: true, issues: [] })),
     decide(node, c): Decision {
       if (node.id === "pick") return { action: "lock", selection: [c.shows!.at(-1)!.version] };
       return { action: "approve" };

@@ -92,6 +92,11 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
       try {
         const expr = parseCondition(e.when);
         if (pathsIn(expr).some((p) => p[0] === "result")) checkResult(e, i);
+        if (pathsIn(expr).some((p) => p[0] === "verdict")) {
+          checkResult(e, i);
+          const n = nodes.get(sources(e)[0]!);
+          if (n && !("check" in n && n.check)) err(["edges", i, "when"], `'${n.id}' has no check:, so it has no 'verdict'. Add one, e.g. check: { rubric: [...] }`);
+        }
         for (const s of sources(e)) {
           const n = nodes.get(s);
           if (n?.kind === "screen") {
@@ -174,6 +179,7 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
     }
     if ("prompt" in n && n.prompt) for (const r of promptRefs(n.prompt)) checkRootRef(r, ["nodes", i, "prompt"]);
     if (n.kind === "agent") for (const r of promptRefs(n.goal)) checkRootRef(r, ["nodes", i, "goal"]);
+    if ((n.kind === "model" || n.kind === "tool") && n.check) checkChecks(n, i);
     // In isolated context, declared inputs never reach the step (D-55): say so instead of dropping them quietly.
     if (contextMode(n) === "isolated") {
       if ("uses" in n && n.uses.length) warn(["nodes", i, "uses"], "'uses' won't reach this step: it runs in isolated context, which sees only @mentions. Remove 'uses', or set context: local or full");
@@ -184,6 +190,23 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
   });
 
   return issues;
+
+  /** A step's `check:`: limits on numbers it makes, and a rubric for the images it makes (Day 20). */
+  function checkChecks(n: Extract<Node, { kind: "model" | "tool" }>, i: number) {
+    const { rubric, ...limits } = n.check!;
+    const numbers = Object.entries(n.out).filter(([, t]) => t === "number").map(([f]) => f);
+    for (const [field, limit] of Object.entries(limits)) {
+      const at: Issue["path"] = ["nodes", i, "check", field];
+      if (!numbers.includes(field)) {
+        err(at, `'${field}' isn't a number this step makes${suggest(field, [...numbers, "rubric"])} A check limits a number in its out (${numbers.join(", ") || "it has none"}) or has a rubric`);
+      } else if (limit.min === undefined && limit.max === undefined) {
+        err(at, `say the limit, e.g. ${field}: { max: 8 }`);
+      } else if (limit.min !== undefined && limit.max !== undefined && limit.min > limit.max) {
+        err(at, `min (${limit.min}) is above max (${limit.max})`);
+      }
+    }
+    if (rubric && !Object.values(n.out).includes("image")) err(["nodes", i, "check", "rubric"], "a rubric is judged by looking at images, and this step makes none");
+  }
 
   /** `result` is the one candidate the edge's source step just made (D-43). */
   function checkResult(e: Edge, i: number) {

@@ -32,6 +32,8 @@ function fakes(
       (seen[node.id] ??= []).push(ctx);
       return outputs[node.id]?.(ctx) ?? [{ done: true }];
     },
+    // The example shot recipe has a rubric; a judge that passes everything (checks.test.ts covers judging).
+    check: (_n, _c, cands) => cands.map((c) => ({ version: c.version, pass: true, issues: [] })),
     decide(node, ctx) {
       const d = decisions[node.id];
       if (!d && node.show === node.id) return { action: "approve" };
@@ -119,7 +121,7 @@ edges:
   it("a step a screen shows waits for that screen instead", () => {
     const exec = fakes({ draw: panels }, { pick: () => ({ action: "lock", selection: ["1.1"] }) });
     const { events } = run(example("shot_recipe"), exec, { item: { id: "P3-04", animate: false } });
-    expect(events.filter((e) => e.type === "Suspended").map((e) => e.node)).toEqual(["pick"]);
+    expect(events.flatMap((e) => (e.type === "Suspended" && e.kind === "human" ? [e.node] : []))).toEqual(["pick"]); // draw waits only on its judge
   });
 });
 

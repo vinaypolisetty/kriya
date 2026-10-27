@@ -562,6 +562,19 @@ describe("the Library (Day 18)", () => {
   });
 });
 
+describe("checks from the terminal (Day 20)", () => {
+  it("the inbox shows each panel's verdict, and kriya check judges the candidates again", async () => {
+    const cwd = await project();
+    const shot = JSON.stringify({ id: "P3-04", characters: ["Mitra"], place: "Chai stall", action: "Mitra writes", lines: [], animate: false });
+    await kriya(cwd, "run", "shot_recipe", "--input", `item=${shot}`, "--id", "shot");
+    expect((await kriya(cwd, "inbox")).out).toMatch(/1\.1 {2}fake:\/\/image\/draw\/v1\.1 {2}✓ checks passed/);
+    const r = await kriya(cwd, "check", "shot", "draw");
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("⏳ judging 3 candidates…\n  1.1  ✓ checks passed\n  1.2  ✓ checks passed\n  1.3  ✓ checks passed");
+    expect((await kriya(cwd, "check", "shot", "pick")).err).toBe("✗ 'pick' has no rubric to check against; add check: { rubric: [...] } to it");
+  });
+});
+
 describe("plain errors", () => {
   it("outside a project", async () => {
     const r = await kriya(mkdtempSync(join(tmpdir(), "kriya-none-")), "status");

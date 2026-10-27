@@ -19,6 +19,8 @@ export function fakeExecutors(graphs: Graph[]): Executors {
     },
     // People answer through `kriya decide`: every screen waits.
     decide: () => undefined,
+    // A fake judge passes everything (code checks still run for real).
+    check: (_node, _ctx, candidates) => candidates.map((c) => ({ version: c.version, pass: true, issues: [], model: "fake" })),
     // A fake agent calls its first tool once, then answers with made-up outputs.
     turn(node, ctx, history) {
       const usage = { tokens: { input: 0, output: 0 }, model: "fake", cost_usd: 0 };

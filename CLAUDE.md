@@ -57,7 +57,7 @@ packages/adapters/src/
   files.ts         a file's type from its bytes or extension
 packages/adapters/workers/assemble_reel.py   the Reel assembler (Python + Pillow + ffmpeg)
 packages/cli/src/
-  commands.ts      init, run, status, show, inbox, decide, lock, rebuild, retry, adopt, library (each a fresh process over .kriya/)
+  commands.ts      init, run, status, show, inbox, decide, lock, rebuild, retry, adopt, check, library (each a fresh process over .kriya/)
   project.ts       kriya.yaml + recipes folder
   library.ts       library/ folder: entities, kinds, facet versions
   fake.ts          fake models and Library for keyless runs
