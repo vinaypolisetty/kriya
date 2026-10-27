@@ -75,7 +75,7 @@ export function App() {
         </nav>
         <div className="top-right">
           <a className={route.page === "library" ? "nav-link on" : "nav-link"} href="#/library">Library</a>
-          <span className="mono muted">Spent {usd(spent)}</span>
+          <span className="mono muted spent">Spent {usd(spent)}</span>
           <a className={waiting ? "waiting-chip" : "waiting-chip none"} href="#/inbox">
             {waiting ? `${waiting} waiting for you` : "Nothing waiting"}
           </a>

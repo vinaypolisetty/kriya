@@ -2,7 +2,10 @@
  * A run as its recipe's graph (Day 24): steps left to right in the order they
  * run, loops drawn as dashed arrows back with their limit, each box showing
  * the step's live state. White: an AI step · amber: you decide · grey: a tool.
+ * On a phone the same steps are a list, top to bottom in the same order, each
+ * saying where it goes next (Day 27).
  */
+import { useEffect, useState, type CSSProperties } from "react";
 import type { GEdge, GNode, RunGraph } from "./api";
 
 const W = 216;
@@ -68,7 +71,56 @@ const STATUS: Record<string, { label: string; tone: string }> = {
 };
 export const statusOf = (s: string) => STATUS[s] ?? { label: s.replace(/_/g, " "), tone: "idle" };
 
-export function Graph({ graph, selected, onSelect, onOpenItem }: { graph: RunGraph; selected?: string; onSelect: (id: string) => void; onOpenItem: (at: string) => void }) {
+/** Whether the screen is phone-sized: the graph turns into a list there. */
+export function useNarrow(): boolean {
+  const query = "(max-width: 760px)";
+  const [narrow, setNarrow] = useState(() => matchMedia(query).matches);
+  useEffect(() => {
+    const m = matchMedia(query);
+    const on = () => setNarrow(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return narrow;
+}
+
+type GraphProps = { graph: RunGraph; selected?: string; onSelect: (id: string) => void; onOpenItem: (at: string) => void };
+
+export function Graph(props: GraphProps) {
+  return useNarrow() ? <StepList {...props} /> : <Canvas {...props} />;
+}
+
+/** The steps top to bottom in the graph's order (column, then row), each with the arrows leaving it in words. */
+function StepList({ graph, selected, onSelect, onOpenItem }: GraphProps) {
+  const { boxes } = layout(graph);
+  const order = [...boxes.values()].filter((b) => b.node).sort((a, b) => a.x - b.x || a.y - b.y);
+  const name = (id: string) => (id === "END" ? "done" : (graph.nodes.find((n) => n.id === id)?.name ?? id));
+  return (
+    <ol className="step-list">
+      {order.map((b) => {
+        const out = graph.edges.filter((e) => e.from === b.id);
+        return (
+          <li key={b.id}>
+            <Box n={b.node!} selected={selected === b.id} onSelect={onSelect} onOpenItem={onOpenItem} />
+            {out.length > 0 && (
+              <p className="next">
+                {out.map((e, i) => (
+                  <span key={i} className={e.back ? "back" : ""}>
+                    {e.back ? "↺" : "→"} {e.label ? `${e.label}: ` : ""}
+                    {name(e.to)}
+                    {e.back ? ` (up to ${e.limit}×)` : ""}
+                  </span>
+                ))}
+              </p>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function Canvas({ graph, selected, onSelect, onOpenItem }: GraphProps) {
   const { boxes, width, height } = layout(graph);
   const startInputs = Object.keys(graph.inputs);
   return (
@@ -96,7 +148,7 @@ export function Graph({ graph, selected, onSelect, onOpenItem }: { graph: RunGra
               <span className="detail">{graph.status === "completed" ? "finished" : graph.status}</span>
             </div>
           ) : (
-            <Box key={b.id} n={b.node!} x={b.x} y={b.y} h={b.h} selected={selected === b.id} onSelect={onSelect} onOpenItem={onOpenItem} />
+            <Box key={b.id} n={b.node!} style={{ left: b.x, top: b.y, width: W, height: b.h }} selected={selected === b.id} onSelect={onSelect} onOpenItem={onOpenItem} />
           ),
         )}
       </div>
@@ -154,11 +206,11 @@ function Edge({ e, boxes, graph }: { e: GEdge; boxes: Map<string, Placed>; graph
   );
 }
 
-function Box({ n, x, y, h, selected, onSelect, onOpenItem }: { n: GNode; x: number; y: number; h: number; selected: boolean; onSelect: (id: string) => void; onOpenItem: (at: string) => void }) {
+function Box({ n, style, selected, onSelect, onOpenItem }: { n: GNode; style?: CSSProperties; selected: boolean; onSelect: (id: string) => void; onOpenItem: (at: string) => void }) {
   const st = statusOf(n.status);
   const shown = n.versions.find((v) => v.id === n.locked?.version) ?? n.versions.at(-1);
   return (
-    <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, n.waitingOnYou ? "you" : "", selected ? "selected" : ""].join(" ")} style={{ left: x, top: y, width: W, height: h }}>
+    <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, n.waitingOnYou ? "you" : "", selected ? "selected" : ""].join(" ")} {...(style ? { style } : {})}>
       <button type="button" className="box-hit" onClick={() => onSelect(n.id)} aria-label={`${n.name}: ${n.waitingOnYou ? "waiting for you" : st.label}`} aria-pressed={selected}>
         <span className="box-main">
           {shown?.thumb?.type.startsWith("image/") && <img src={shown.thumb.url} alt="" className="box-thumb" />}
