@@ -162,12 +162,14 @@ ff("-sseof", "-0.15", "-i", f"{S}/{SEG[-2]}.mp4", "-frames:v", "1", f"{S}/last.p
 card = Image.new("RGBA", (W, HT), (0, 0, 0, 0))
 dc = ImageDraw.Draw(card)
 f1, f3 = ImageFont.truetype(FONT, 76), ImageFont.truetype(FONT, 52)
-y = HT * 0.36
-for ln in wrap(dc, M.get("hook") or "", f1, 900):
+lines = wrap(dc, M.get("hook") or "", f1, 900)
+# A long hook starts higher, and the title always sits under its last line (a six-line hook ran over it, Oct 26).
+y = min(HT * 0.36, HT * 0.5 - len(lines) * 76 * 1.25 / 2)
+for ln in lines:
     dc.text((W / 2, y), ln, font=f1, fill=(255, 201, 60, 255), stroke_width=6, stroke_fill=(0, 0, 0, 255), anchor="ma")
     y += 76 * 1.25
 if M.get("title"):
-    dc.text((W / 2, HT * 0.625), M["title"], font=f3, fill=(255, 255, 255, 255), stroke_width=6, stroke_fill=(0, 0, 0, 255), anchor="ma")
+    dc.text((W / 2, max(HT * 0.625, y + 48)), M["title"], font=f3, fill=(255, 255, 255, 255), stroke_width=6, stroke_fill=(0, 0, 0, 255), anchor="ma")
 card.save(f"{S}/card.png")
 ff("-loop", "1", "-framerate", "30", "-t", f"{L['end']:.3f}", "-i", f"{S}/last.png", "-i", f"{S}/card.png",
    "-filter_complex", f"[0:v]eq=brightness=-0.38:saturation=0.55[bg];[bg][1:v]overlay=0:0,{N}[v]",

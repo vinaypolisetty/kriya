@@ -32,6 +32,7 @@ const HELP = `kriya: run recipes with people in the loop
                                                   answer an inbox item (its number, or run:step)
   kriya lock <run> <step> <version> [--why text]  lock a version yourself
   kriya rebuild <run>                             redo the run's stale work
+  kriya keep <run> <step> [--why text]            keep stale work as it is; the run carries on
   kriya retry <run> <step>                        try a failed step again (a new attempt)
   kriya web [--port 4317] [--lan]                 kriya in your browser, live; --lan pairs your phone over wifi
   kriya check <run> <step>                        judge a step's latest candidates against its rubric again
@@ -54,6 +55,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "lock": return await lock(rest, io);
       case "rebuild": return await rebuild(rest, io);
       case "retry": return await retry(rest, io);
+      case "keep": return await keep(rest, io);
       case "adopt": return await adopt(rest, io);
       case "library": return await library(rest, io);
       case "check": return await check(rest, io);
@@ -441,6 +443,25 @@ async function rebuild(args: string[], io: IO): Promise<number> {
     const started = s.rebuild();
     if (started.length === 0) io.out("Nothing is stale; there's nothing to rebuild");
     else io.out(`✓ Rebuilding from ${started.join(", ")}`);
+    await drive(s, jobs, io);
+    report(io, rec.state, s.inbox());
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** Keeps a stale step's locked version as it is (D-72), then carries on with whatever that unblocks. */
+async function keep(args: string[], io: IO): Promise<number> {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { why: { type: "string" } } });
+  const [id, step] = positionals;
+  if (!id || !step) throw new UserError("say which run and step: kriya keep <run> <step> --why text (kriya status <run> shows what's stale)");
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const { rec, s, jobs } = await openRun(project, store, id, io);
+    s.keep(step, values.why);
+    io.out(`✓ Kept ${step} as it is`);
     await drive(s, jobs, io);
     report(io, rec.state, s.inbox());
     return 0;

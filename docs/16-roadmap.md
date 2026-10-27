@@ -65,10 +65,10 @@ Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya r
 
 | Day | Date | Focus | Done when |
 |---|---|---|---|
-| 29 | Tue Nov 10 | Inspector Tiwari sheet + voice via the platform; start Part 3 | Tiwari locked in the Library |
-| 30 | Wed Nov 11 | Part 3 shots and panels; log bugs as issues | All panels locked |
-| 31 | Thu Nov 12 | Part 3 clips and voices; fix worst bugs | All media locked |
-| 32 | Fri Nov 13 | Assemble, watch, fix, re-render; post | Part 3 live on Instagram |
+| 29 | Tue Nov 10 | Inspector Tiwari sheet + voice via the platform; start Part 3 ✅ (Oct 25–26): Tiwari in the Library (sheet, Rasalgethi voice, speech); the real Part 3 started from the phone | Tiwari locked in the Library |
+| 30 | Wed Nov 11 | Part 3 shots and panels ✅ (Oct 26): all 13 panels locked. Six throttled shots retried through `kriya web`; picks by eye against the judge (P3-06's sign lettering, which the judge missed, edited out with a marked area). Bugs fixed rather than logged (D-72) | All panels locked |
+| 31 | Thu Nov 12 | Part 3 clips and voices ✅ (Oct 26): 4 clips and 19 lines locked. Worst bugs fixed (D-72): faster takes flipping stale ↔ fresh; a join that never fired, so the run ended "failed"; no way to keep a stale shot list after a recipe change (`kriya keep`); clip approvals showing JSON | All media locked |
+| 32 | Fri Nov 13 | Assemble, watch, fix, re-render; post. Oct 26: assembled through kriya (106.1 s, 1080×1920, −19 dB mean); the end card's title ran over a six-line hook, fixed in the assembler and checked on a re-render. Watching, approving and posting are the creator's | Part 3 live on Instagram |
 | 33 | Sat Nov 14 | Second use case: earnings report recipe (text-only) | Recipe validates and starts |
 | 34 | Sun Nov 15 | Run on two companies; fix gaps | Two finished reports |
 | 35 | Mon Nov 16 | Knowledge base: Part 3 failures → rules; tips in CLI/inbox | A new tip appears and applies |
