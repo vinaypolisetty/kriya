@@ -30,6 +30,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeError, sniff, suggestFix } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
+import type { RunState } from "@kriya/engine";
 import { allInbox, drive, openRun, type Entry, type IO } from "./commands.js";
 import { loadProject, type Project } from "./project.js";
 
@@ -44,7 +45,9 @@ export type WebItem = {
   key: string;
   title: string;
   review: string;
-  buttons: Entry["buttons"];
+  buttons: (Entry["buttons"][number] & { estimateUsd?: number })[];
+  /** What the recipe puts beside the candidates: the line to be said, its caption, the shot's action. */
+  beside: Entry["beside"];
   shows: { version: string; value: unknown; media?: { url: string; type: string }; verdict?: Entry["shows"][number]["verdict"] }[];
   suggested?: { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
   /** Its run is still working after a decision (models, tools); the item may change. */
@@ -114,7 +117,13 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     }
     return t;
   };
-  const inbox = async (): Promise<WebItem[]> => (await allInbox(current(), store, quiet, { readOnly: true })).map((e) => web(e, busy.has(e.run), typeOf));
+  const inbox = async (): Promise<WebItem[]> => {
+    const project = current();
+    const entries = await allInbox(project, store, quiet, { readOnly: true });
+    const states = new Map<string, RunState>();
+    for (const e of entries) if (!states.has(e.run)) states.set(e.run, (await openRun(project, store, e.run, quiet, { readOnly: true })).rec.state);
+    return entries.map((e) => web(e, busy.has(e.run), typeOf, estimates(project, states.get(e.run)!, e.key)));
+  };
 
   const runs = async () => {
     const project = current();
@@ -312,7 +321,41 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
 }
 
 /** An inbox entry for the browser: blobs as media URLs, the suggested fix, and whether its run is still working. */
-function web(e: Entry, working: boolean, typeOf: (hash: string) => string | undefined): WebItem {
+/**
+ * What each of a screen's buttons will cost, before you press it: the step its
+ * arrow leads to, times what that step's candidates have cost in this run so
+ * far. A step that hasn't run yet has no estimate (rather than a guess).
+ */
+export function estimates(project: Project, state: RunState, key: string): Record<string, number> {
+  // Walk down for-each items to the recipe the screen is in: `per_shot[P3-04].pick` → shot_recipe, `per_shot[P3-04].`.
+  let g = project.graphs.find((x) => x.graph === state.graph);
+  let prefix = "";
+  for (const [, mapId, item] of key.matchAll(/(\w+)\[([^\]]+)\]\./g)) {
+    const map = g?.nodes.find((n) => n.id === mapId);
+    if (!map || map.kind !== "map") return {};
+    prefix += `${mapId}[${item}].`;
+    g = project.graphs.find((x) => x.graph === map.graph);
+  }
+  if (!g) return {};
+  const screenId = key.slice(prefix.length);
+  const out: Record<string, number> = {};
+  for (const e of g.edges) {
+    const from = Array.isArray(e.from) ? e.from : [e.from];
+    const action = /action == '(\w+)'/.exec(e.when ?? "")?.[1];
+    if (!from.includes(screenId) || !action || e.to === "END") continue;
+    const step = g.nodes.find((n) => n.id === e.to);
+    if (!step || (step.kind !== "model" && step.kind !== "tool" && step.kind !== "agent")) continue;
+    // Its past candidates: on its own node, or on the node it refines (marked made by it).
+    const home = state.nodes[prefix + ("refines" in step && step.refines ? step.refines : step.id)];
+    const made = Object.values(home?.versions ?? {}).filter((v) => ("refines" in step && step.refines ? v.madeBy === prefix + step.id : !v.madeBy));
+    if (made.length === 0) continue;
+    const each = made.reduce((a, v) => a + v.costUsd, 0) / made.length;
+    out[action] = Math.round(each * (step.kind === "model" ? step.options : 1) * 1000) / 1000;
+  }
+  return out;
+}
+
+function web(e: Entry, working: boolean, typeOf: (hash: string) => string | undefined, cost: Record<string, number> = {}): WebItem {
   const s = suggestFix({ actions: e.buttons }, e.shows);
   return {
     id: `${e.run}:${e.key}`,
@@ -320,7 +363,8 @@ function web(e: Entry, working: boolean, typeOf: (hash: string) => string | unde
     key: e.key,
     title: e.title,
     review: e.review,
-    buttons: e.buttons,
+    buttons: e.buttons.map((b) => (cost[b.id] !== undefined ? { ...b, estimateUsd: cost[b.id] } : b)),
+    beside: e.beside,
     working,
     shows: e.shows.map((x) => {
       const hash = typeof x.value === "string" ? /^blob:([0-9a-f]{64})$/.exec(x.value)?.[1] : undefined;

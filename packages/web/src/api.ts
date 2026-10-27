@@ -5,9 +5,9 @@ export type Issue = { type: string; what?: string; where?: string; fix?: string;
 export type Verdict = { pass: boolean; issues: Issue[] };
 export type Media = { url: string; type: string };
 export type Shown = { version: string; value: unknown; media?: Media; verdict?: Verdict };
-export type Button = { id: string; label?: string; needs: ("selection" | "note" | "region")[]; locks: boolean };
+export type Button = { id: string; label?: string; needs: ("selection" | "note" | "region")[]; locks: boolean; estimateUsd?: number };
 export type Suggestion = { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
-export type Item = { id: string; run: string; key: string; title: string; review: string; buttons: Button[]; shows: Shown[]; suggested?: Suggestion; working: boolean; batch: string; item?: string };
+export type Item = { id: string; run: string; key: string; title: string; review: string; buttons: Button[]; shows: Shown[]; beside: { ref: string; value: unknown }[]; suggested?: Suggestion; working: boolean; batch: string; item?: string };
 export type Decision = { run: string; key: string; action: string; selection?: string[]; note?: string; region?: string };
 
 export type Run = { id: string; recipe: string; status: string; waiting: number; working: boolean; stale: number; failed: number; costUsd: number; started?: string; updated?: string };

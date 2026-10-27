@@ -321,7 +321,7 @@ describe("ask_human: an agent asks you and waits (D-26)", () => {
     expect(rec.state.nodes.analyst!.status).toBe("awaiting_human");
     expect(rec.state.status).toBe("running");
     expect(s.inbox()).toEqual([
-      { key: "analyst", title: "analyst asks: Which city is Part 3 set in?", review: "edit_text", shows: [], buttons: [{ id: "reply", needs: ["note"], locks: false }] },
+      { key: "analyst", title: "analyst asks: Which city is Part 3 set in?", review: "edit_text", shows: [], beside: [], buttons: [{ id: "reply", needs: ["note"], locks: false }] },
     ]);
 
     s.answer("analyst", { action: "reply", note: "Pune" });

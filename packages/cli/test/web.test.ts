@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { openStore } from "@kriya/store";
 import { main, type IO } from "../src/commands.js";
 import { loadProject } from "../src/project.js";
-import { startWeb, type WebItem } from "../src/web.js";
+import { estimates, startWeb, type WebItem } from "../src/web.js";
 
 async function kriya(cwd: string, ...argv: string[]) {
   const out: string[] = [];
@@ -241,5 +241,21 @@ describe("kriya web --lan: a phone pairs once, everyone else is turned away (D-6
     } finally {
       await lan.close();
     }
+  });
+});
+
+describe("what a button will cost, before you press it (Day 25)", () => {
+  it("Try again costs another set of panels; Edit costs one edit; from what they cost in this run", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-web-"));
+    await kriya(dir, "init", "p3", "--example", "mohalla-mitra");
+    const project = loadProject(join(dir, "p3"));
+    const v = (costUsd: number, madeBy?: string) => ({ costUsd, ...(madeBy ? { madeBy } : {}) });
+    const state = {
+      graph: "shot_recipe",
+      nodes: { draw: { versions: { "1.1": v(0.067), "1.2": v(0.067), "1.3": v(0.067), "2.1": v(0.07, "edit") } } },
+    } as unknown as Parameters<typeof estimates>[1];
+    expect(estimates(project, state, "pick")).toEqual({ retry: 0.201, edit: 0.07 }); // crop has run nowhere yet: no guess
+    const part = { graph: "part_recipe", nodes: { "per_shot[S1].draw": { versions: { "1.1": v(0.05), "1.2": v(0.05), "1.3": v(0.05) } } } } as unknown as Parameters<typeof estimates>[1];
+    expect(estimates(project, part, "per_shot[S1].pick")).toEqual({ retry: 0.15 });
   });
 });

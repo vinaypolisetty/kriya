@@ -67,6 +67,8 @@ export type InboxItem = {
   title: string;
   review: ScreenNode["review"];
   shows: Shown[];
+  /** What the recipe puts beside the candidates (`beside:`), e.g. the line to be spoken and its caption. */
+  beside: { ref: string; value: unknown }[];
   buttons: { id: string; label?: string; needs: ("selection" | "note" | "region")[]; locks: boolean }[];
 };
 
@@ -1032,8 +1034,23 @@ export class Scheduler {
         title: screen.name ?? screen.id,
         review: screen.review,
         shows: this.onShow(ctx, screen.show),
+        beside: this.beside(ctx, screen.beside),
         buttons: screen.actions.map((a) => ({ id: a.id, ...(a.label ? { label: a.label } : {}), needs: a.needs, locks: a.locks })),
       }];
+    });
+  }
+
+  /** What a screen shows next to its candidates (`beside: [item.hinglish, item.caption_en]`): locked or recorded values only. */
+  private beside(ctx: Context, refs: string[]): { ref: string; value: unknown }[] {
+    if (refs.length === 0) return [];
+    const scope = this.scope(ctx);
+    return refs.flatMap((ref) => {
+      try {
+        const value = evaluate(parseCondition(ref.split("@")[0]!), scope);
+        return value === undefined ? [] : [{ ref, value }];
+      } catch {
+        return []; // a facet reference or something conditions can't read: left out, not an error
+      }
     });
   }
 

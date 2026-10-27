@@ -300,6 +300,8 @@ async function mediaRequest(
   for (const [ref, v] of Object.entries(ctx.uses)) if (!used.has(ref)) words(ref, v);
   prompt = prompt.trimEnd();
   if (ctx.instruction && !prompt.includes(ctx.instruction)) prompt += `\nChange: ${ctx.instruction}`;
+  const area = makes === "image" && ctx.parent ? markedArea(ctx.region) : undefined;
+  if (area) prompt += `\nOnly change what's inside the marked area (${area}); keep everything outside it exactly the same.`;
   if (makes === "image" && images.length) prompt += `\n\nReference images: ${images.map((x, i) => `${i + 1} = ${x.label}`).join("; ")}.`;
   prompt = prompt.trim();
   if (makes === "video" && images.length !== 1) {
@@ -369,6 +371,15 @@ function speechRequest(
   const style = input[styleField];
   const prompt = [`Say: ${say}`, typeof style === "string" ? `How: ${style.replace(/\n/g, "\n     ")}` : undefined, input[voiceField] !== undefined ? `Voice: ${String(input[voiceField])}` : undefined].filter(Boolean).join("\n");
   return { input, prompt, references: voice ? [{ label: `${voiceOf}'s voice`, ref: voice }] : [] };
+}
+
+/** A region marked on the screen (`x,y,w,h`, fractions of the image) in words a model can follow. */
+function markedArea(region: unknown): string | undefined {
+  const r = String(region ?? "").split(",").map(Number);
+  if (r.length !== 4 || r.some((n) => !Number.isFinite(n) || n < 0 || n > 1)) return undefined; // pixels or nonsense: no words
+  const [x, y, w, h] = r as [number, number, number, number];
+  const pct = (n: number) => `${Math.round(n * 100)}%`;
+  return `${pct(x)} to ${pct(Math.min(1, x + w))} from the left, ${pct(y)} to ${pct(Math.min(1, y + h))} from the top`;
 }
 
 function httpProblem(status: number, body: string): string {

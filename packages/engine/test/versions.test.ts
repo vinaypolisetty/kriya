@@ -347,3 +347,13 @@ describe("Try again with a note (Day 23)", () => {
     expect(rec.state.nodes.draw!.versions["1.1"]!.instruction).toBeUndefined();
   });
 });
+
+describe("what a screen shows beside its candidates (Day 25)", () => {
+  it("a voice line's listen screen carries the line and its caption", () => {
+    const voice = example("voice_recipe");
+    const item = { id: "L06", speaker: "Mitra", hinglish: "Ek cutting chai…", emotion: "dry", caption_en: "One cutting chai…" };
+    const exec = fakes({ speak: () => [{ audio: "a.wav", seconds: 5 }] }, { listen: () => undefined });
+    const { s } = start(voice, exec, { item });
+    expect(s.inbox()[0]!.beside).toEqual([{ ref: "item.hinglish", value: "Ek cutting chai…" }, { ref: "item.caption_en", value: "One cutting chai…" }]);
+  });
+});
