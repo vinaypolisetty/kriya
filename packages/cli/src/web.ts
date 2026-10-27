@@ -476,14 +476,28 @@ function web(e: Entry, working: boolean, typeOf: (hash: string) => string | unde
     beside: e.beside,
     working,
     shows: e.shows.map((x) => {
-      const hash = typeof x.value === "string" ? /^blob:([0-9a-f]{64})$/.exec(x.value)?.[1] : undefined;
-      const type = hash ? typeOf(hash) : undefined;
-      return { version: x.version, value: x.value, ...(hash && type ? { media: { url: `/api/media/${hash}`, type } } : {}), ...(x.verdict ? { verdict: x.verdict } : {}) };
+      const media = mediaIn(x.value, typeOf);
+      return { version: x.version, value: x.value, ...(media ? { media } : {}), ...(x.verdict ? { verdict: x.verdict } : {}) };
     }),
     ...(s ? { suggested: s } : {}),
     batch: `${e.run}:${e.key.replace(/\[[^\]]*\]/g, "[]")}`,
     ...(/\[([^\]]+)\][^[]*$/.test(e.key) ? { item: /\[([^\]]+)\][^[]*$/.exec(e.key)![1]! } : {}),
   };
+}
+
+/**
+ * The picture, clip or sound in what a screen shows: the value itself, or, for
+ * a generated approval that shows a step's whole output (`{ clip: "blob:…" }`),
+ * its first file. Without this a clip's approval was a line of JSON.
+ */
+export function mediaIn(value: unknown, typeOf: (hash: string) => string | undefined): { url: string; type: string } | undefined {
+  const values = typeof value === "string" ? [value] : value && typeof value === "object" && !Array.isArray(value) ? Object.values(value) : [];
+  for (const v of values) {
+    const hash = typeof v === "string" ? /^blob:([0-9a-f]{64})$/.exec(v)?.[1] : undefined;
+    const type = hash ? typeOf(hash) : undefined;
+    if (hash && type) return { url: `/api/media/${hash}`, type };
+  }
+  return undefined;
 }
 
 const VERBS: Record<string, string> = {
