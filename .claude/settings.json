@@ -4,9 +4,7 @@
       "mcp__claude-in-chrome__tabs_context_mcp",
       "ClaudeInChromeDomain(127.0.0.1:4317)",
       "ClaudeInChromeDomain(127.0.0.1:4318)",
-      "ClaudeInChromeDomain(192.168.1.112:4318)",
-      "ClaudeInChromeDomain(127.0.0.1:4400)",
-      "mcp__claude-in-chrome__browser_batch"
+      "ClaudeInChromeDomain(192.168.1.112:4318)"
     ]
   }
 }
