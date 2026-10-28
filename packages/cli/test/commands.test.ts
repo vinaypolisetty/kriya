@@ -368,6 +368,23 @@ describe("a run's recipes", () => {
     expect((await kriya(cwd, "status")).out).toContain("part_recipe-1            part_recipe      running · 1 waiting on you · recipes changed");
   });
 
+  it("a finished run whose recipe gained a step waits for a rebuild; it hasn't failed (Oct 27)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-cli-"));
+    await kriya(dir, "init", "p");
+    const cwd = join(dir, "p");
+    const recipe = (extra: string, end: string) => `graph: post\nlevel: post\ninputs:\n  topic: text\nnodes:\n  - { id: draft, kind: model, capability: llm.write, prompt: "About {{inputs.topic}}", uses: [inputs.topic], options: 2${extra}, out: { body: text } }\n  - { id: pick, kind: screen, review: pick_one, show: draft.body, actions: [{ id: lock, needs: [selection], locks: true }] }\n${end.includes("polish") ? "  - { id: polish, kind: model, capability: llm.write, trust: always, prompt: \"Tighten {{draft.body}}\", uses: [draft.body], out: { final: text } }\n" : ""}edges:\n  - { from: draft, to: pick }\n${end}`;
+    writeFileSync(join(cwd, "recipes", "post.yaml"), recipe("", "  - { from: pick, to: END, when: \"action == 'lock'\" }\n"));
+    await kriya(cwd, "run", "post", "--input", "topic=chai");
+    expect((await kriya(cwd, "decide", "1", "lock", "--pick", "1.1")).out).toContain("completed");
+
+    // Add a step after the pick and change the draft's settings: the draft goes stale, the run waits.
+    writeFileSync(join(cwd, "recipes", "post.yaml"), recipe(", params: { temperature: 0.5 }", "  - { from: pick, to: polish, when: \"action == 'lock'\" }\n  - { from: polish, to: END }\n"));
+    expect((await kriya(cwd, "status", "post-1")).out.split("\n")[0]).toBe("post-1 · post · running · 1 stale");
+    await kriya(cwd, "rebuild", "post-1");
+    expect((await kriya(cwd, "decide", "1", "lock", "--pick", "2.1")).out).toContain("completed");
+    expect((await kriya(cwd, "status", "post-1")).out).toContain("✓ polish");
+  });
+
   it("a new project ignores .env as well as .kriya/", async () => {
     const cwd = await project();
     expect(readFileSync(join(cwd, ".gitignore"), "utf8")).toBe(".kriya/\n.env\n");
