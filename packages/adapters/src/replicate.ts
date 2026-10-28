@@ -120,6 +120,8 @@ export type ReplicateOptions = {
   capabilities?: readonly ReplicateCapability[];
   /** Settings per capability; a step's own `model:` and `params:` win over them. */
   models?: Partial<Record<ReplicateCapability, ModelSettings>>;
+  /** Words the knowledge base adds to an image or clip step's prompt (applied tips, D-76). Never to speech: they'd be read out. */
+  prevent?: (node: Node) => string[];
 };
 
 /** No token to call Replicate with. Thrown before anything is sent, so the step can run again once one is set. */
@@ -243,7 +245,7 @@ export function replicateExecutors(opts: ReplicateOptions): Pick<Executors, "pro
           const ask =
             capability === "audio.speech"
               ? speechRequest(node, ctx, fields, settings.params ?? {}, node.params ?? {})
-              : await mediaRequest(node, ctx, field, opts.media, cap.makes, fields, params, (img) => asInput(t, img));
+              : await mediaRequest(node, ctx, field, opts.media, cap.makes, fields, params, (img) => asInput(t, img), cap.makes === "audio" ? [] : (opts.prevent?.(node) ?? []));
           if (ids.length < node.options) {
             for (let i = ids.length; i < node.options; i++) {
               const created = await creating(() =>
@@ -310,6 +312,7 @@ async function mediaRequest(
   fields: ModelFields,
   params: Record<string, unknown>,
   upload: (img: Img) => Promise<string>,
+  prevent: string[] = [],
 ): Promise<Ask> {
   const images: { label: string; img: Img }[] = [];
   const add = (label: string, v: unknown): string | undefined => {
@@ -337,6 +340,7 @@ async function mediaRequest(
   let prompt = fill(node.prompt, (ref) => words(ref, ctx.uses[ref]));
   for (const [ref, v] of Object.entries(ctx.uses)) if (!used.has(ref)) words(ref, v);
   prompt = prompt.trimEnd();
+  for (const p of prevent) if (!prompt.includes(p)) prompt += `\n${p}`;
   if (ctx.instruction && !prompt.includes(ctx.instruction)) prompt += `\nChange: ${ctx.instruction}`;
   const area = makes === "image" && ctx.parent ? markedArea(ctx.region) : undefined;
   if (area) prompt += `\nOnly change what's inside the marked area (${area}); keep everything outside it exactly the same.`;

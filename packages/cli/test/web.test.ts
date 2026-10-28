@@ -353,3 +353,27 @@ describe("what a button will cost, before you press it (Day 25)", () => {
     expect(estimates(project, part, "per_shot[S1].pick")).toEqual({ retry: 0.15 });
   });
 });
+
+describe("tips in the browser (Day 35, D-76)", () => {
+  it("the inbox's tips come from failed checks; Apply saves to kb.yaml and the tip goes; an unknown one is a plain 400", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      const tipsNow = async () => (await (await fetch(`${web.url}/api/tips`)).json()) as { tips: { id: string; hits: number }[]; applied: unknown[] };
+      expect((await tipsNow()).tips).toEqual([]);
+      const store = openStore(join(cwd, ".kriya"));
+      for (const v of ["1.1", "1.2", "1.3"]) store.events.append("shot", "VerdictRecorded", { node: "draw", version: v, by: "llm", pass: false, issues: [{ type: "missing_character" }] });
+      store.close();
+      expect((await tipsNow()).tips).toMatchObject([{ id: "missing_character:shot_recipe.draw", hits: 3 }]);
+
+      const post = (body: unknown) => fetch(`${web.url}/api/tips`, { method: "POST", body: JSON.stringify(body) });
+      const bad = await post({ id: "nope", answer: "apply" });
+      expect(bad.status).toBe(400);
+      expect(((await bad.json()) as { error: string }).error).toBe("there's no tip 'nope' now; it may have been answered already");
+      const r = await post({ id: "missing_character:shot_recipe.draw", answer: "apply" });
+      expect(await r.json()).toEqual({ tips: [], applied: [{ rule: "kb_missing_character", step: "shot_recipe.draw" }] });
+      expect(readFileSync(join(cwd, "kb.yaml"), "utf8")).toContain("rule: kb_missing_character");
+    } finally {
+      await web.close();
+    }
+  });
+});

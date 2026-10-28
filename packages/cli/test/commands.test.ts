@@ -465,6 +465,63 @@ describe("models: { image: replicate } (Day 16)", () => {
       }
     }
   });
+  it("a tip appears after three failures on one step, and once applied its words go into the next real prompt (Day 35)", async () => {
+    const api = await replicateStandIn();
+    const saved = { token: process.env.REPLICATE_API_TOKEN, url: process.env.REPLICATE_BASE_URL };
+    process.env.REPLICATE_API_TOKEN = "r8_test";
+    process.env.REPLICATE_BASE_URL = api.url;
+    try {
+      const cwd = await project();
+      entity(cwd, "bheem", "name: Bheem\nkind: character\nlook: a very tall bodybuilder\n");
+      entity(cwd, "reservoir", "name: Reservoir\nkind: place\nlook: a concrete water tank\n");
+      const item = JSON.stringify({ id: "P3-08", action: "Bheem leaps up screaming", characters: ["Bheem"], place: "Reservoir", lines: [], animate: false });
+      await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`, "--id", "before");
+      expect((await kriya(cwd, "tips")).out).toMatch(/^No tips right now/);
+
+      // The judge failed all three panels for Bheem's look, as it did 19 times in Part 3.
+      const store = openStore(join(cwd, ".kriya"));
+      for (const v of ["1.1", "1.2", "1.3"]) store.events.append("before", "VerdictRecorded", { node: "draw", version: v, by: "llm", pass: false, issues: [{ type: "wrong_look", what: "Bheem has no gamcha" }] });
+      store.close();
+
+      expect((await kriya(cwd, "inbox")).out).toContain("💡 A tip: characters keep coming out looking different from their sheets (shot_recipe.draw, 3 times). See: kriya tips");
+      expect((await kriya(cwd, "tips")).out).toContain(' 1  Characters keep coming out looking different from their sheets: shot_recipe.draw, 3 times.\n      Always add to its prompt: "Draw each character exactly as in their reference sheet');
+      const applied = await kriya(cwd, "tips", "apply", "1");
+      expect(applied.code, applied.err).toBe(0);
+      expect(readFileSync(join(cwd, "kb.yaml"), "utf8")).toContain("applied:\n  - rule: kb_wrong_look\n    step: shot_recipe.draw");
+      expect((await kriya(cwd, "tips")).out).toBe("No tips right now: nothing has failed the same step 3 times in a way kriya knows how to prevent.\n  ✓ applied: kb_wrong_look on shot_recipe.draw");
+
+      writeFileSync(join(cwd, "kriya.yaml"), readFileSync(join(cwd, "kriya.yaml"), "utf8").replace("models: fake", "models:\n  image: replicate"));
+      expect((await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`, "--id", "after")).code).toBe(0);
+      expect(api.creates).toHaveLength(3);
+      for (const c of api.creates) expect(c.input.prompt).toContain("Draw each character exactly as in their reference sheet: same face, hair, build, clothes and colors.");
+      expect((await kriya(cwd, "show", "after", "draw")).out).toContain("Draw each character exactly as in their reference sheet"); // recorded with the version
+      expect((await kriya(cwd, "status", "before")).out).not.toContain("stale"); // nothing already made changes
+    } finally {
+      api.close();
+      for (const [k, v] of [["REPLICATE_API_TOKEN", saved.token], ["REPLICATE_BASE_URL", saved.url]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  });
+
+  it("dismissing a tip stops it, and mistakes in kb.yaml are plain, with the nearest name (Day 35)", async () => {
+    const cwd = await project();
+    const item = JSON.stringify({ id: "S1", action: "x", characters: [], place: "", lines: [], animate: false });
+    await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`, "--id", "s");
+    const store = openStore(join(cwd, ".kriya"));
+    for (const v of ["1.1", "1.2", "1.3"]) store.events.append("s", "VerdictRecorded", { node: "draw", version: v, by: "llm", pass: false, issues: [{ type: "missing_character" }] });
+    store.close();
+    expect((await kriya(cwd, "tips", "dismiss", "missing_charcter:shot_recipe.draw")).err).toBe("✗ there's no tip 'missing_charcter:shot_recipe.draw'. Did you mean 'missing_character:shot_recipe.draw'? See them with: kriya tips");
+    expect((await kriya(cwd, "tips", "dismiss", "9")).err).toBe("✗ there's no tip '9'. See them with: kriya tips");
+    expect((await kriya(cwd, "tips", "dismiss", "missing_character:shot_recipe.draw")).out).toBe("✓ Won't suggest that again for shot_recipe.draw. Saved in kb.yaml.");
+    expect((await kriya(cwd, "tips")).out).toMatch(/^No tips right now/);
+
+    writeFileSync(join(cwd, "kb.yaml"), "applied:\n  - { rule: kb_wrong_looks, step: shot_recipe.drawing }\n");
+    const r = await kriya(cwd, "tips");
+    expect(r.err).toContain("✗ your knowledge base has problems:");
+    expect(r.err).toContain("kb.yaml: applied: there's no rule 'kb_wrong_looks'. Did you mean 'kb_wrong_look'?");
+    expect(r.err).toContain("kb.yaml: applied: there's no step 'shot_recipe.drawing' (steps are recipe.step). Did you mean 'shot_recipe.draw'?");
+  });
 });
 
 describe("the Library (Day 18)", () => {

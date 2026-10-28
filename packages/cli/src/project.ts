@@ -4,6 +4,7 @@
  *   kriya.yaml   project settings: which models, the inherited context, the Library's kinds
  *   recipes/     the recipe files (the source of truth, D-33)
  *   library/     the Library: one file per character, place, track… (Day 18)
+ *   kb.yaml      the knowledge base: own rules, tips applied or dismissed (Day 35, optional)
  *   .kriya/      run data: the event log and media (gitignored)
  */
 import { createHash } from "node:crypto";
@@ -13,6 +14,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { REPLICATE_CAPABILITIES } from "@kriya/adapters";
 import { libraryKind, loadDir, suggest, type Graph, type Problem } from "@kriya/engine";
+import { loadKb, type Kb } from "./kb.js";
 import { loadLibrary, type Library } from "./library.js";
 
 export const ProjectFile = z
@@ -81,6 +83,9 @@ export type Project = {
   graphs: Graph[];
   problems: Problem[];
   library: Library;
+  kb: Kb;
+  /** What's wrong in kb.yaml, in plain words. */
+  kbProblems: string[];
 };
 
 /**
@@ -135,7 +140,8 @@ export function loadProject(from: string): Project {
     const used = new Set(graphs.flatMap((g) => [...Object.values(g.types).flatMap((t) => Object.values(t.fields)), ...g.nodes.flatMap((n) => ("out" in n ? Object.values(n.out) : []))]).flatMap((t) => libraryKind(t) ?? []));
     for (const k of used) if (!kinds.includes(k)) library.problems.push(`a recipe uses library.${k}, and there's no kind '${k}'${suggest(k, kinds)} Kinds: ${kinds.join(", ")} (kinds: in kriya.yaml)`);
   }
-  return { root, settings: parsed.data, graphs, problems, library };
+  const { kb, problems: kbProblems } = loadKb(root, graphs);
+  return { root, settings: parsed.data, graphs, problems, library, kb, kbProblems };
 }
 
 /** An error meant for the person at the terminal: printed as-is, no stack trace. */

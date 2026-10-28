@@ -129,6 +129,26 @@ edges:
     expect(requests[0]!.model).toBe("claude-haiku-5-5");
   });
 
+  it("an applied tip's words follow the prompt, and are recorded with it (D-76)", async () => {
+    const g = load(`graph: g
+level: part
+nodes:
+  - { id: w, kind: model, capability: llm.write, prompt: "Summarize the release.", trust: always, out: { t: text } }
+edges:
+  - { from: w, to: END }
+`);
+    const { client, requests } = fakeClient(() => message([{ type: "text", text: '{"t":"ok"}' }]));
+    const jobs = new Jobs();
+    const exec = { ...anthropicExecutors({ graphs: [g], jobs, client, prevent: (n) => (n.id === "w" ? ["Only numbers the release states."] : []) }), decide: () => ({ action: "approve" }) };
+    const rec = Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run1");
+    const s = new Scheduler(g, rec, exec, [g], { blobs: memoryBlobs() });
+    s.start(RELEASE, {});
+    await settle(s, jobs, describeError);
+    const sent = (requests[0]!.messages[0]!.content as { type: string; text: string }[])[0]!.text;
+    expect(sent).toBe("Summarize the release.\nOnly numbers the release states.");
+    expect(rec.state.nodes.w!.versions["1.1"]!.prompt).toBe(sent);
+  });
+
   it("options: 3 makes three requests, three candidates", async () => {
     const three = load(`graph: g
 level: part

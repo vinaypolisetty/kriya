@@ -52,6 +52,11 @@ export const switchBranch = (run: string, key: string, branch: string) => call<{
 
 export const retry = (run: string, key: string) => call<{ ok: true }>("/api/retry", { method: "POST", body: JSON.stringify({ run, key }) });
 
+/** A suggestion from the knowledge base: this keeps failing at a step; these words in its prompt would prevent it (D-76). */
+export type Tip = { id: string; rule: string; step: string; hits: number; symptom: string; prevent: string };
+export type Tips = { tips: Tip[]; applied: { rule: string; step: string }[] };
+export const answerTip = (id: string, answer: "apply" | "dismiss") => call<Tips>("/api/tips", { method: "POST", body: JSON.stringify({ id, answer }) });
+
 export const decide = (d: Decision) => call<{ items: Item[] }>("/api/decide", { method: "POST", body: JSON.stringify(d) }).then((r) => r.items);
 
 /** Whether the server's event stream is connected; every live view refetches when it says something changed. */

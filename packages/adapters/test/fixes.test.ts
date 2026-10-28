@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDatabase, SqliteEventLog } from "@kriya/store";
 import { loadText, readRun, Recorder, replay, Scheduler, type Executors, type Judged, type Shown } from "@kriya/engine";
-import { suggestFix } from "../src/index.js";
+import { prevention, SEED_RULES, suggestFix, tips, type Failure } from "../src/index.js";
 
 const PICK = { actions: [{ id: "lock", needs: ["selection" as const], locks: true }, { id: "edit", needs: ["selection" as const, "note" as const], locks: false }, { id: "crop", needs: ["selection" as const, "region" as const], locks: false }, { id: "retry", needs: ["note" as const], locks: false }] };
 const shown = (version: string, issues: NonNullable<Shown["verdict"]>["issues"]): Shown => ({ version, value: `img${version}`, verdict: { pass: issues.length === 0, issues } });
@@ -109,5 +109,37 @@ edges:
     expect(rec.state.nodes.pick!.decisions.map((d) => [d.action, d.by])).toEqual([["edit", "auto"], ["lock", "auto"]]);
     expect(rec.state.status).toBe("completed");
     expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+});
+
+describe("tips: what keeps failing, and the words that would prevent it (Day 35, D-76)", () => {
+  const draw = "shot_recipe.draw";
+  const fails = (type: string, n: number, step = draw): Failure[] => Array.from({ length: n }, () => ({ step, type }));
+  const stageOf = (step: string) => (step === draw ? "image.generate" : "audio.speech");
+
+  it("three failures of one kind on one step make a tip; two don't", () => {
+    expect(tips(fails("wrong_look", 2), SEED_RULES, { stageOf })).toEqual([]);
+    expect(tips([...fails("wrong_look", 2), ...fails("off_model", 1)], SEED_RULES, { stageOf })).toEqual([
+      { id: "wrong_look:shot_recipe.draw", rule: "kb_wrong_look", step: draw, hits: 3, symptom: "characters keep coming out looking different from their sheets", prevent: expect.stringContaining("reference sheet") },
+    ]);
+  });
+
+  it("most hits first; applied and dismissed tips stay quiet", () => {
+    const f = [...fails("readable_text", 3), ...fails("wrong_look", 5)];
+    expect(tips(f, SEED_RULES, { stageOf }).map((t) => t.rule)).toEqual(["kb_wrong_look", "kb_readable_text"]);
+    expect(tips(f, SEED_RULES, { stageOf, applied: [{ rule: "kb_wrong_look", step: draw }], dismissed: ["readable_text:shot_recipe.draw"] })).toEqual([]);
+  });
+
+  it("not for a step the rule isn't for, a rule with nothing to prevent, or words the prompt already says", () => {
+    expect(tips(fails("wrong_look", 4, "voice_recipe.speak"), SEED_RULES, { stageOf })).toEqual([]);
+    expect(tips(fails("wrong_color", 4), SEED_RULES, { stageOf })).toEqual([]);
+    // Part 3's draw prompt already said this, and writing still appeared 13 times: saying it twice won't help.
+    expect(tips(fails("readable_text", 13), SEED_RULES, { stageOf, promptOf: () => "Mitra writes.\nNo text,   no speech bubbles, no sound-effect lettering." })).toEqual([]);
+    expect(tips(fails("readable_text", 13), SEED_RULES, { stageOf, promptOf: () => "No text." })).toHaveLength(1);
+  });
+
+  it("an applied rule's words go to that step only, in the order applied", () => {
+    const applied = [{ rule: "kb_wrong_look", step: draw }, { rule: "kb_extra_character", step: draw }, { rule: "kb_readable_text", step: "other.draw" }];
+    expect(prevention(draw, SEED_RULES, applied)).toEqual([expect.stringContaining("reference sheet"), "Only these characters. No other people."]);
   });
 });

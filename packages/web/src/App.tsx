@@ -8,7 +8,7 @@
  * #/library[/<name>].
  */
 import { useEffect, useState } from "react";
-import { useLive, useLiveFlag, type Item, type Run, type RunGraph, type Shown } from "./api";
+import { answerTip, useLive, useLiveFlag, type Item, type Run, type RunGraph, type Shown, type Tips } from "./api";
 import { Graph, statusOf } from "./Graph";
 import { LibraryPage } from "./Library";
 import { NodePanel } from "./NodePanel";
@@ -157,8 +157,10 @@ function InboxPage() {
   const inbox = useLive<{ items: Item[] }>("/api/inbox");
   if (inbox.error) return <p className="error pad">{inbox.error}</p>;
   if (!inbox.data) return <p className="muted pad">Loading…</p>;
-  if (inbox.data.items.length === 0) return <p className="muted pad">Nothing is waiting on you.</p>;
+  if (inbox.data.items.length === 0) return <><TipCards /><p className="muted pad">Nothing is waiting on you.</p></>;
   return (
+    <>
+    <TipCards />
     <ul className="inbox">
       {inbox.data.items.map((item) => (
         <li key={item.id}>
@@ -181,6 +183,36 @@ function InboxPage() {
           </a>
         </li>
       ))}
+    </ul>
+    </>
+  );
+}
+
+/** What keeps failing, with the words that would prevent it: Apply puts them in that step's prompt from its next generation on (D-76). */
+function TipCards() {
+  const live = useLive<Tips>("/api/tips");
+  const [answered, setAnswered] = useState<Tips>();
+  const [error, setError] = useState<string>();
+  const tips = (answered ?? live.data)?.tips ?? [];
+  if (tips.length === 0) return null;
+  const answer = (id: string, a: "apply" | "dismiss") =>
+    answerTip(id, a).then(setAnswered, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  return (
+    <ul className="inbox tips">
+      {tips.map((t) => (
+        <li key={t.id} className="card tip">
+          <span className="card-head">
+            <b>💡 {t.symptom[0]!.toUpperCase() + t.symptom.slice(1)}</b>
+            <span className="muted">{t.step} · {t.hits} times</span>
+          </span>
+          <span>Always add to its prompt: “{t.prevent}”</span>
+          <span className="tip-buttons">
+            <button className="primary" onClick={() => void answer(t.id, "apply")}>Apply</button>
+            <button onClick={() => void answer(t.id, "dismiss")}>Dismiss</button>
+          </span>
+        </li>
+      ))}
+      {error && <li className="error">{error}</li>}
     </ul>
   );
 }
