@@ -41,8 +41,8 @@ const Base = {
 
 const Trust = z.enum(["ask_me", "when_confident", "always"]);
 
-/** A limit on a number the step makes, e.g. `seconds: { max: 8 }`. */
-const Limit = z.object({ min: z.number().optional(), max: z.number().optional() }).strict();
+/** A limit on a number the step makes, e.g. `seconds: { max: 8 }`, or what a yes/no output must be, e.g. `found: { is: true }` (D-74). */
+const Limit = z.object({ min: z.number().optional(), max: z.number().optional(), is: z.boolean().optional() }).strict();
 
 /**
  * Checks on every candidate a step makes (Day 20): `rubric` items an LLM judge

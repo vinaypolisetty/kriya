@@ -1,0 +1,67 @@
+# Quarter recipe: for each ticker, find the latest earnings release on the web and report on it,
+# then rank the quarter against the desk's thesis. (quarter_from_releases starts from releases you paste.)
+graph: quarter_review
+level: quarter
+inherits: [desk]   # reads the desk's thesis, scoring and style
+description: Find each company's latest earnings release on the web, score it against the thesis, and rank the quarter.
+
+inputs:
+  quarter: text            # e.g. Q3 2026, for the ranking's wording
+  tickers: list<text>      # --input tickers='["AAPL","MSFT"]'
+
+types:
+  standing:
+    fields:
+      company: text
+      total: number
+      why: text
+
+outputs:
+  ranking: rank.ranking
+
+nodes:
+  - id: find
+    kind: map
+    name: Find each release
+    over: inputs.tickers
+    graph: find_release
+
+  - id: per_company
+    kind: map
+    name: Report on each company
+    over: find               # each ticker's find: id, company, release, source, date
+    graph: company_report
+
+  - id: rank
+    kind: model
+    name: Rank the quarter
+    capability: llm.write
+    prompt: |
+      Rank the companies that reported in {{inputs.quarter}} by how well they fit this thesis:
+      {{desk.thesis}}
+      Use only the reports and scores below, best fit first, one line each on why it sits there.
+      Then a short summary of the quarter. {{desk.style}}
+      Companies: {{per_company.company}}
+      Scores out of 10: {{per_company.total}}
+      Reports: {{per_company.report}}
+    uses: [inputs.quarter, desk.thesis, desk.style, per_company.company, per_company.total, per_company.report]
+    out:
+      ranking: list<standing>
+      summary: text
+
+  - id: approve_ranking
+    kind: screen
+    name: Approve the ranking
+    review: approve
+    show: rank.ranking
+    beside: [rank.summary]
+    actions:
+      - { id: approve, locks: true }
+      - { id: redo, needs: [note] }
+
+edges:
+  - { from: find, to: per_company }
+  - { from: per_company, to: rank }
+  - { from: rank, to: approve_ranking }
+  - { from: approve_ranking, to: rank, when: "action == 'redo'", max_loops: 3 }
+  - { from: approve_ranking, to: END, when: "action == 'approve'" }

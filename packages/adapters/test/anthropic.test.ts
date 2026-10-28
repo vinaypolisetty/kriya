@@ -364,6 +364,112 @@ edges:
   });
 });
 
+describe("a rubric on written work: the judge reads it (D-73)", () => {
+  const summary = load(`graph: company
+level: company
+inputs:
+  item: json
+nodes:
+  - id: summarize
+    kind: model
+    capability: llm.write
+    prompt: "Summarize {{item.company}}'s quarter from this release only:\\n{{item.release}}"
+    uses: [item.company, item.release]
+    check:
+      rubric: ["Every number appears in the release, with the same value."]
+    out: { headline: text, revenue: text }
+  - id: review
+    kind: screen
+    review: approve
+    show: summarize.headline
+    actions:
+      - { id: approve, locks: true }
+edges:
+  - { from: summarize, to: review }
+  - { from: review, to: END }
+`);
+
+  it("no image and no media store needed: the candidate's text goes to Claude with what the step was given; no crop on offer", async () => {
+    const { client, requests } = fakeClient(() => message([{ type: "text", text: JSON.stringify({ pass: false, issues: [{ type: "unsupported_number", what: "revenue 12.4 isn't in the release (it says 12.1)", where: "revenue", fix: "edit", keep: "" }] }) }]));
+    const jobs = new Jobs();
+    const claude = anthropicExecutors({ graphs: [summary], jobs, client });
+    const exec = { produce: () => [{ headline: "Acme Tea grew", revenue: "$12.4M" }], check: claude.check, decide: () => undefined };
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(summary, rec, exec, [summary]);
+    s.start(RELEASE, { item: { company: "Acme Tea", release: "Revenue was $12.1M." } });
+    await settle(s, jobs, describeError);
+
+    const p = requests[0]!;
+    expect(p.system).toMatch(/written by a step/);
+    const content = p.messages[0]!.content as { type: string; text?: string }[];
+    expect(content).toHaveLength(1);
+    expect(content[0]!.text).toContain("Summarize Acme Tea's quarter from this release only:\nRevenue was $12.1M.");
+    expect(content[0]!.text).toContain("The candidate:\n");
+    expect(content[0]!.text).toContain("$12.4M");
+    const schema = (p.output_config as { format: { schema: { properties: { issues: { items: { properties: { fix: { enum: string[] } } } } } } } }).format.schema;
+    expect(schema.properties.issues.items.properties.fix.enum).toEqual(["edit", "retry"]);
+    expect(rec.state.nodes.summarize!.versions["1.1"]!.verdicts[0]).toMatchObject({ pass: false, issues: [{ type: "unsupported_number", where: "revenue", fix: "edit" }] });
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+});
+
+describe("llm.research: Claude with web search and web fetch (D-74)", () => {
+  const finder = load(`graph: find
+level: company
+inputs:
+  item: text
+nodes:
+  - id: research
+    kind: model
+    capability: llm.research
+    trust: always
+    params: { max_searches: 3, max_fetches: 2, domains: [apple.com] }
+    prompt: "Find the latest quarterly earnings release for {{item}}."
+    uses: [item]
+    out: { company: text, release: text, url: text, date: text }
+edges:
+  - { from: research, to: END }
+`);
+  const found = { company: "Apple Inc.", release: "Revenue $94.0 billion, up 10 percent", url: "https://www.apple.com/newsroom/q3", date: "July 30, 2026" };
+
+  it("searches and fetches with limits; a paused search is carried on; the pages read are the version's references; each search adds a cent", async () => {
+    const usage = (searches: number) => ({ input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, server_tool_use: { web_search_requests: searches, web_fetch_requests: 1 } });
+    const { client, requests } = fakeClient((_p, n) =>
+      n === 1
+        ? message([{ type: "server_tool_use", id: "s1", name: "web_search", input: { query: "Apple Q3 results" } }], "pause_turn", { usage: usage(2) })
+        : message([
+            { type: "web_fetch_tool_result", tool_use_id: "f1", content: { type: "web_fetch_result", url: "https://www.apple.com/newsroom/q3", content: { type: "document", source: { type: "text", media_type: "text/plain", data: "…" } } } },
+            { type: "text", text: JSON.stringify(found) },
+          ], "end_turn", { usage: usage(1) }),
+    );
+    const { s, rec, jobs, log } = start(finder, client, { item: "AAPL" });
+    await settle(s, jobs, describeError);
+
+    expect(requests).toHaveLength(2);
+    const tools = requests[0]!.tools as { type: string; max_uses: number; allowed_domains?: string[] }[];
+    expect(tools.map((t) => [t.type, t.max_uses, t.allowed_domains])).toEqual([["web_search_20260209", 3, ["apple.com"]], ["web_fetch_20260209", 2, undefined]]);
+    expect(requests[0]!.system).toMatch(/Find what the step asks for on the web/);
+    expect((requests[0]!.output_config as { format: { type: string } }).format.type).toBe("json_schema");
+    // The paused message goes back unchanged, after the question.
+    expect(requests[1]!.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect((requests[1]!.messages[1]!.content as { type: string }[])[0]!.type).toBe("server_tool_use");
+
+    const v = rec.state.nodes.research!.versions["1.1"]!;
+    expect(v.output).toEqual(found);
+    expect(v.references).toEqual([{ label: "page 1", ref: "https://www.apple.com/newsroom/q3" }]);
+    expect(v.costUsd).toBeCloseTo(0.008 * 2 + 0.03, 6); // two requests' tokens, three searches
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+
+  it("a search that keeps pausing stops after 6 rounds with a plain reason", async () => {
+    const { client } = fakeClient(() => message([{ type: "server_tool_use", id: "s", name: "web_search", input: {} }], "pause_turn"));
+    const { s, rec, jobs } = start(finder, client, { item: "AAPL" });
+    await settle(s, jobs, describeError);
+    expect(rec.state.nodes.research?.failure).toMatch(/didn't finish after 6 rounds/);
+  });
+});
+
 describe("fields typed library.<kind>: only names the Library has", () => {
   it("the schema Claude answers to lists the Library's places and characters; a kind with none is a plain error", async () => {
     const g = load(`graph: part

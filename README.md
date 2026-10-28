@@ -26,7 +26,7 @@ The first use case is *Mohalla Mitra*, an Instagram motion-comic series: story â
 - **The Library:** characters, places and tracks, with facet history
 - **A CLI** (`bin/kriya`) and **a browser app** (`kriya web`): run graphs, a review inbox, phone review over home wifi
 
-On Oct 26 the real Part 3 of *Mohalla Mitra* was made end to end through kriya: 13 panels, 4 clips and 19 voice lines, assembled into a 106-second Reel.
+On Oct 26 the real Part 3 of *Mohalla Mitra* was made end to end through kriya: 13 panels, 4 clips and 19 voice lines, assembled into a 106-second Reel. A second, text-only example, [earnings reports](examples/earnings-report/README.md), runs on the same engine.
 
 What's next: [docs/16-roadmap.md](docs/16-roadmap.md).
 
@@ -101,6 +101,7 @@ packages/
   web/               the browser app (React): run graph, inbox, review, Library
 examples/
   mohalla-mitra/     part, shot and voice recipes for the reference use case
+  earnings-report/   a text-only example: find each company's earnings release on the web, summarize, score, rank
 docs/                design (01â€“19), architecture, CLI, decisions, roadmap, write-ups
 scripts/             repo checks (conventions)
 bin/kriya            runs the CLI from this checkout

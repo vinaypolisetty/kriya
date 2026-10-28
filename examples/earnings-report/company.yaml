@@ -1,0 +1,124 @@
+# Company recipe: runs once per earnings release. Summarize from the release only (a judge checks
+# every number against it), score against the thesis, write the report, and a person reads it.
+graph: company_report
+level: company
+inherits: [desk]
+
+inputs:
+  item: json   # one filing: id (ticker), company, release (its text), source (where it came from)
+
+types:
+  metric:
+    fields:
+      name: text      # e.g. Revenue
+      value: text     # e.g. $412M in Q3 2026
+      change: text    # e.g. up 14% on Q3 2025
+  score:
+    fields:
+      criterion: text
+      score: number
+      why: text
+
+outputs:
+  company: item.company
+  report: review.selected
+  total: score.total
+
+nodes:
+  - id: summarize
+    kind: model
+    name: Summarize the release
+    capability: llm.write
+    prompt: |
+      Summarize {{item.company}}'s quarter from its earnings release, using only what the release says.
+      Give every number with its unit and period, and the change it reports.
+      Release:
+      {{item.release}}
+    uses: [item.company, item.release]
+    check:
+      rubric:
+        - Every number appears in the release, with the same value and period.
+        - The guidance is what the release says, not a forecast of your own.
+        - No buy, sell or hold call.
+    out:
+      headline: text
+      metrics: list<metric>
+      guidance: text
+      risks: list<text>
+
+  - id: check_summary
+    kind: screen
+    name: Check the summary
+    review: approve
+    show: summarize.headline
+    beside: [summarize.metrics, summarize.guidance]
+    trust: when_confident   # a summary the judge passed locks itself; one it didn't comes to you
+    actions:
+      - { id: approve, locks: true }
+      - { id: retry, needs: [note] }
+
+  - id: score
+    kind: model
+    name: Score against the thesis
+    capability: llm.write
+    trust: always
+    prompt: |
+      Score {{item.company}} against this thesis: {{desk.thesis}}
+      Give a score from 0 to 10 for each of these, with one line on why, based only on the summary:
+      {{desk.scoring}}
+      The total is their average, to one decimal.
+      Summary: {{summarize.headline}} Metrics: {{summarize.metrics}} Guidance: {{summarize.guidance}} Risks: {{summarize.risks}}
+    uses: [item.company, desk.thesis, desk.scoring, summarize.headline, summarize.metrics, summarize.guidance, summarize.risks]
+    check: { total: { min: 0, max: 10 } }
+    out:
+      scores: list<score>
+      total: number
+
+  - id: write
+    kind: model
+    name: Write the report
+    capability: llm.write
+    prompt: |
+      Write a one-page report on {{item.company}}'s quarter in Markdown: the headline, the numbers that matter,
+      the guidance, how it fits the thesis criterion by criterion (with the scores), and the risks.
+      {{desk.style}} End with one line naming the source: {{item.source}}
+      Summary: {{summarize.headline}} Metrics: {{summarize.metrics}} Guidance: {{summarize.guidance}} Risks: {{summarize.risks}}
+      Scores: {{score.scores}} Total: {{score.total}} out of 10
+    uses: [item.company, item.source, desk.style, summarize.headline, summarize.metrics, summarize.guidance, summarize.risks, score.scores, score.total]
+    check:
+      rubric:   # the reviewer sees what this finds next to the report
+        - Every number appears in the summary or the scores, with the same value; nothing is computed (no differences or percentages of its own).
+        - No buy, sell or hold call.
+    out:
+      report: text
+
+  - id: review
+    kind: screen
+    name: Read the report
+    review: edit_text
+    show: write.report
+    beside: [item.source, score.total, summarize.headline]
+    actions:
+      - { id: approve, locks: true }
+      - { id: edit, needs: [note] }
+      - { id: redo, needs: [note] }
+
+  - id: revise
+    kind: model
+    name: Revise the report
+    capability: llm.write
+    refines: write      # the revision becomes the report's next version, so the review shows it
+    prompt: Revise this report as asked. Keep every number exactly as it is unless asked to change it.
+    out:
+      report: text
+
+edges:
+  - { from: summarize, to: check_summary }
+  - { from: check_summary, to: summarize, when: "action == 'retry'", max_loops: 3 }
+  - { from: check_summary, to: score, when: "action == 'approve'" }
+  - { from: score, to: write }
+  - { from: write, to: review }
+  - { from: review, to: revise, when: "action == 'edit'" }
+  - { from: revise, to: review, max_loops: 5 }
+  - { from: review, to: write, when: "action == 'redo'", max_loops: 3 }
+  - { from: review, to: END, when: "action == 'approve'" }

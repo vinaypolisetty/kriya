@@ -58,6 +58,28 @@ describe("code checks: limits on what a step made (Day 20)", () => {
   });
 });
 
+describe("a yes/no check: found: { is: true } (D-74)", () => {
+  const find = recipe(`graph: find
+level: company
+nodes:
+  - id: research
+    kind: model
+    capability: llm.research
+    trust: always
+    check: { found: { is: true } }
+    out: { found: boolean, release: text }
+edges:
+  - { from: research, to: END, when: "verdict.pass" }
+`);
+  it("a find that read the release passes; one that didn't fails as 'not found'", () => {
+    const yes = start(find, { produce: () => [{ found: true, release: "Revenue up 9%" }], decide: () => undefined });
+    expect(yes.rec.state.nodes.research!.versions["1.1"]!.verdicts[0]).toMatchObject({ by: "code", pass: true, issues: [] });
+    const no = start(find, { produce: () => [{ found: false, release: "the fetch limit ran out" }], decide: () => undefined });
+    expect(no.rec.state.nodes.research!.versions["1.1"]!.verdicts[0]).toMatchObject({ by: "code", pass: false, issues: [{ type: "not_found", what: "not found" }] });
+    expect(replay(readRun(no.log, "run1"))).toEqual(no.rec.state);
+  });
+});
+
 const panel = (trust: string, screen = false) =>
   recipe(`graph: shot
 level: shot
@@ -170,8 +192,17 @@ edges:
     expect(problems(step("{ seconds: {} }"))).toEqual(["say the limit, e.g. seconds: { max: 8 }"]);
     expect(problems(step("{ seconds: { min: 9, max: 8 } }"))).toEqual(["min (9) is above max (8)"]);
   });
-  it("a rubric on a step that makes no image", () => {
-    expect(problems(step('{ rubric: ["clear"] }'))).toEqual(["a rubric is judged by looking at images, and this step makes none"]);
+  it("a rubric on a step that makes audio: the judge can't listen (written work is fine, D-73)", () => {
+    expect(problems(step('{ rubric: ["clear"] }'))).toEqual(["a rubric is judged by looking at images or reading words, and this step makes audio; limit a number instead, e.g. seconds: { max: 8 }"]);
+  });
+  it("a yes/no check needs a boolean the step makes, and takes is:, not min or max (D-74)", () => {
+    expect(problems(step("{ found: { is: true } }", "{ found: boolean, release: text }"))).toEqual([]);
+    expect(problems(step("{ fund: { is: true } }", "{ found: boolean }"))).toEqual(["'fund' isn't a yes/no (boolean) this step makes. Did you mean 'found'? 'is:' checks one in its out (found)"]);
+    expect(problems(step("{ found: { is: true, min: 1 } }", "{ found: boolean }"))).toEqual(["'found' is a yes/no: use is: true or is: false, not min or max"]);
+  });
+  it("a rubric on written work is fine; on a step with no outputs there's nothing to judge", () => {
+    expect(problems(step('{ rubric: ["every number is in the release"] }', "{ summary: text, total: number, notes: list<text> }"))).toEqual([]);
+    expect(problems(step('{ rubric: ["clear"] }', "{}"))).toEqual(["a rubric needs something to judge, and this step declares no outputs (out:)"]);
   });
   it("an edge reading 'verdict' from a step with no check", () => {
     expect(problems(`graph: g

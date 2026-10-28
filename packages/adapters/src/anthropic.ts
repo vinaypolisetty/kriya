@@ -3,6 +3,9 @@
  *
  * - `llm.write` / `llm.vision` model steps: one request per candidate, the
  *   answer constrained to the step's declared outputs (structured outputs).
+ * - `llm.research` (Day 34, D-74): the same, with Claude's web search and web
+ *   fetch on. A long search pauses and is carried on; the pages it read are
+ *   recorded as the version's references, and each search adds its cent.
  * - Checks (Day 20): a judge looks at each candidate's images against the
  *   step's `check.rubric` and answers pass or the issues, each with a fix.
  * - Agent steps: one request per turn. The engine owns the loop (D-26); this
@@ -72,11 +75,20 @@ export type AnthropicOptions = {
 const SYSTEM_STEP =
   "You are one step in a kriya recipe: a production pipeline where a person reviews the results. Do exactly what the step asks, using the inputs given. Reply with JSON that fits the schema.";
 
+const SYSTEM_RESEARCH =
+  "You are one step in a kriya recipe: a production pipeline where a person reviews the results. Find what the step asks for on the web: search, then read the pages themselves with web fetch. Prefer the original source over coverage of it. Copy facts and numbers exactly as the source gives them. Reply with JSON that fits the schema.";
+
+/** Web search is billed per search on top of tokens (web fetch is tokens only). */
+const USD_PER_SEARCH = 0.01;
+
 const SYSTEM_AGENT =
   "You are an agent running one step of a kriya recipe: a production pipeline where a person reviews the results. Work toward the goal with your tools. Ask the person with ask_human only when you need a decision or a fact only they have. When you're done, call finish with your result; that ends the step.";
 
 const SYSTEM_JUDGE =
   "You check one candidate made by a step in a production pipeline, before a person sees it. Look at the image closely. It passes only if every rule holds. For each rule it breaks, give one issue. Be strict about the rules and ignore everything else.";
+/** The judge for written work: no image, so it reads the candidate against what the step was given. */
+const SYSTEM_JUDGE_TEXT =
+  "You check one candidate written by a step in a production pipeline, before a person sees it. Read it closely against what the step was asked and the material it was given: a number, name or claim that the material doesn't support is an issue. It passes only if every rule holds. For each rule it breaks, give one issue. Be strict about the rules and ignore everything else.";
 
 /** What the judge answers, as a strict JSON Schema: pass, and the issues with a fix for each. */
 const VERDICT_SCHEMA = {
@@ -103,6 +115,27 @@ const VERDICT_SCHEMA = {
   },
 };
 
+/** The same verdict for written work: no crop, and `where` names the field or sentence. */
+const TEXT_VERDICT_SCHEMA = {
+  ...VERDICT_SCHEMA,
+  properties: {
+    ...VERDICT_SCHEMA.properties,
+    issues: {
+      ...VERDICT_SCHEMA.properties.issues,
+      items: {
+        ...VERDICT_SCHEMA.properties.issues.items,
+        properties: {
+          ...VERDICT_SCHEMA.properties.issues.items.properties,
+          type: { type: "string", description: "a short snake_case name, e.g. unsupported_number, missing_section, advice, wrong_company" },
+          where: { type: "string", description: "which field or sentence, or empty if all over" },
+          fix: { type: "string", enum: ["edit", "retry"], description: "edit if one part is wrong, retry if it's wrong overall" },
+          keep: { type: "string", description: "always empty" },
+        },
+      },
+    },
+  },
+};
+
 export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "produce" | "turn" | "check" | "managesContext"> & { handles(node: Node): boolean } {
   let made: Anthropic | undefined;
   /** The client, made on the first call: a key is needed only when Claude is actually asked something. */
@@ -122,6 +155,34 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
     return m;
   };
 
+  /**
+   * One `llm.research` answer: Claude with web search and web fetch. The API
+   * runs the searches inside the request; when a long one pauses
+   * (`pause_turn`), the paused message goes back unchanged and it carries on.
+   * `params`: `max_searches` (default 5), `max_fetches` (default 5), `domains`
+   * (only search these sites), `effort` (this step's own, e.g. `medium` to spend less).
+   */
+  const research = async (c: Anthropic, model: string, content: Anthropic.Beta.Messages.BetaContentBlockParam[], schema: Record<string, unknown>, p: Record<string, unknown>) => {
+    const tools = [
+      { type: "web_search_20260209", name: "web_search", max_uses: Number(p.max_searches ?? 5), ...(Array.isArray(p.domains) ? { allowed_domains: p.domains.map(String) } : {}) },
+      { type: "web_fetch_20260209", name: "web_fetch", max_uses: Number(p.max_fetches ?? 5), max_content_tokens: 40000 },
+    ] as unknown as Anthropic.Beta.Messages.BetaToolUnion[];
+    const messages: Anthropic.Beta.Messages.BetaMessageParam[] = [{ role: "user", content }];
+    const pages = new Set<string>();
+    let spent = 0;
+    for (let round = 1; ; round++) {
+      const m = await request(c, { model, system: SYSTEM_RESEARCH, output_config: { effort: (p.effort as Effort | undefined) ?? effort, format: { type: "json_schema", schema } }, tools, messages });
+      const searches = (m.usage as { server_tool_use?: { web_search_requests?: number } | null }).server_tool_use?.web_search_requests ?? 0;
+      spent += cost(m) + searches * USD_PER_SEARCH;
+      for (const b of m.content as { type: string; content?: { type?: string; url?: string } }[]) {
+        if (b.type === "web_fetch_tool_result" && b.content?.type === "web_fetch_result" && b.content.url) pages.add(b.content.url);
+      }
+      if (m.stop_reason !== "pause_turn") return { m, cost: Math.round(spent * 1e6) / 1e6, pages: [...pages] };
+      if (round >= 6) throw new Error("the web research didn't finish after 6 rounds; try the step again, or narrow what it looks for");
+      messages.push({ role: "assistant", content: m.content as unknown as Anthropic.Beta.Messages.BetaContentBlockParam[] });
+    }
+  };
+
   return {
     managesContext: true,
 
@@ -138,10 +199,15 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
           const content = stepContent(node.prompt ?? "", ctx, node.capability === "llm.vision");
           const prompt = content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
           const references = content.flatMap((b, i) => (b.type === "image" && b.source.type === "url" ? [{ label: `image ${i + 1}`, ref: b.source.url }] : []));
+          const model = node.model ?? opts.model ?? DEFAULT_MODEL;
+          if (node.capability === "llm.research") {
+            const found = await Promise.all(Array.from({ length: node.options }, () => research(c, model, content, schema, node.params ?? {})));
+            return { outputs: found.map((f) => parseJson(f.m)), meta: found.map((f) => ({ model: f.m.model, cost_usd: f.cost, prompt, references: f.pages.map((url, i) => ({ label: `page ${i + 1}`, ref: url })) })) };
+          }
           const answers = await Promise.all(
             Array.from({ length: node.options }, () =>
               request(c, {
-                model: node.model ?? opts.model ?? DEFAULT_MODEL,
+                model,
                 system: SYSTEM_STEP,
                 output_config: { effort, format: { type: "json_schema", schema } },
                 messages: [{ role: "user", content }],
@@ -159,18 +225,30 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       const ticket = `check:${ctx.idempotencyKey}`;
       const c = client();
       const media = opts.media;
-      if (!media) throw new Error("the judge has nowhere to read images from");
       const rubric = node.check.rubric;
       const fields = Object.entries(node.out).filter(([, t]) => t === "image").map(([f]) => f);
+      // A step with no image is written work: the judge reads it (D-73).
+      const written = fields.length === 0;
+      if (!written && !media) throw new Error("the judge has nowhere to read images from");
       const asked = "prompt" in node && node.prompt ? judgeText(node.prompt, ctx) : (node.name ?? node.id);
+      const rules = `Rules:\n${rubric.map((r, i) => `${i + 1}. ${r}`).join("\n")}`;
       opts.jobs.start(ticket, {
         kind: "verdicts",
         run: () =>
           Promise.all(
             candidates.map(async (cand): Promise<Judged> => {
+              if (written) {
+                const m = await request(c, {
+                  model: opts.model ?? DEFAULT_MODEL,
+                  system: SYSTEM_JUDGE_TEXT,
+                  output_config: { effort, format: { type: "json_schema", schema: TEXT_VERDICT_SCHEMA } },
+                  messages: [{ role: "user", content: [{ type: "text", text: `What the step was asked, with the material it was given:\n${asked}\n\nThe candidate:\n${show(cand.output)}\n\n${rules}` }] }],
+                });
+                return verdictOf(m, cand.version);
+              }
               const images = fields.flatMap((f): Anthropic.Beta.Messages.BetaImageBlockParam[] => {
                 const v = cand.output[f];
-                const img = typeof v === "string" ? media.read(v) : undefined;
+                const img = typeof v === "string" ? media!.read(v) : undefined;
                 if (!img) return [];
                 if ("url" in img) return [{ type: "image", source: { type: "url", url: img.url } }];
                 if (!/^image\/(png|jpeg|webp|gif)$/.test(img.mime)) return [];
@@ -181,11 +259,9 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
                 model: opts.model ?? DEFAULT_MODEL,
                 system: SYSTEM_JUDGE,
                 output_config: { effort, format: { type: "json_schema", schema: VERDICT_SCHEMA } },
-                messages: [{ role: "user", content: [...images, { type: "text" as const, text: `What the step was asked:\n${asked}\n\nRules:\n${rubric.map((r, i) => `${i + 1}. ${r}`).join("\n")}` }] }],
+                messages: [{ role: "user", content: [...images, { type: "text" as const, text: `What the step was asked:\n${asked}\n\n${rules}` }] }],
               });
-              const v = parseJson(m) as { pass: boolean; issues: { type: string; what: string; where: string; fix: string; keep: string }[] };
-              const issues = v.issues.map(({ where, keep, ...i }) => ({ ...i, ...(where ? { where } : {}), ...(keep && i.fix === "crop" ? { keep } : {}) }));
-              return { version: cand.version, pass: v.pass && issues.length === 0, issues, model: m.model, cost_usd: cost(m) };
+              return verdictOf(m, cand.version);
             }),
           ),
       });
@@ -214,6 +290,13 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       return new Pending(ticket);
     },
   };
+}
+
+/** The judge's answer as a verdict to record: empty fields dropped, `keep` only on a crop. */
+function verdictOf(m: Message, version: string): Judged {
+  const v = parseJson(m) as { pass: boolean; issues: { type: string; what: string; where: string; fix: string; keep: string }[] };
+  const issues = v.issues.map(({ where, keep, ...i }) => ({ ...i, ...(where ? { where } : {}), ...(keep && i.fix === "crop" ? { keep } : {}) }));
+  return { version, pass: v.pass && issues.length === 0, issues, model: m.model, cost_usd: cost(m) };
 }
 
 /** A plain-words reason for a failed call, for the step's failure. */

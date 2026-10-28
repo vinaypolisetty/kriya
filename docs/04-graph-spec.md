@@ -168,13 +168,13 @@ Model and tool steps can check what they make, before anyone sees it:
   capability: image.generate
   options: 3
   check:
-    rubric:                        # an LLM judge looks at each image; it passes only if every rule holds
+    rubric:                        # an LLM judge looks at each image (or reads written work); it passes only if every rule holds
       - Every listed character appears, and each looks like their description.
       - Only the listed characters appear; no extra people.
     # limits on number outputs are code checks, e.g. on a voice step: seconds: { max: 8 }
 ```
 
-Each check records a verdict on each candidate: pass, or issues, each with a `fix` (`crop`, `edit` or `retry`). Screens show them. `trust: when_confident` locks the first candidate that passed (it asks when none did). An edge can route on `verdict.pass` (and `verdict.issues`) like `result`. A rubric needs an image output; a limit needs a number output.
+Each check records a verdict on each candidate: pass, or issues, each with a `fix` (`crop`, `edit` or `retry`). Screens show them. `trust: when_confident` locks the first candidate that passed (it asks when none did). An edge can route on `verdict.pass` (and `verdict.issues`) like `result`. A rubric on a step that makes images is judged by looking at them. On written work (text, numbers, lists, declared types) the judge reads the candidate against what the step was given, so "every number appears in the release" can be checked; its fixes are `edit` or `retry` ([D-73](17-decisions.md)). The judge can't listen or watch: a step making audio or video limits a number instead (`seconds: { max: 8 }`). A limit needs a number output.
 
 A screen with `trust: when_confident` follows its candidates' checks for up to 3 rounds (Day 21, D-64): it locks a candidate that passed, or presses the fix the knowledge base suggests (`crop` with the area the judge says to keep, `edit` with the rule's wording, or `retry` with every issue as the note). Its decisions are recorded `by: auto`. Any other screen shows the suggestion in the inbox.
 
@@ -198,10 +198,12 @@ The executor gets `parent` (the version it starts from) and `instruction`. The s
 ```yaml
 - id: per_shot
   kind: map
-  over: shot_list.shots   # list to iterate
+  over: shot_list.shots   # list to iterate: a step's locked output, or this recipe's inputs.filings / item.lines
   graph: shot_recipe      # graph to run per item
   key: id                 # stable item key (default: id)
 ```
+
+`over` reads a list from a step's locked output, or from the recipe's own inputs: `inputs.filings` at the top, `item.lines` inside another map ([D-73](17-decisions.md)). A list of plain names (`["AAPL", "MSFT"]`) works too: each name is its own key and the child sees it as `item`. And `over: find`, naming another map, goes through that map's results: one row per item, its outputs side by side, its key as `id` ([D-74](17-decisions.md)). Inputs were recorded when the run (or the item) started, so either way the map reads recorded data.
 
 The child graph sees the item as `item`. Child instances are keyed by `item.<key>` so they survive list regeneration: the steps of shot P3-04 are `per_shot[P3-04].draw`, `per_shot[P3-04].pick`, …. Keys use letters, digits, `-` and `_`, and must be unique in the list.
 

@@ -639,8 +639,33 @@ describe("plain errors", () => {
 
   it("an unknown example lists the ones that exist", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kriya-cli-"));
-    expect((await kriya(dir, "init", "p3", "--example", "mohalla-example")).err).toBe("✗ there's no example called 'mohalla-example'. Examples: mohalla-mitra");
-    expect((await kriya(dir, "init", "--examples")).out).toBe("Examples: mohalla-mitra");
+    expect((await kriya(dir, "init", "p3", "--example", "mohalla-example")).err).toBe("✗ there's no example called 'mohalla-example'. Examples: earnings-report, mohalla-mitra");
+    expect((await kriya(dir, "init", "--examples")).out).toBe("Examples: earnings-report, mohalla-mitra");
+  });
+
+  it("an example brings its own settings and sample files; the hint names its top recipe (D-73)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-"));
+    const r = await kriya(dir, "init", "q3", "--example", "earnings-report");
+    expect(r.out).toBe("✓ Created q3 with the earnings-report recipes\n  Next: cd q3 && kriya run quarter_review --input quarter=… --input tickers=…");
+    const cwd = join(dir, "q3");
+    expect(readdirSync(join(cwd, "recipes")).sort()).toEqual(["company.yaml", "find.yaml", "quarter.yaml", "releases.yaml"]);
+    expect(existsSync(join(cwd, "filings.json")) && existsSync(join(cwd, "README.md"))).toBe(true);
+    const settings = readFileSync(join(cwd, "kriya.yaml"), "utf8");
+    expect(settings).toMatch(/^name: q3$/m);
+    expect(settings).toMatch(/^ {2}desk:$/m);
+    expect(settings).not.toMatch(/character/);
+
+    // From pasted releases, with fakes: a passing summary locks itself (when_confident); each report waits to be read.
+    expect((await kriya(cwd, "run", "quarter_from_releases", "--input", "quarter=Q3 2026", "--input", "filings=@filings.json")).code).toBe(0);
+    const inbox = (await kriya(cwd, "inbox")).out;
+    expect(inbox).toContain("per_company[ACME].review: Read the report");
+    expect(inbox).toContain("per_company[LNTR].review: Read the report");
+
+    // From tickers, with the web research faked: each ticker is found, then reported on (D-74).
+    expect((await kriya(cwd, "run", "quarter_review", "--input", "quarter=Q3 2026", "--input", 'tickers=["AAPL","MSFT"]', "--id", "web")).code).toBe(0);
+    const web = (await kriya(cwd, "inbox")).out;
+    expect(web).toContain("web · per_company[AAPL].review: Read the report");
+    expect(web).toContain("web · per_company[MSFT].review: Read the report");
   });
 
   it("init refuses to overwrite a project", async () => {

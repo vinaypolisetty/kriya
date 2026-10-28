@@ -508,6 +508,7 @@ const VERBS: Record<string, string> = {
   "audio.music": "scores",
   "llm.write": "writes",
   "llm.vision": "looks",
+  "llm.research": "researches the web",
 };
 
 /** What one step is, in a few words, for its box on the graph. */

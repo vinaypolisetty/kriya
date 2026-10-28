@@ -187,8 +187,9 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
     }
 
     case "MapExpanded": {
+      // A list from the recipe's inputs (D-73) has no node: it was recorded with the run or the item.
       const src = state.nodes[e.source];
-      if (!src?.versions[e.version]) fail(e, `source ${e.source} @ ${e.version} doesn't exist`);
+      if (e.version !== "inputs" && !src?.versions[e.version]) fail(e, `source ${e.source} @ ${e.version} doesn't exist`);
       if (new Set(e.keys).size !== e.keys.length) fail(e, "two items share a key");
       return next({ items: { keys: e.keys, source: e.source, version: e.version, path: e.path } });
     }

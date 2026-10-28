@@ -71,6 +71,7 @@ packages/cli/src/
   fake.ts          fake models and Library for keyless runs
 bin/kriya          runs the CLI from this checkout in your current folder
 examples/mohalla-mitra/ reference recipes (part, shot, voice)
+examples/earnings-report/ text-only example (quarter, company); each example has its own kriya.yaml
 docs/                   design docs (numbered)
 ```
 

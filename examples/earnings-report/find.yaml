@@ -1,0 +1,56 @@
+# Find recipe: runs once per ticker. Claude searches the web for the company's latest quarterly
+# earnings release, reads it, and copies its results out, with the page it came from. A find that
+# read the release locks itself; one that couldn't comes to you, with why.
+graph: find_release
+level: company
+
+inputs:
+  item: text   # the ticker, e.g. AAPL
+
+outputs:
+  company: research.company
+  release: research.release
+  source: research.url
+  date: research.date
+
+nodes:
+  - id: research
+    kind: model
+    name: Find the latest release
+    capability: llm.research   # Claude with web search and web fetch (D-74)
+    params: { max_searches: 6, max_fetches: 5, effort: medium }
+    prompt: |
+      Find the most recent quarterly earnings release from the company whose stock ticker is {{item}}.
+      Search for its newest results first and compare release dates: use the latest one.
+      Prefer the company's own investor-relations or newsroom page; otherwise its SEC filing
+      (the 8-K, exhibit 99.1). Fetch that page and read it.
+      Copy out its results as the release states them, word for word where it gives numbers: the headline
+      figures with the changes it reports, the income statement lines it highlights, cash flow, cash and
+      debt, and the outlook or guidance. Tables become plain lines. Don't summarize, round or work anything out.
+      Also give the company's name, the page's URL, and the release's date.
+      If you couldn't read the release itself, set found to false and say in release what you tried
+      and why it failed. Never fill anything in from memory.
+    uses: [item]
+    check: { found: { is: true } }
+    out:
+      found: boolean
+      company: text
+      release: text
+      url: text
+      date: text
+
+  - id: check_find
+    kind: screen
+    name: Check the find
+    review: approve
+    show: research.release
+    beside: [research.url, research.date]
+    trust: when_confident   # a find that read the release locks itself; one that didn't comes to you
+    actions:
+      - { id: approve, locks: true }
+      - { id: retry, needs: [note] }   # e.g. "the Q3 release is at https://investors.example.com/…"
+
+edges:
+  - { from: research, to: check_find }
+  - { from: check_find, to: research, when: "action == 'retry'", max_loops: 2 }
+  - { from: check_find, to: END, when: "action == 'approve'" }
