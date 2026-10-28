@@ -77,8 +77,8 @@ Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya r
 
 | Day | Date | Focus | Done when |
 |---|---|---|---|
-| 36 | Tue Nov 17 | README: demo GIF, posted Reel, 3-command quickstart | A stranger understands it in a minute |
-| 37 | Wed Nov 18 | Docs: architecture, spec reference, writing recipes, adding adapters | docs/ complete |
+| 36 | Tue Nov 17 | README: demo GIF, posted Reel, 3-command quickstart ✅ (Oct 27, except the posted Reel's link). The README leads with what kriya does, a GIF of the real Part 3 project in `kriya web`, and three commands that work from a fresh clone (checked: clone → install, with the web app built on install, → init → run → web). Making the GIF showed the graph didn't say what happened ("redo ×3" read as three redos; a review just said "done"), so: `kriya log` and each step's **What happened** (the event log in plain words), loops that say "up to 3×" or "1 of 3", reviews that say what was pressed and by whom, boxes you can drag like cards on a board. Also fixed: a locked step showing an old failure; a finished run whose recipe gained a step ending "failed" | A stranger understands it in a minute |
+| 37 | Wed Nov 18 | Docs: architecture, spec reference, writing recipes, adding adapters ✅ (Oct 27). New: [writing-recipes.md](writing-recipes.md), a recipe built from nothing in four steps, every snippet and message run as written. Architecture (with adding adapters) and the spec reference existed; brought up to date, and the VS Code guide no longer says to unzip a zip. Writing the guide found a silent hole: a for-each's recipe asking for any input but `item` got nothing. The validator now refuses it, with the fix | docs/ complete |
 | 38 | Thu Nov 19 | Fresh-machine test, docker compose, fake-model example (no keys) | Clone-to-running < 10 min |
 | 39 | Fri Nov 20 | Coverage + CI badge; roadmap issues; good-first-issue labels | Issues board public |
 | 40 | Sat Nov 21 | 3-minute demo video | Video linked from README |

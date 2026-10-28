@@ -9,6 +9,7 @@ These docs record the full design as of October 2026: what was decided, why, and
 | [Architecture](architecture.md) | The packages, the life of a run, where state lives, where to make a change |
 | [Contributing](../CONTRIBUTING.md) | Conventions, comments, error messages, tests, the review checklist |
 | [Command line](cli.md) | Every `kriya` command |
+| [Writing a recipe](writing-recipes.md) | Build a recipe from nothing: a draft, your pick, a judge, a step that reads only what you locked, then once per item |
 | Package READMEs | [engine](../packages/engine/README.md) · [store](../packages/store/README.md) · [adapters](../packages/adapters/README.md) · [cli](../packages/cli/README.md) · [web](../packages/web/README.md) |
 
 Design docs:

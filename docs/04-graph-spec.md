@@ -283,6 +283,7 @@ Implemented in `validate.ts`. Errors block publishing; warnings don't.
 | Duplicate graph or node ids | error |
 | Edge endpoints must be nodes (with "did you mean") | error |
 | `map` / `subgraph` must point at an existing graph; a graph can't map over itself | error |
+| A graph a `map` runs has one input, `item`; any other input it declares would always be empty | error |
 | References in `uses`, `show`, `beside`, `{{prompt}}`, `over` and `outputs` must start at a step, a built-in scope (`item`, `inputs`, `run`, `assets`) or an inherited level; a known level that isn't inherited gets "add inherits: [series]" | error |
 | Field types must be primitives or declared types | error |
 | Conditions must parse | error |
