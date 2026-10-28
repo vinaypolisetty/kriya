@@ -7,6 +7,9 @@
  *   GET  /api/runs/<id>/graph[?at=per_shot[P3-04]]
  *                          a run as its recipe's graph with each step's live state (Day 24, D-67);
  *                          `at` opens one item of a for-each step
+ *   GET  /api/runs/<id>/trace[?at=…][&key=…]
+ *                          what happened, from the event log (Day 36): one step's lines in plain words
+ *                          (`key`), how often each arrow was taken, and each review's last answer
  *   GET  /api/inbox        what's waiting on you, with each candidate's checks and the suggested fix
  *   GET  /api/media/<sha>  an image, clip or voice line from the blob store
  *   POST /api/decide       press a button: { run, key, action, selection?, note?, region? }
@@ -44,6 +47,7 @@ import { libraryAssets, MEDIA } from "./library.js";
 import { loadProject, type Project } from "./project.js";
 
 /** The built web app. */
+import { traceView } from "./trace.js";
 const APP = fileURLToPath(new URL("../../web/dist", import.meta.url));
 const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json" };
 
@@ -362,6 +366,13 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     }
     if (req.method === "GET" && url.pathname === "/api/inbox") return json(res, 200, { project: first.settings.name, items: await inbox() });
     if (req.method === "GET" && url.pathname === "/api/runs") return json(res, 200, { project: first.settings.name, runs: await runs() });
+    const traced = /^\/api\/runs\/([^/]+)\/trace$/.exec(url.pathname);
+    if (req.method === "GET" && traced) {
+      const id = decodeURIComponent(traced[1]!);
+      if (!store.events.runs().includes(id)) throw new BadRequest(`there's no run '${id}'`);
+      const opts = { at: url.searchParams.get("at") ?? "", ...(url.searchParams.get("key") ? { key: url.searchParams.get("key")! } : {}) };
+      return json(res, 200, traceView(store.events.read(id), current().graphs, opts));
+    }
     const graph = /^\/api\/runs\/([^/]+)\/graph$/.exec(url.pathname);
     if (req.method === "GET" && graph) return json(res, 200, await runGraph(decodeURIComponent(graph[1]!), url.searchParams.get("at") ?? ""));
     if (req.method === "POST" && url.pathname === "/api/retry") {

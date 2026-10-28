@@ -327,6 +327,27 @@ describe("show: what a run made", () => {
     expect(out).toContain("Version 1.1 · 🔒 locked");
   });
 
+  it("log tells what happened, in order: drafts, who pressed what, the lock it made, the edit's note (Day 36)", async () => {
+    const cwd = await project();
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
+    await kriya(cwd, "decide", "1", "approve");
+    await kriya(cwd, "decide", "1", "edit", "--pick", "1.3", "--note", "add the gamcha");
+
+    const approve = (await kriya(cwd, "log", "part_recipe-1", "approve_shots")).out.split("\n").map((l) => l.replace(/^ {2}\d\d:\d\d {2}/, ""));
+    expect(approve.slice(1)).toEqual(["Waiting for you", "You pressed approve", "Locked Break it into shots 1.1 by you", "Done", "→ on to Make each shot", "→ on to Voice each line"]);
+    const pick = (await kriya(cwd, "log", "part_recipe-1", "per_shot[S1].pick")).out;
+    expect(pick).toContain('You pressed edit on 1.3 · note: "add the gamcha"');
+    const draw = (await kriya(cwd, "log", "part_recipe-1", "per_shot[S1].draw")).out;
+    expect(draw).toMatch(/Made 1\.1\n.*Made 1\.2\n.*Made 1\.3/);
+    expect(draw).toContain('Made 2.1 by Edit the image from 1.3 · asked: "add the gamcha"'); // the edit refines draw: its version shows here too
+
+    const all = (await kriya(cwd, "log", "part_recipe-1")).out;
+    expect(all).toContain("Run started: part_recipe with part_no=3, story_pages=x");
+    expect(all).toContain("per_shot  For each: 3 items (S1, S2, S3)");
+    expect((await kriya(cwd, "log", "part_recipe-2")).err).toBe("✗ there's no run 'part_recipe-2'. Did you mean 'part_recipe-1'? See your runs with: kriya status");
+    expect((await kriya(cwd, "log", "part_recipe-1", "nope")).err).toBe("✗ nothing has happened at 'nope' in part_recipe-1. See its steps with: kriya show part_recipe-1");
+  });
+
   it("says plainly what isn't there", async () => {
     const cwd = await project();
     await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");

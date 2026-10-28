@@ -377,3 +377,29 @@ describe("tips in the browser (Day 35, D-76)", () => {
     }
   });
 });
+
+describe("what happened, in the browser (Day 36)", () => {
+  it("a run's trace: each arrow's count, each review's last answer, and one step's lines in plain words", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      const get = async (q: string) => (await (await fetch(`${web.url}/api/runs/shot/trace${q}`)).json()) as { lines: { text: string; tone: string }[]; taken: number[]; answers: Record<string, unknown> };
+      const before = await get("");
+      expect(before.lines).toEqual([]); // lines only for one step
+      expect(before.answers).toEqual({});
+      const loop = loadProject(cwd).graphs.find((g) => g.graph === "shot_recipe")!.edges.findIndex((e) => e.from === "pick" && e.to === "draw");
+      expect(before.taken[loop]).toBe(0); // the retry loop: "up to 4×", not used
+
+      expect((await kriya(cwd, "decide", "1", "retry", "--note", "brighter")).code).toBe(0);
+      const after = await get("");
+      expect(after.taken[loop]).toBe(1);
+      expect(after.answers).toEqual({ pick: { action: "retry", by: "human" } });
+      const pick = await get("?key=pick");
+      expect(pick.lines.map((l) => [l.text, l.tone])).toContainEqual(['You pressed retry · note: "brighter"', "you"]);
+
+      const missing = await fetch(`${web.url}/api/runs/nope/trace`);
+      expect(missing.status).toBe(400);
+    } finally {
+      await web.close();
+    }
+  });
+});

@@ -291,3 +291,14 @@ button.icon { min-height: 32px; width: 32px; padding: 0; border: 0; font-size: 2
   .library, .entity-page { padding: 16px; }
   .entities { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* What happened at a step (Day 36): one line per event, who did it in colour. */
+.happened { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.happened li { display: grid; grid-template-columns: 92px 1fr; gap: 8px; padding-left: 8px; border-left: 3px solid var(--line); overflow-wrap: anywhere; }
+.happened time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.happened .tone-you { border-left-color: var(--amber); }
+.happened .tone-auto { border-left-color: var(--teal); }
+.happened .tone-model { border-left-color: var(--line); }
+.happened .tone-check { border-left-color: var(--teal); }
+.happened .tone-fail { border-left-color: var(--fail); }
+button.link { background: none; border: 0; padding: 6px 0; color: var(--teal); cursor: pointer; min-height: 40px; }

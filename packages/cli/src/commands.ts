@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
 import { answerTip, preventFor, projectTips } from "./kb.js";
+import { trace } from "./trace.js";
 import { libraryAssets } from "./library.js";
 import { loadProject, releaseOf, UserError, type Project } from "./project.js";
 
@@ -28,6 +29,7 @@ const HELP = `kriya: run recipes with people in the loop
                                                   start a run (models from kriya.yaml: fake, anthropic, replicate)
   kriya status [run]                              your runs, or one run's steps
   kriya show <run> [step] [version]               what a run made: every step, or one step's full output
+  kriya log <run> [step]                          what happened, in order: drafts, checks, buttons pressed and by whom, locks
   kriya inbox                                     what's waiting on you
   kriya decide <item> <button> [--pick v] [--note text] [--region x,y,w,h]
                                                   answer an inbox item (its number, or run:step)
@@ -52,6 +54,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "run": return await run(rest, io);
       case "status": return await status(rest, io);
       case "show": return await show(rest, io);
+      case "log": return await log(rest, io);
       case "inbox": return await inbox(io);
       case "decide": return await decide(rest, io);
       case "lock": return await lock(rest, io);
@@ -242,6 +245,34 @@ function summary(state: RunState, waiting: number): string {
 // ── show ────────────────────────────────────────────────────────────────────
 
 /** What a run made: every step with its versions, or one version's full output (and an agent's turns). */
+/**
+ * What happened in a run, oldest first, in plain words (Day 36). Reads the event
+ * log only: no replay, nothing recovered or run, so it's safe at any time.
+ */
+async function log(args: string[], io: IO): Promise<number> {
+  const [id, step] = args;
+  if (!id) throw new UserError("say which run: kriya log <run> [step]");
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const runs = store.events.runs();
+    if (!runs.includes(id)) throw new UserError(`there's no run '${id}'${suggest(id, runs)} See your runs with: kriya status`);
+    const lines = trace(store.events.read(id), project.graphs, step ? { key: step } : {});
+    if (step && lines.length === 0) throw new UserError(`nothing has happened at '${step}' in ${id}. See its steps with: kriya show ${id}`);
+    // Your own clock's day and time: a log is read by the person who was there.
+    let day = "";
+    for (const l of lines) {
+      const at = new Date(l.at);
+      const d = at.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+      if (d !== day) io.out(`${day ? "\n" : ""}${(day = d)}`);
+      io.out(`  ${at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}  ${step || !l.key ? "" : `${l.key}  `}${l.text}`);
+    }
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
 async function show(args: string[], io: IO): Promise<number> {
   const [id, step, version] = args;
   if (!id) throw new UserError("say which run: kriya show <run> [step] [version]");

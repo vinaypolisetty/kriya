@@ -57,6 +57,10 @@ export type Tip = { id: string; rule: string; step: string; hits: number; sympto
 export type Tips = { tips: Tip[]; applied: { rule: string; step: string }[] };
 export const answerTip = (id: string, answer: "apply" | "dismiss") => call<Tips>("/api/tips", { method: "POST", body: JSON.stringify({ id, answer }) });
 
+/** What happened in a run, from its event log (Day 36): one step's lines, how often each arrow was taken, each review's last answer. */
+export type TraceLine = { seq: number; at: string; key: string; text: string; tone: "you" | "auto" | "model" | "check" | "fail" | "info" };
+export type TraceView = { lines: TraceLine[]; taken: number[]; answers: Record<string, { action: string; by: "human" | "auto" }> };
+
 export const decide = (d: Decision) => call<{ items: Item[] }>("/api/decide", { method: "POST", body: JSON.stringify(d) }).then((r) => r.items);
 
 /** Whether the server's event stream is connected; every live view refetches when it says something changed. */

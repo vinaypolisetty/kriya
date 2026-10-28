@@ -1,6 +1,6 @@
 /** One step of a run, beside the graph: its state, why, what it made, and a way in if it's waiting on you. */
 import { useState } from "react";
-import { branchOff, retry, switchBranch, type GNode, type GVersion } from "./api";
+import { branchOff, retry, switchBranch, useLive, type GNode, type GVersion, type TraceView } from "./api";
 import { statusOf } from "./Graph";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
@@ -52,7 +52,36 @@ export function NodePanel({ n, run, onClose, onOpenItem }: { n: GNode; run: stri
       )}
 
       {n.versions.length > 0 && <VersionTree n={n} run={run} latest={latest} />}
+      {run && <Happened run={run} n={n} />}
     </aside>
+  );
+}
+
+/** What happened at this step, newest first, from the run's event log: drafts, checks, who pressed what, locks (Day 36). */
+function Happened({ run, n }: { run: string; n: GNode }) {
+  const t = useLive<TraceView>(`/api/runs/${encodeURIComponent(run)}/trace?key=${encodeURIComponent(n.key)}`).data;
+  const [all, setAll] = useState(false);
+  if (!t || t.lines.length === 0) return null;
+  const lines = [...t.lines].reverse();
+  const shown = all ? lines : lines.slice(0, 12);
+  const when = (at: string) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+  return (
+    <section>
+      <h3>What happened</h3>
+      <ol className="happened">
+        {shown.map((l) => (
+          <li key={l.seq} className={`tone-${l.tone}`}>
+            <time dateTime={l.at}>{when(l.at)}</time>
+            <span>{l.text}</span>
+          </li>
+        ))}
+      </ol>
+      {lines.length > shown.length && (
+        <button type="button" className="link" onClick={() => setAll(true)}>
+          Show all {lines.length}
+        </button>
+      )}
+    </section>
   );
 }
 
