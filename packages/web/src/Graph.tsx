@@ -4,9 +4,13 @@
  * the step's live state. White: an AI step · amber: you decide · grey: a tool.
  * On a phone the same steps are a list, top to bottom in the same order, each
  * saying where it goes next (Day 27).
+ *
+ * On a wide screen the boxes can be dragged anywhere, like cards on a board;
+ * the arrows follow. Where you put them is kept per recipe in this browser
+ * only: a layout is a viewer's convenience, not part of the recipe.
  */
-import { useEffect, useState, type CSSProperties } from "react";
-import type { GEdge, GNode, RunGraph } from "./api";
+import { useEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type PointerEvent } from "react";
+import { useLive, type GEdge, type GNode, type RunGraph, type TraceView } from "./api";
 
 const W = 216;
 const H = 84;
@@ -85,30 +89,43 @@ export function useNarrow(): boolean {
 }
 
 type GraphProps = { graph: RunGraph; selected?: string; onSelect: (id: string) => void; onOpenItem: (at: string) => void };
+/** What the event log says happened here: how often each arrow was taken (by index in `graph.edges`), each review's last answer. */
+type Happened = { taken?: number[]; answers: TraceView["answers"] };
 
 export function Graph(props: GraphProps) {
-  return useNarrow() ? <StepList {...props} /> : <Canvas {...props} />;
+  const { graph } = props;
+  const t = useLive<TraceView>(graph.run ? `/api/runs/${encodeURIComponent(graph.run)}/trace?at=${encodeURIComponent(graph.at)}` : undefined).data;
+  const happened: Happened = { ...(t ? { taken: t.taken } : {}), answers: t?.answers ?? {} };
+  return useNarrow() ? <StepList {...props} happened={happened} /> : <Canvas {...props} happened={happened} />;
+}
+
+/** A loop's words: its limit before it's used ("redo · up to 3×"), how much is used after ("redo · 1 of 3"). */
+const loopLabel = (e: GEdge, taken?: number) => `${e.label ?? "again"} · ${taken ? `${taken} of ${e.limit}` : `up to ${e.limit}×`}`;
+
+/** A finished review says what was pressed, and who pressed it, instead of just "done". */
+function answered(n: GNode, happened: Happened): string | undefined {
+  const a = n.kind === "screen" && n.status === "completed" ? happened.answers[n.key] : undefined;
+  return a ? `${a.by === "auto" ? "pressed itself" : "you pressed"}: ${a.action}` : undefined;
 }
 
 /** The steps top to bottom in the graph's order (column, then row), each with the arrows leaving it in words. */
-function StepList({ graph, selected, onSelect, onOpenItem }: GraphProps) {
+function StepList({ graph, selected, onSelect, onOpenItem, happened }: GraphProps & { happened: Happened }) {
   const { boxes } = layout(graph);
   const order = [...boxes.values()].filter((b) => b.node).sort((a, b) => a.x - b.x || a.y - b.y);
   const name = (id: string) => (id === "END" ? "done" : (graph.nodes.find((n) => n.id === id)?.name ?? id));
   return (
     <ol className="step-list">
       {order.map((b) => {
-        const out = graph.edges.filter((e) => e.from === b.id);
+        const out = graph.edges.map((e, i) => ({ ...e, taken: happened.taken?.[i] })).filter((e) => e.from === b.id);
         return (
           <li key={b.id}>
-            <Box n={b.node!} selected={selected === b.id} onSelect={onSelect} onOpenItem={onOpenItem} />
+            <Box n={b.node!} selected={selected === b.id} onSelect={onSelect} onOpenItem={onOpenItem} answer={answered(b.node!, happened)} />
             {out.length > 0 && (
               <p className="next">
                 {out.map((e, i) => (
                   <span key={i} className={e.back ? "back" : ""}>
-                    {e.back ? "↺" : "→"} {e.label ? `${e.label}: ` : ""}
+                    {e.back ? "↺" : "→"} {e.back ? `${loopLabel(e, e.taken)}: ` : e.label ? `${e.label}: ` : ""}
                     {name(e.to)}
-                    {e.back ? ` (up to ${e.limit}×)` : ""}
                   </span>
                 ))}
               </p>
@@ -120,11 +137,90 @@ function StepList({ graph, selected, onSelect, onOpenItem }: GraphProps) {
   );
 }
 
-function Canvas({ graph, selected, onSelect, onOpenItem }: GraphProps) {
-  const { boxes, width, height } = layout(graph);
+/** Box positions you dragged, per recipe, from this browser's storage (which may be off or empty). */
+type Moved = Record<string, { x: number; y: number }>;
+const layoutKey = (recipe: string) => `kriya.layout.${recipe}`;
+function loadMoved(recipe: string): Moved {
+  try {
+    return JSON.parse(localStorage.getItem(layoutKey(recipe)) ?? "{}") as Moved;
+  } catch {
+    return {};
+  }
+}
+function saveMoved(recipe: string, moved: Moved): void {
+  try {
+    if (Object.keys(moved).length) localStorage.setItem(layoutKey(recipe), JSON.stringify(moved));
+    else localStorage.removeItem(layoutKey(recipe));
+  } catch {
+    // Storage off (a private window): the layout lasts until the page closes.
+  }
+}
+
+const GRID = 10;
+/** How far the pointer moves before a press becomes a drag; less is a click that opens the step. */
+const SLOP = 4;
+
+/** Dragging boxes: a press that moves more than SLOP drags; the click that ends a drag doesn't open the step. */
+function useDrag(recipe: string, auto: Map<string, Placed>) {
+  const [moved, setMoved] = useState<Moved>(() => loadMoved(recipe));
+  useEffect(() => setMoved(loadMoved(recipe)), [recipe]);
+  const drag = useRef<{ id: string; px: number; py: number; x: number; y: number; on: boolean } | null>(null);
+  const justDragged = useRef(false);
+  const boxes = new Map([...auto].map(([id, b]) => [id, moved[id] ? { ...b, ...moved[id] } : b]));
+
+  const handlers = (id: string): HTMLAttributes<HTMLDivElement> => ({
+    onPointerDown: (e: PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      const b = boxes.get(id)!;
+      drag.current = { id, px: e.clientX, py: e.clientY, x: b.x, y: b.y, on: false };
+    },
+    onPointerMove: (e: PointerEvent<HTMLDivElement>) => {
+      const d = drag.current;
+      if (!d || d.id !== id) return;
+      const dx = e.clientX - d.px;
+      const dy = e.clientY - d.py;
+      if (!d.on) {
+        if (Math.hypot(dx, dy) < SLOP) return;
+        d.on = true;
+        // Captured only once it's a drag, so a plain click still reaches the step's button.
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
+      const snap = (v: number) => Math.max(0, Math.round(v / GRID) * GRID);
+      setMoved((m) => ({ ...m, [id]: { x: snap(d.x + dx), y: snap(d.y + dy) } }));
+    },
+    onPointerUp: () => {
+      const d = drag.current;
+      drag.current = null;
+      if (!d?.on) return;
+      justDragged.current = true;
+      setTimeout(() => (justDragged.current = false), 0);
+      setMoved((m) => (saveMoved(recipe, m), m));
+    },
+    onClickCapture: (e) => {
+      if (justDragged.current) e.stopPropagation();
+    },
+  });
+  const reset = () => {
+    saveMoved(recipe, {});
+    setMoved({});
+  };
+  return { boxes, handlers, reset, dragging: (id: string) => drag.current?.on === true && drag.current.id === id, anyMoved: Object.keys(moved).length > 0 };
+}
+
+function Canvas({ graph, selected, onSelect, onOpenItem, happened }: GraphProps & { happened: Happened }) {
+  const auto = layout(graph);
+  const { boxes, handlers, reset, dragging, anyMoved } = useDrag(graph.recipe, auto.boxes);
+  const placed = [...boxes.values()];
+  const width = Math.max(auto.width, ...placed.map((b) => b.x + W + PAD));
+  const height = Math.max(auto.height, ...placed.map((b) => b.y + b.h + PAD + 60));
   const startInputs = Object.keys(graph.inputs);
   return (
     <div className="graph-scroll">
+      {anyMoved && (
+        <button type="button" className="layout-reset" onClick={reset}>
+          Reset layout
+        </button>
+      )}
       <div className="graph" style={{ width, height }}>
         <svg width={width} height={height} className="edges" aria-hidden="true">
           <defs>
@@ -132,23 +228,26 @@ function Canvas({ graph, selected, onSelect, onOpenItem }: GraphProps) {
               <path d="M0 0 L8 4 L0 8 Z" className="arrowhead" />
             </marker>
           </defs>
-          {[...startEdges(graph), ...graph.edges].map((e, i) => (
-            <Edge key={i} e={e} boxes={boxes} graph={graph} />
+          {startEdges(graph).map((e, i) => (
+            <Edge key={`s${i}`} e={e} boxes={boxes} graph={graph} />
+          ))}
+          {graph.edges.map((e, i) => (
+            <Edge key={i} e={e} boxes={boxes} graph={graph} {...(happened.taken ? { taken: happened.taken[i] ?? 0 } : {})} />
           ))}
         </svg>
         {[...boxes.values()].map((b) =>
           b.kind === "start" ? (
-            <div key="START" className="box start" style={{ left: b.x, top: b.y, width: W, height: b.h }}>
+            <div key="START" className={`box start${dragging("START") ? " dragging" : ""}`} style={{ left: b.x, top: b.y, width: W, height: b.h }} {...handlers("START")}>
               <b>{graph.at ? "This item" : "Inputs"}</b>
               <span className="detail">{startInputs.join(", ") || "none"}</span>
             </div>
           ) : b.kind === "end" ? (
-            <div key="END" className="box end" style={{ left: b.x, top: b.y, width: W, height: b.h }}>
+            <div key="END" className={`box end${dragging("END") ? " dragging" : ""}`} style={{ left: b.x, top: b.y, width: W, height: b.h }} {...handlers("END")}>
               <b>Done</b>
               <span className="detail">{graph.status === "completed" ? "finished" : graph.status}</span>
             </div>
           ) : (
-            <Box key={b.id} n={b.node!} style={{ left: b.x, top: b.y, width: W, height: b.h }} selected={selected === b.id} onSelect={onSelect} onOpenItem={onOpenItem} />
+            <Box key={b.id} n={b.node!} style={{ left: b.x, top: b.y, width: W, height: b.h }} selected={selected === b.id} onSelect={onSelect} onOpenItem={onOpenItem} answer={answered(b.node!, happened)} drag={handlers(b.id)} dragging={dragging(b.id)} />
           ),
         )}
       </div>
@@ -162,11 +261,12 @@ function startEdges(g: RunGraph): GEdge[] {
   return g.nodes.filter((n) => !fed.has(n.id)).map((n) => ({ from: "START", to: n.id }));
 }
 
-function Edge({ e, boxes, graph }: { e: GEdge; boxes: Map<string, Placed>; graph: RunGraph }) {
+function Edge({ e, boxes, graph, taken }: { e: GEdge; boxes: Map<string, Placed>; graph: RunGraph; taken?: number }) {
   const a = boxes.get(e.from);
   const b = boxes.get(e.to);
   if (!a || !b) return null;
-  const followed = e.from !== "START" && graph.nodes.find((n) => n.id === e.from)?.status !== "not_started" && (e.to === "END" ? graph.status === "completed" : graph.nodes.find((n) => n.id === e.to)?.status !== "not_started");
+  // The log says which arrows were taken; before it arrives, a step that started was reached somehow.
+  const followed = taken !== undefined ? taken > 0 : e.from !== "START" && graph.nodes.find((n) => n.id === e.from)?.status !== "not_started" && (e.to === "END" ? graph.status === "completed" : graph.nodes.find((n) => n.id === e.to)?.status !== "not_started");
   let d: string;
   let lx: number;
   let ly: number;
@@ -193,7 +293,7 @@ function Edge({ e, boxes, graph }: { e: GEdge; boxes: Map<string, Placed>; graph
     lx = u * u * u * x1 + 3 * u * u * t * mid + 3 * u * t * t * mid + t * t * t * x2;
     ly = u * u * u * y1 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y2 - 7;
   }
-  const label = e.back ? `${e.label ?? "again"} ×${e.limit}` : e.label;
+  const label = e.back ? loopLabel(e, taken) : e.label;
   return (
     <g className={["edge", e.back ? "back" : "", followed ? "followed" : ""].join(" ")}>
       <path d={d} markerEnd="url(#arrow)" />
@@ -206,11 +306,11 @@ function Edge({ e, boxes, graph }: { e: GEdge; boxes: Map<string, Placed>; graph
   );
 }
 
-function Box({ n, style, selected, onSelect, onOpenItem }: { n: GNode; style?: CSSProperties; selected: boolean; onSelect: (id: string) => void; onOpenItem: (at: string) => void }) {
+function Box({ n, style, selected, onSelect, onOpenItem, answer, drag, dragging }: { n: GNode; style?: CSSProperties; selected: boolean; onSelect: (id: string) => void; onOpenItem: (at: string) => void; answer?: string | undefined; drag?: HTMLAttributes<HTMLDivElement>; dragging?: boolean }) {
   const st = statusOf(n.status);
   const shown = n.versions.find((v) => v.id === n.locked?.version) ?? n.versions.at(-1);
   return (
-    <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, n.waitingOnYou ? "you" : "", selected ? "selected" : ""].join(" ")} {...(style ? { style } : {})}>
+    <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, n.waitingOnYou ? "you" : "", selected ? "selected" : "", dragging ? "dragging" : ""].join(" ")} {...(style ? { style } : {})} {...drag}>
       <button type="button" className="box-hit" onClick={() => onSelect(n.id)} aria-label={`${n.name}: ${n.waitingOnYou ? "waiting for you" : st.label}`} aria-pressed={selected}>
         <span className="box-main">
           {shown?.thumb?.type.startsWith("image/") && <img src={shown.thumb.url} alt="" className="box-thumb" />}
@@ -219,7 +319,7 @@ function Box({ n, style, selected, onSelect, onOpenItem }: { n: GNode; style?: C
             <span className="detail">{n.detail}</span>
           </span>
         </span>
-        <span className={`status tone-${st.tone}`}>{n.waitingOnYou ? "waiting for you" : st.label}</span>
+        <span className={`status tone-${st.tone}`}>{n.waitingOnYou ? "waiting for you" : (answer ?? st.label)}</span>
       </button>
       {n.items && (
         <span className="strip" role="group" aria-label={`${n.items.length} items`}>

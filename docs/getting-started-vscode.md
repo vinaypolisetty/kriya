@@ -9,47 +9,48 @@
 
 ## 2. Open the project
 
-1. Unzip `kriya.zip` somewhere like `~/code/kriya`.
-2. VS Code → **File → Open Folder…** → choose the `kriya` folder.
-3. Accept **"Install recommended extensions"** when prompted (Claude Code, Vitest, YAML, ESLint, Prettier, GitHub Actions, Markdown).
-4. Open the terminal (**View → Terminal**) and run:
-
 ```bash
-pnpm install
-pnpm test
-pnpm validate:examples
+git clone https://github.com/vinaypolisetty/kriya ~/code/kriya
 ```
 
-You should see 18 passing tests and `3 graph(s) loaded · 0 error(s)`.
-
-## 3. Put it on GitHub
+VS Code → **File → Open Folder…** → `~/code/kriya`. Accept **"Install recommended extensions"** when prompted (Claude Code, Vitest, YAML, ESLint, Prettier, GitHub Actions, Markdown). Then, in the terminal (**View → Terminal**):
 
 ```bash
-# create an empty repo on github.com first (no README), then:
-git remote add origin https://github.com/<you>/kriya.git
-git push -u origin main
+pnpm install              # also builds the browser app
+pnpm test                 # every package; no keys, no cost
+pnpm validate:examples    # 7 graph(s) loaded · 0 error(s)
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, tests and recipe validation on every push.
-
-## 4. Keys (needed from Week 3)
+## 3. Run something
 
 ```bash
-cp .env.example .env    # then paste your Replicate and Anthropic keys
+export PATH="$PWD/bin:$PATH"
+kriya init ~/kriya-demo --example mohalla-mitra && cd ~/kriya-demo
+kriya run part_recipe --input part_no=1 --input story_pages="Mitra opens his chai stall" && kriya web
 ```
 
-`.env` is in `.gitignore`.
+Then [writing-recipes.md](writing-recipes.md) to make your own, and [architecture.md](architecture.md) before changing kriya itself. Changes go on a branch with a PR to `master`; CI runs the same checks ([CONTRIBUTING.md](../CONTRIBUTING.md)).
+
+## 4. Real models (optional)
+
+Keys live in each project's `.env`, not in the kriya repo:
+
+```bash
+cp ~/code/kriya/.env.example ~/kriya-demo/.env   # then paste your Anthropic and Replicate keys
+```
+
+and set `models:` in the project's `kriya.yaml` ([cli.md](cli.md)). `kriya init` puts `.env` in the project's `.gitignore`.
 
 ## 5. Working with Claude Code in VS Code
 
 Claude Code reads `CLAUDE.md` automatically: the project summary, commands, layout, design rules and vocabulary. Good first prompts:
 
-- "Read docs/16-roadmap.md and start Day 4: storage."
+- "Read docs/16-roadmap.md: what's the next day, and what's its done-when?"
 - "Add a validator rule that type-checks connections, with tests."
-- "Explain how stale propagation should work, from docs/07."
+- "kriya log part_recipe-1 says a step went stale. Walk me through why, from docs/07 and the code."
 
 ## Handy
 
 - **Run and Debug** panel → "Validate example recipes" or "Debug engine tests".
 - The **Testing** panel (Vitest extension) runs and debugs single tests.
-- YAML recipes are in `examples/mohalla-mitra/`; errors print with file:line.
+- Example recipes are in `examples/`; errors print with file:line.

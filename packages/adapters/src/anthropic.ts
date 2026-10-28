@@ -70,6 +70,8 @@ export type AnthropicOptions = {
   model?: string;
   effort?: Effort;
   maxTokens?: number;
+  /** Words the knowledge base adds to a step's prompt (applied tips, D-76). */
+  prevent?: (node: Node) => string[];
 };
 
 const SYSTEM_STEP =
@@ -196,7 +198,7 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       opts.jobs.start(ticket, {
         kind: "outputs",
         run: async () => {
-          const content = stepContent(node.prompt ?? "", ctx, node.capability === "llm.vision");
+          const content = stepContent(node.prompt ?? "", ctx, node.capability === "llm.vision", opts.prevent?.(node) ?? []);
           const prompt = content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
           const references = content.flatMap((b, i) => (b.type === "image" && b.source.type === "url" ? [{ label: `image ${i + 1}`, ref: b.source.url }] : []));
           const model = node.model ?? opts.model ?? DEFAULT_MODEL;
@@ -336,9 +338,10 @@ function judgeText(prompt: string, ctx: StepContext): string {
   return prompt.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, ref: string) => words(ctx.uses[ref])).trim();
 }
 
-/** The prompt with its `{{refs}}` filled in, then any other inputs; images first for vision. */
-function stepContent(prompt: string, ctx: StepContext, vision: boolean): Anthropic.Beta.Messages.BetaContentBlockParam[] {
-  const { text, used } = fill(prompt, ctx);
+/** The prompt with its `{{refs}}` filled in and the knowledge base's words after it, then any other inputs; images first for vision. */
+function stepContent(prompt: string, ctx: StepContext, vision: boolean, prevent: string[] = []): Anthropic.Beta.Messages.BetaContentBlockParam[] {
+  const { text: filled, used } = fill(prompt, ctx);
+  const text = [filled.trim(), ...prevent].join("\n");
   const rest = Object.entries(ctx.uses).filter(([k]) => !used.has(k));
   const blocks: Anthropic.Beta.Messages.BetaContentBlockParam[] = [];
   if (vision) {

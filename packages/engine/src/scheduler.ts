@@ -322,6 +322,9 @@ export class Scheduler {
         }
         const top = this.root();
         const failed = Object.values(this.rec.state.nodes).some((n) => n.status === "failed");
+        // Stale work waits for a rebuild or a keep; it hasn't failed. A finished run whose
+        // recipe changed under it ended "failed" with nothing failed (Oct 27, a step added after pick).
+        if (!failed && !this.endReached(top) && Object.values(this.rec.state.nodes).some((n) => n.status === "stale")) return this.rec.state;
         this.atomic(() => this.rec.record({ type: "RunCompleted", status: this.endReached(top) && !failed ? "completed" : "failed" }));
         return this.rec.state;
       }

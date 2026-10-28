@@ -39,6 +39,8 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 | `kriya retry <run> <step>` | Tries a failed step again as a new attempt (a refusal, a bad key, a rate limit). Failed maps around it run again and keep their finished items; naming a failed map retries its failed items. `kriya status <run>` prints the command for each failure |
 | `kriya web [--port 4317] [--lan]` | kriya in your browser (build it once: `pnpm --filter @kriya/web build`). Home is each run as a live graph of its steps: click a step for its versions, checks and lock, a for-each strip to open one item, "Review now" when it waits on you. "Waiting for you" lists every review. With `--lan` it also listens on your home network: scan the QR code it prints with your phone once to pair it (the token stays in `.kriya/web-token`; delete that file to unpair every phone). Reviews of the same step across shots are a batch: lock one and the next opens. In a review screen, pick a candidate (each shows what its checks found), write a note, press its buttons, or "Use suggestion". Live: anything that changes a run, here or in a terminal, shows up at once. Reading never calls a model; a decision is recorded at once and the run carries on in the background |
 | `kriya check <run> <step>` | Judges a step's latest candidates against its rubric again (e.g. after you changed the rubric) and records the verdicts; locks don't move |
+| `kriya log <run> [step]` | What happened, oldest first, in your local time: each draft made (model, cost, the note it was asked to follow), each check's verdict and why, every button pressed and whether you or the screen itself pressed it, locks, arrows followed, work going stale. With a step, only that step and the steps that refine it (an edit shows on its draw). Reads the log only, so it's safe while a run is going. `kriya web` shows the same lines under **What happened** in each step's panel |
+| `kriya tips [apply\|dismiss <tip>]` | What keeps failing at the same step (a check failed it 3 times for one kind of issue) and the words that would prevent it. `apply` (by number or id) adds them to that step's prompt from its next generation on; `dismiss` stops suggesting it. Both are saved in `kb.yaml`. The inbox mentions tips too |
 | `kriya library [entity]` | The Library by kind: each entity's facets with their version, what its kind still needs, files that aren't there; or one entity's facets with every version |
 | `kriya adopt <run> <step> <base> <from> --note text` | Makes a new version from `base`, taking what the note says from `from` (two parents, D-30). It waits for you to lock it |
 
@@ -86,5 +88,18 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
   speech: Hinglish; calls everyone beta
   ```
   A facet is words, a file (image, audio or video), or an object holding either; words alone draw a minor character or a place without a sheet. `kinds:` in kriya.yaml (`character: [look, voice, speech, rules]`, `place: [look]`, `music: [track]` in a new project) catches typos (`lok` → "Did you mean 'look'?") and makes `kriya library` list what each entity still needs. Recipes ask for facets by name: `item.speaker@voice`, `item.characters@look`. A facet missing from the Library (or naming a file that isn't there) blocks the step instead of drawing a stranger; in fake mode it's made up. Any change to a facet (a sheet redrawn in place, a new voice) is a new version: the work that used it goes stale (`kriya status` says "Mitra's voice changed"), and the old version, file included, is kept in `.kriya` (`kriya library Mitra` lists them).
+- **The knowledge base learns from your checks** (D-76). Every failed check is counted by step and kind of issue (`wrong_look`, `readable_text`…). After 3 on one step, `kriya tips` (and the inbox, in the terminal and the browser) suggests the words that prevent it, unless the step's prompt already says them. Applying one adds the words to that step's prompt for every new generation, in every run; what's already made doesn't change or go stale, and `kriya show` shows them in each new version's prompt. `kb.yaml` at the project root holds your answers and any rules of your own:
+  ```yaml
+  rules:                 # next to kriya's built-in ones; the same id replaces one
+    - id: kb_camera_moves
+      issues: [camera_move]
+      fix: retry          # what the fix loop presses: crop, edit or retry
+      symptom: the camera keeps moving
+      prevent: Camera static. No pans, no zooms.
+      stages: [video.from_image]
+  applied:
+    - { rule: kb_wrong_look, step: shot_recipe.draw }
+  dismissed: [readable_text:shot_recipe.draw]
+  ```
 - **A run is pinned to its recipes**: the recipe it runs and every recipe its maps run. Editing one of those shows `recipes changed` on the run; adding or editing other recipes doesn't.
 - **Errors are plain words**, including recipe problems ("'capabilty' isn't a setting for a model step. Did you mean 'capability'?").

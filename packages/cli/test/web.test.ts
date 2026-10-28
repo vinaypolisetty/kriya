@@ -353,3 +353,53 @@ describe("what a button will cost, before you press it (Day 25)", () => {
     expect(estimates(project, part, "per_shot[S1].pick")).toEqual({ retry: 0.15 });
   });
 });
+
+describe("tips in the browser (Day 35, D-76)", () => {
+  it("the inbox's tips come from failed checks; Apply saves to kb.yaml and the tip goes; an unknown one is a plain 400", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      const tipsNow = async () => (await (await fetch(`${web.url}/api/tips`)).json()) as { tips: { id: string; hits: number }[]; applied: unknown[] };
+      expect((await tipsNow()).tips).toEqual([]);
+      const store = openStore(join(cwd, ".kriya"));
+      for (const v of ["1.1", "1.2", "1.3"]) store.events.append("shot", "VerdictRecorded", { node: "draw", version: v, by: "llm", pass: false, issues: [{ type: "missing_character" }] });
+      store.close();
+      expect((await tipsNow()).tips).toMatchObject([{ id: "missing_character:shot_recipe.draw", hits: 3 }]);
+
+      const post = (body: unknown) => fetch(`${web.url}/api/tips`, { method: "POST", body: JSON.stringify(body) });
+      const bad = await post({ id: "nope", answer: "apply" });
+      expect(bad.status).toBe(400);
+      expect(((await bad.json()) as { error: string }).error).toBe("there's no tip 'nope' now; it may have been answered already");
+      const r = await post({ id: "missing_character:shot_recipe.draw", answer: "apply" });
+      expect(await r.json()).toEqual({ tips: [], applied: [{ rule: "kb_missing_character", step: "shot_recipe.draw" }] });
+      expect(readFileSync(join(cwd, "kb.yaml"), "utf8")).toContain("rule: kb_missing_character");
+    } finally {
+      await web.close();
+    }
+  });
+});
+
+describe("what happened, in the browser (Day 36)", () => {
+  it("a run's trace: each arrow's count, each review's last answer, and one step's lines in plain words", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      const get = async (q: string) => (await (await fetch(`${web.url}/api/runs/shot/trace${q}`)).json()) as { lines: { text: string; tone: string }[]; taken: number[]; answers: Record<string, unknown> };
+      const before = await get("");
+      expect(before.lines).toEqual([]); // lines only for one step
+      expect(before.answers).toEqual({});
+      const loop = loadProject(cwd).graphs.find((g) => g.graph === "shot_recipe")!.edges.findIndex((e) => e.from === "pick" && e.to === "draw");
+      expect(before.taken[loop]).toBe(0); // the retry loop: "up to 4×", not used
+
+      expect((await kriya(cwd, "decide", "1", "retry", "--note", "brighter")).code).toBe(0);
+      const after = await get("");
+      expect(after.taken[loop]).toBe(1);
+      expect(after.answers).toEqual({ pick: { action: "retry", by: "human" } });
+      const pick = await get("?key=pick");
+      expect(pick.lines.map((l) => [l.text, l.tone])).toContainEqual(['You pressed retry · note: "brighter"', "you"]);
+
+      const missing = await fetch(`${web.url}/api/runs/nope/trace`);
+      expect(missing.status).toBe(400);
+    } finally {
+      await web.close();
+    }
+  });
+});

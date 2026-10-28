@@ -11,10 +11,12 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse, stringify } from "yaml";
 import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
-import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
+import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, TIP_AFTER, MissingKey, MissingToken, replicateExecutors, settle, type FixRule, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
+import { answerTip, preventFor, projectTips } from "./kb.js";
+import { trace } from "./trace.js";
 import { libraryAssets } from "./library.js";
 import { loadProject, releaseOf, UserError, type Project } from "./project.js";
 
@@ -27,6 +29,7 @@ const HELP = `kriya: run recipes with people in the loop
                                                   start a run (models from kriya.yaml: fake, anthropic, replicate)
   kriya status [run]                              your runs, or one run's steps
   kriya show <run> [step] [version]               what a run made: every step, or one step's full output
+  kriya log <run> [step]                          what happened, in order: drafts, checks, buttons pressed and by whom, locks
   kriya inbox                                     what's waiting on you
   kriya decide <item> <button> [--pick v] [--note text] [--region x,y,w,h]
                                                   answer an inbox item (its number, or run:step)
@@ -37,6 +40,7 @@ const HELP = `kriya: run recipes with people in the loop
   kriya web [--port 4317] [--lan]                 kriya in your browser, live; --lan pairs your phone over wifi
   kriya check <run> <step>                        judge a step's latest candidates against its rubric again
   kriya library [entity]                          the Library: who's in it, what each is missing, every version
+  kriya tips [apply|dismiss <tip>]                what keeps failing, and the words that would prevent it
   kriya adopt <run> <step> <base> <from> --note text
                                                   merge two versions: base, taking what the note says from <from>
 
@@ -50,6 +54,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "run": return await run(rest, io);
       case "status": return await status(rest, io);
       case "show": return await show(rest, io);
+      case "log": return await log(rest, io);
       case "inbox": return await inbox(io);
       case "decide": return await decide(rest, io);
       case "lock": return await lock(rest, io);
@@ -58,6 +63,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "keep": return await keep(rest, io);
       case "adopt": return await adopt(rest, io);
       case "library": return await library(rest, io);
+      case "tips": return await tipsCommand(rest, io);
       case "check": return await check(rest, io);
       case "web": return await webCommand(rest, io);
       case undefined:
@@ -239,6 +245,34 @@ function summary(state: RunState, waiting: number): string {
 // ── show ────────────────────────────────────────────────────────────────────
 
 /** What a run made: every step with its versions, or one version's full output (and an agent's turns). */
+/**
+ * What happened in a run, oldest first, in plain words (Day 36). Reads the event
+ * log only: no replay, nothing recovered or run, so it's safe at any time.
+ */
+async function log(args: string[], io: IO): Promise<number> {
+  const [id, step] = args;
+  if (!id) throw new UserError("say which run: kriya log <run> [step]");
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const runs = store.events.runs();
+    if (!runs.includes(id)) throw new UserError(`there's no run '${id}'${suggest(id, runs)} See your runs with: kriya status`);
+    const lines = trace(store.events.read(id), project.graphs, step ? { key: step } : {});
+    if (step && lines.length === 0) throw new UserError(`nothing has happened at '${step}' in ${id}. See its steps with: kriya show ${id}`);
+    // Your own clock's day and time: a log is read by the person who was there.
+    let day = "";
+    for (const l of lines) {
+      const at = new Date(l.at);
+      const d = at.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+      if (d !== day) io.out(`${day ? "\n" : ""}${(day = d)}`);
+      io.out(`  ${at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}  ${step || !l.key ? "" : `${l.key}  `}${l.text}`);
+    }
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
 async function show(args: string[], io: IO): Promise<number> {
   const [id, step, version] = args;
   if (!id) throw new UserError("say which run: kriya show <run> [step] [version]");
@@ -348,9 +382,11 @@ async function inbox(io: IO): Promise<number> {
       io.out(`${String(i + 1).padStart(2)}  ${e.run} · ${e.key}: ${e.title}`);
       for (const s of e.shows) io.out(`      ${s.version}  ${preview(s.value)}${s.verdict ? `  ${verdictLine(s.verdict)}` : ""}`);
       io.out(`      buttons: ${e.buttons.map(button).join(" · ")}`);
-      const s = suggestFix({ actions: e.buttons }, e.shows);
+      const s = suggestFix({ actions: e.buttons }, e.shows, project.kb.rules);
       if (s) io.out(`      suggested: ${s.why}\n        kriya decide ${i + 1} ${s.action}${s.selection ? ` --pick ${s.selection[0]}` : ""}${s.region ? ` --region ${String(s.region)}` : ""}${s.note ? ` --note ${JSON.stringify(s.note)}` : ""}`);
     });
+    const found = projectTips(store, project.graphs, project.kb);
+    if (found.length) io.out(`\n💡 ${found.length === 1 ? "A tip" : `${found.length} tips`}: ${found[0]!.symptom} (${found[0]!.step}, ${found[0]!.hits} times). See: kriya tips`);
     return 0;
   } finally {
     store.close();
@@ -595,6 +631,41 @@ function brief(v: unknown): string {
   return s.length > 90 ? `${s.slice(0, 89)}…` : s;
 }
 
+// ── tips ────────────────────────────────────────────────────────────────────
+
+/**
+ * What keeps failing, and the words that would prevent it (D-76). `apply` adds
+ * the rule's words to every new generation of that step (nothing already made
+ * changes); `dismiss` stops suggesting it. Either is saved in kb.yaml.
+ */
+async function tipsCommand(args: string[], io: IO): Promise<number> {
+  const [verb, which] = args;
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const found = projectTips(store, project.graphs, project.kb);
+    if (!verb) {
+      if (found.length === 0) io.out(`No tips right now: nothing has failed the same step ${TIP_AFTER} times in a way kriya knows how to prevent.`);
+      found.forEach((t, i) => {
+        io.out(`${String(i + 1).padStart(2)}  ${t.symptom[0]!.toUpperCase()}${t.symptom.slice(1)}: ${t.step}, ${t.hits} times.`);
+        io.out(`      Always add to its prompt: "${t.prevent}"`);
+        io.out(`      kriya tips apply ${i + 1}    ·    kriya tips dismiss ${i + 1}`);
+      });
+      for (const a of project.kb.applied) io.out(`  ✓ applied: ${a.rule} on ${a.step}`);
+      return 0;
+    }
+    if (verb !== "apply" && verb !== "dismiss") throw new UserError(`'${verb}' isn't something tips can do. Try: kriya tips apply <tip>, or kriya tips dismiss <tip>`);
+    if (!which) throw new UserError(`say which tip: kriya tips ${verb} <number>. See them with: kriya tips`);
+    const tip = /^\d+$/.test(which) ? found[Number(which) - 1] : found.find((t) => t.id === which);
+    if (!tip) throw new UserError(`there's no tip '${which}'${found.length ? `${suggest(which, found.map((t) => t.id)) || "."} See them with: kriya tips` : ": there are none right now"}`);
+    answerTip(project.root, project.kb, tip, verb === "apply");
+    io.out(verb === "apply" ? `✓ ${tip.step} now always gets: "${tip.prevent}"\n  From its next generation on; nothing already made changes. Saved in kb.yaml.` : `✓ Won't suggest that again for ${tip.step}. Saved in kb.yaml.`);
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
 async function adopt(args: string[], io: IO): Promise<number> {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { note: { type: "string" } } });
   const [id, step, base, from] = positionals;
@@ -620,6 +691,7 @@ export function checkedProject(io: IO): Project {
   const errors = project.problems.filter((p) => p.severity === "error");
   if (errors.length) throw new UserError(`your recipes have problems:\n${formatProblems(errors)}`);
   if (project.library.problems.length) throw new UserError(`your Library has problems:\n${project.library.problems.map((p) => `  ${p}`).join("\n")}`);
+  if (project.kbProblems.length) throw new UserError(`your knowledge base has problems:\n${project.kbProblems.map((p) => `  ${p}`).join("\n")}`);
   return project;
 }
 
@@ -655,9 +727,9 @@ const AUTO_ROUNDS = 3;
  * which follows its checks for a few rounds (D-64): locks a candidate that
  * passed, or presses the fix the knowledge base suggests.
  */
-const autoDecide: Executors["decide"] = (node, ctx) => {
+const autoDecide = (rules: FixRule[]): Executors["decide"] => (node, ctx) => {
   if (node.trust !== "when_confident" || ctx.visit > AUTO_ROUNDS) return undefined;
-  const s = suggestFix(node, ctx.shows ?? []);
+  const s = suggestFix(node, ctx.shows ?? [], rules);
   if (!s) return undefined;
   const { why: _w, ...d } = s;
   return { ...d, by: "auto" };
@@ -682,11 +754,12 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
   const models = project.settings.models;
   const media = realMedia(project);
   const toolRun = project.settings.tools;
-  if (models.llm !== "anthropic" && media.length === 0 && toolRun === "fake") return { ...fake, decide: autoDecide };
+  if (models.llm !== "anthropic" && media.length === 0 && toolRun === "fake") return { ...fake, decide: autoDecide(project.kb.rules) };
   const env = join(project.root, ".env");
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
+  const prevent = preventFor(project.graphs, project.kb);
   const real = [
-    ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, media: projectMedia(project, store), names: namesOf(project), ...(project.settings.claude ?? {}) })] : []),
+    ...(models.llm === "anthropic" ? [anthropicExecutors({ graphs: project.graphs, jobs, tools, prevent, media: projectMedia(project, store), names: namesOf(project), ...(project.settings.claude ?? {}) })] : []),
     ...(toolRun !== "fake"
       ? [mediaTools({
           jobs,
@@ -696,12 +769,12 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
           ...(toolRun.font ? { font: resolve(project.root, toolRun.font) } : {}),
         })]
       : []),
-    ...(media.length ? [replicateExecutors({ graphs: project.graphs, jobs, media: projectMedia(project, store), ledger: fileLedger(project), capabilities: media, ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
+    ...(media.length ? [replicateExecutors({ graphs: project.graphs, jobs, prevent, media: projectMedia(project, store), ledger: fileLedger(project), capabilities: media, ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
   ];
   const claude = models.llm === "anthropic" ? (real.find((r) => "turn" in r) as ReturnType<typeof anthropicExecutors>) : undefined;
   return {
     produce: (node, ctx) => (real.find((p) => p.handles(node)) ?? fake).produce(node, ctx),
-    decide: autoDecide,
+    decide: autoDecide(project.kb.rules),
     turn: claude?.turn ?? fake.turn!,
     check: claude?.check ?? fake.check!,
     ...(claude ? { managesContext: true } : {}),

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { resolve } from "node:path";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { loadDir, loadText } from "../src/load.js";
 import { contextMode } from "../src/spec.js";
 
@@ -70,6 +72,18 @@ describe("graph checks", () => {
     expect(errors(text)[0]?.message).toMatch(/a → b → a has no limit/);
     const fixed = text.replace("{ from: b, to: a }", "{ from: b, to: a, max_loops: 3 }");
     expect(errors(fixed)).toEqual([]);
+  });
+
+  it("a recipe run for each item can only ask for item", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-val-"));
+    writeFileSync(join(dir, "batch.yaml"), "graph: batch\nlevel: batch\ninputs:\n  topics: list<text>\nnodes:\n  - { id: posts, kind: map, over: inputs.topics, graph: post }\nedges:\n  - { from: posts, to: END }\n");
+    const post = (input: string) => `graph: post\nlevel: post\ninputs:\n  ${input}: text\nnodes:\n${tool("t")}edges:\n  - { from: t, to: END }\n`;
+    writeFileSync(join(dir, "post.yaml"), post("topic"));
+    const e = loadDir(dir).problems.filter((p) => p.severity === "error");
+    expect(e.map((p) => p.message)).toEqual(["'post' runs once per item, so its one input is item, but it also asks for 'topic', which a for-each can't give it. In post, rename the input to item and read {{item}}"]);
+    expect(e[0]!.line).toBe(6);
+    writeFileSync(join(dir, "post.yaml"), post("item"));
+    expect(loadDir(dir).problems.filter((p) => p.severity === "error")).toEqual([]);
   });
 
   it("checks screen buttons used in conditions", () => {

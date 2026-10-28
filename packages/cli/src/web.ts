@@ -7,12 +7,17 @@
  *   GET  /api/runs/<id>/graph[?at=per_shot[P3-04]]
  *                          a run as its recipe's graph with each step's live state (Day 24, D-67);
  *                          `at` opens one item of a for-each step
+ *   GET  /api/runs/<id>/trace[?at=…][&key=…]
+ *                          what happened, from the event log (Day 36): one step's lines in plain words
+ *                          (`key`), how often each arrow was taken, and each review's last answer
  *   GET  /api/inbox        what's waiting on you, with each candidate's checks and the suggested fix
  *   GET  /api/media/<sha>  an image, clip or voice line from the blob store
  *   POST /api/decide       press a button: { run, key, action, selection?, note?, region? }
  *   POST /api/retry        try a failed step again: { run, key } (a for-each step retries its failed items)
  *   POST /api/branch       branch off from a version: { run, key, name, from } (Day 26, D-71)
  *   POST /api/switch       switch a step to another of its branches: { run, key, branch }
+ *   GET  /api/tips         what keeps failing and the words that would prevent it, and the tips applied (D-76)
+ *   POST /api/tips         say yes or no to a tip: { id, answer: "apply" | "dismiss" } (saved in kb.yaml)
  *   GET  /api/library      the Library, read-only: who's in it by kind, each facet's current version
  *                          (files as media), its history, and what each is missing
  *   GET  /api/events       server-sent events: `changed` whenever any run's log grows,
@@ -33,14 +38,16 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { networkInterfaces } from "node:os";
 import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describeError, sniff, suggestFix } from "@kriya/adapters";
+import { describeError, sniff, suggestFix, type FixRule } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
 import type { RunState } from "@kriya/engine";
 import { allInbox, drive, openRun, type Entry, type IO } from "./commands.js";
+import { answerTip, projectTips } from "./kb.js";
 import { libraryAssets, MEDIA } from "./library.js";
 import { loadProject, type Project } from "./project.js";
 
 /** The built web app. */
+import { traceView } from "./trace.js";
 const APP = fileURLToPath(new URL("../../web/dist", import.meta.url));
 const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json" };
 
@@ -106,7 +113,7 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
   const current = (): Project => {
     const p = loadProject(first.root);
     const errors = p.problems.filter((x) => x.severity === "error");
-    if (errors.length || p.library.problems.length) throw new Error(`the project has problems; run kriya status in a terminal to see them`);
+    if (errors.length || p.library.problems.length || p.kbProblems.length) throw new Error(`the project has problems; run kriya status in a terminal to see them`);
     return p;
   };
   const quiet: IO = { out: () => {}, err: () => {}, cwd: opts.io.cwd };
@@ -131,7 +138,7 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     const states = new Map<string, RunState>();
     for (const e of entries) if (!states.has(e.run)) states.set(e.run, (await openRun(project, store, e.run, quiet, { readOnly: true })).rec.state);
     return entries.map((e) => {
-      const item = web(e, busy.has(e.run), typeOf, estimates(project, states.get(e.run)!, e.key));
+      const item = web(e, busy.has(e.run), typeOf, estimates(project, states.get(e.run)!, e.key), project.kb.rules);
       const branch = shownBranch(project, states.get(e.run)!, e.key);
       return branch && branch !== "main" ? { ...item, branch } : item;
     });
@@ -359,6 +366,13 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     }
     if (req.method === "GET" && url.pathname === "/api/inbox") return json(res, 200, { project: first.settings.name, items: await inbox() });
     if (req.method === "GET" && url.pathname === "/api/runs") return json(res, 200, { project: first.settings.name, runs: await runs() });
+    const traced = /^\/api\/runs\/([^/]+)\/trace$/.exec(url.pathname);
+    if (req.method === "GET" && traced) {
+      const id = decodeURIComponent(traced[1]!);
+      if (!store.events.runs().includes(id)) throw new BadRequest(`there's no run '${id}'`);
+      const opts = { at: url.searchParams.get("at") ?? "", ...(url.searchParams.get("key") ? { key: url.searchParams.get("key")! } : {}) };
+      return json(res, 200, traceView(store.events.read(id), current().graphs, opts));
+    }
     const graph = /^\/api\/runs\/([^/]+)\/graph$/.exec(url.pathname);
     if (req.method === "GET" && graph) return json(res, 200, await runGraph(decodeURIComponent(graph[1]!), url.searchParams.get("at") ?? ""));
     if (req.method === "POST" && url.pathname === "/api/retry") {
@@ -370,6 +384,20 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
       if (url.pathname === "/api/switch" && typeof body.branch !== "string") throw new BadRequest("say which branch to switch to: { run, key, branch }");
       await branch(url.pathname === "/api/switch" ? body : { ...body, branch: undefined });
       return json(res, 200, { ok: true });
+    }
+    if (url.pathname === "/api/tips" && (req.method === "GET" || req.method === "POST")) {
+      const project = current();
+      const found = projectTips(store, project.graphs, project.kb);
+      if (req.method === "POST") {
+        const body = JSON.parse((await readBody(req)) || "{}") as { id?: unknown; answer?: unknown };
+        const tip = found.find((t) => t.id === body.id);
+        if (!tip) throw new BadRequest(`there's no tip '${String(body.id)}' now; it may have been answered already`);
+        if (body.answer !== "apply" && body.answer !== "dismiss") throw new BadRequest(`answer a tip with "apply" or "dismiss"`);
+        answerTip(project.root, project.kb, tip, body.answer === "apply");
+        const after = current();
+        return json(res, 200, { tips: projectTips(store, after.graphs, after.kb), applied: after.kb.applied });
+      }
+      return json(res, 200, { tips: found, applied: project.kb.applied });
     }
     if (req.method === "GET" && url.pathname === "/api/library") return json(res, 200, { project: first.settings.name, kinds: first.settings.kinds, entities: library() });
     if (req.method === "POST" && url.pathname === "/api/decide") {
@@ -464,8 +492,8 @@ export function estimates(project: Project, state: RunState, key: string): Recor
   return out;
 }
 
-function web(e: Entry, working: boolean, typeOf: (hash: string) => string | undefined, cost: Record<string, number> = {}): WebItem {
-  const s = suggestFix({ actions: e.buttons }, e.shows);
+function web(e: Entry, working: boolean, typeOf: (hash: string) => string | undefined, cost: Record<string, number> = {}, rules?: FixRule[]): WebItem {
+  const s = suggestFix({ actions: e.buttons }, e.shows, rules);
   return {
     id: `${e.run}:${e.key}`,
     run: e.run,

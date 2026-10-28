@@ -29,6 +29,17 @@ export function validateBundle(graphs: Graph[]): Issue[] {
     names.set(g.graph, i);
   });
   for (const g of graphs) issues.push(...validateGraph(g, new Set(names.keys())));
+  // A for-each gives the recipe it runs one input, `item`; any other input would be empty, silently
+  // (a guide's recipe read {{inputs.topic}} inside a for-each, Oct 27: fake runs never showed it).
+  for (const g of graphs) {
+    g.nodes.forEach((n, i) => {
+      if (n.kind !== "map") return;
+      const runs = graphs.find((x) => x.graph === n.graph);
+      for (const name of Object.keys(runs?.inputs ?? {}).filter((k) => k !== "item")) {
+        issues.push({ graph: g.graph, path: ["nodes", i, "graph"], severity: "error", message: `'${n.graph}' runs once per item, so its one input is item, but it also asks for '${name}', which a for-each can't give it. In ${n.graph}, rename the input to item and read {{item}}` });
+      }
+    });
+  }
   return issues;
 }
 

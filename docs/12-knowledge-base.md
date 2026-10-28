@@ -35,6 +35,15 @@ examples: [run_123/per_shot[P1-07]/draw/v2]
 - **Domain-specific:** "Garbled text on signs".
 - **Project-specific:** "Bheem's gamcha goes missing".
 
+## What's built (Day 35, D-76)
+
+- **Repair:** the fix loop (D-64) picks crop, edit or retry by issue type and words the edit the way that worked.
+- **Prevent:** a rule's `prevent` words. When checks fail the same step 3 times for issues a rule knows, `kriya tips` and the inbox (terminal and browser) suggest adding them to that step's prompt. Apply → every new generation of that step gets them (the recorded prompt shows them); nothing already made changes. A tip isn't offered when the prompt already says it: Part 3's draw prompt said "No text, no speech bubbles, no sound-effect lettering" and writing still appeared 13 times, so the fix there is the repair, not more words.
+- **Your own rules** live in `kb.yaml` with your answers to tips ([cli.md](cli.md)).
+- **Not yet:** detect (rules as rubric items), counting human rejection notes (free text; needs a model to sort, so a checker step would do it), measuring which fix worked, and suggesting recipe changes beyond prompt words.
+
+Part 3's checks, Oct 24–26, by issue: wrong look 19, writing 13, missing character 9, duplicate 7, extra character 4, voice line too long 5. On that project `kriya tips` offers two: the looks ("Draw each character exactly as in their reference sheet…") and missing characters. The other three were already in the prompt.
+
 ## How it grows (graduation)
 
 1. A failure is observed once (from a human rejection note or a checker issue).
