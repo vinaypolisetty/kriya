@@ -58,17 +58,17 @@ Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya r
 | 24 | Thu Nov 5 | Run graph ✅ (pulled forward from Day 25, D-67): home is the run as its recipe's live graph in the mocks' look; step panel with versions, verdicts and locks; for-each strips you click into; the inbox and review screen restyled | A whole Part at a glance |
 | 25 | Fri Nov 6 | Region tool ✅ (drag on the preview; for a crop or to narrow an edit, in words), `beside` values on screens (the line and caption next to the player), cost on buttons from what the step cost in this run. The real crop-and-approve check is the creator's | Crop and approve a line in the UI |
 | 26 | Sat Nov 7 | Version tree panel ✅ (D-71): versions grouped by branch with their parents, Branch off from any version, Switch here; the review shows the branch you're on and says so. Read-only Library page (entities by kind, sheets, facet versions and history, what each needs). Checked Oct 26 in Chrome: branched off a panel, the review showed only it, switched back to main | Switch branches from the UI |
-| 27 | Sun Nov 8 | Phone layout; batch review; LAN access with a pairing token ✅ (D-38, D-68), pulled forward: `kriya web --lan` with a QR code; the mocks' review screen; a batch steps through every shot's pick. Checked Oct 25 in Chrome over the LAN address (unpaired → paired → three shots locked in a row); the phone itself is the creator's check | Review a batch on a phone over home wifi |
-| 28 | Mon Nov 9 | Buffer + write-up: locks and stale tracking | Draft saved |
+| 27 | Sun Nov 8 | Phone layout; batch review; LAN access with a pairing token ✅ (D-38, D-68), pulled forward: `kriya web --lan` with a QR code; the mocks' review screen; a batch steps through every shot's pick. Checked Oct 25 in Chrome over the LAN address (unpaired → paired → three shots locked in a row); the creator reviewed real Part 3 from the phone Oct 26. Oct 26: the rest of the app on a phone: the run graph becomes a step list in run order, each step saying where it goes next ("↺ retry: Draw the shot (up to 4×)"); a step opens as a full-screen sheet; the header and runs list go compact. Checked at 390 px wide | Review a batch on a phone over home wifi |
+| 28 | Mon Nov 9 | Buffer + write-up ✅: [locks and stale work](notes/writeup-locks-stale.md) (locks, per-input hashes, re-lock restores, the real stale shot list from Oct 26, what's still only designed) | Draft saved |
 
 ### Week 5 · Two real use cases (Nov 10–16)
 
 | Day | Date | Focus | Done when |
 |---|---|---|---|
-| 29 | Tue Nov 10 | Inspector Tiwari sheet + voice via the platform; start Part 3 | Tiwari locked in the Library |
-| 30 | Wed Nov 11 | Part 3 shots and panels; log bugs as issues | All panels locked |
-| 31 | Thu Nov 12 | Part 3 clips and voices; fix worst bugs | All media locked |
-| 32 | Fri Nov 13 | Assemble, watch, fix, re-render; post | Part 3 live on Instagram |
+| 29 | Tue Nov 10 | Inspector Tiwari sheet + voice via the platform; start Part 3 ✅ (Oct 25–26): Tiwari in the Library (sheet, Rasalgethi voice, speech); the real Part 3 started from the phone | Tiwari locked in the Library |
+| 30 | Wed Nov 11 | Part 3 shots and panels ✅ (Oct 26): all 13 panels locked. Six throttled shots retried through `kriya web`; picks by eye against the judge (P3-06's sign lettering, which the judge missed, edited out with a marked area). Bugs fixed rather than logged (D-72) | All panels locked |
+| 31 | Thu Nov 12 | Part 3 clips and voices ✅ (Oct 26): 4 clips and 19 lines locked. Worst bugs fixed (D-72): faster takes flipping stale ↔ fresh; a join that never fired, so the run ended "failed"; no way to keep a stale shot list after a recipe change (`kriya keep`); clip approvals showing JSON | All media locked |
+| 32 | Fri Nov 13 | Assemble, watch, fix, re-render; post. Oct 26: assembled through kriya (106.1 s, 1080×1920, −19 dB mean); the end card's title ran over a six-line hook, fixed in the assembler and checked on a re-render. Watching, approving and posting are the creator's | Part 3 live on Instagram |
 | 33 | Sat Nov 14 | Second use case: earnings report recipe (text-only) | Recipe validates and starts |
 | 34 | Sun Nov 15 | Run on two companies; fix gaps | Two finished reports |
 | 35 | Mon Nov 16 | Knowledge base: Part 3 failures → rules; tips in CLI/inbox | A new tip appears and applies |

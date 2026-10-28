@@ -308,6 +308,7 @@ export class Scheduler {
       const all = this.instances();
       if (this.atomic(() => this.settleMaps(all))) continue;
       const next = all.find((x) => this.status(x.key) === "ready");
+      if (!next && this.atomic(() => this.rejoin(all))) continue;
       if (!next) {
         // Waiting for a person, a provider job or a missing asset: the run stays open.
         if (Object.values(this.rec.state.nodes).some((n) => n.status === "awaiting_human" || n.status === "waiting_external" || n.status === "blocked")) {
@@ -1161,6 +1162,26 @@ export class Scheduler {
     });
   }
 
+  /**
+   * Keeps stale work as it is (D-72): "the recipe changed, but this shot list is
+   * still what I want." Its locked version is judged against today's inputs from
+   * now on; work after it is re-checked, and the run carries on.
+   */
+  keep(key: string, why?: string): void {
+    this.atomic(() => {
+      const inst = this.instances(this.root(), [], true).find((x) => x.key === key);
+      const n = this.rec.state.nodes[key];
+      if (!inst || !n) throw new Error(`there's no step '${key}' in this run`);
+      if (n.status !== "stale" || !n.locked) throw new Error(`'${key}' isn't stale, so there's nothing to keep`);
+      const v = n.versions[n.locked.version]!;
+      const makerId = v.madeBy ? v.madeBy.slice(inst.ctx.prefix.length) : inst.node.id;
+      const maker = inst.ctx.graph.nodes.find((x) => x.id === makerId) ?? inst.node;
+      this.reopen(`kept ${key} as it is`);
+      this.rec.record({ type: "StaleKept", node: key, version: v.id, inputs: this.inputsOf(inst.ctx.prefix + maker.id, maker, inst.ctx), ...(why ? { why } : {}) });
+      this.refreshStale();
+    });
+  }
+
   /** The Library changed (a new facet version): work that used the old version goes stale. */
   assetsChanged(): void {
     this.atomic(() => this.refreshStale());
@@ -1366,6 +1387,9 @@ export class Scheduler {
         // A preceding screen isn't an input: screens are revisited, and what they pass on
         // (`pick.selected`, the shot list) is tracked through `uses` and `over`.
         if (ctx.graph.nodes.find((x) => x.id === s)?.kind === "screen") continue;
+        // Nor is the step a refining step remakes: its result becomes that step's lock, so counting it
+        // made a faster take of a voice line stale because of itself (Oct 26). Its parent is on the version.
+        if (ownTarget(node, `after:${s}`)) continue;
         out[`after:${s}`] = hash(scope[s] ?? null);
       }
     }
@@ -1399,7 +1423,8 @@ export class Scheduler {
         const makerId = v.madeBy ? v.madeBy.slice(ctx.prefix.length) : node.id;
         const maker = ctx.graph.nodes.find((x) => x.id === makerId) ?? node;
         const now = this.inputsOf(ctx.prefix + maker.id, maker, ctx);
-        const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k]);
+        // Versions recorded before Oct 26 still list a refining step's own target; it isn't an input.
+        const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k] && !ownTarget(maker, k));
         if (diff.length > 0 && n.status !== "stale") {
           // Name the Library change itself ("Bheem's look changed"), not just the reference that reads it.
           const used = this.received(ctx.prefix + maker.id, maker, ctx).assets;
@@ -1652,6 +1677,8 @@ export class Scheduler {
         const done = sources.filter((s) => this.status(ctx.prefix + s) === "completed");
         const wait = edge.wait ?? "all";
         if (wait === "all" && done.length < sources.length) return;
+        // Nor while stale work leads into it: it would run on a parked shot list (see rejoin).
+        if (wait === "all" && this.staleInto(ctx, edge.to)) return;
         if (wait === "any" && (this.rec.state.edges[edgeKey] ?? 0) > 0) return;
       }
 
@@ -1668,6 +1695,42 @@ export class Scheduler {
     });
 
     if (followed === 0 && limited) this.fail(fromKey, limited);
+  }
+
+  /**
+   * Before a run ends with nothing to do, joins that never fired get one more
+   * look: when the shots finished while the voices were stale, "wait for all"
+   * didn't fire, and once the voices were valid again nothing looked, so the
+   * Reel was never assembled (Oct 26). A join fires only when every side is
+   * done and nothing stale leads into it, so it never runs on parked work.
+   * Returns whether it made anything ready.
+   */
+  private rejoin(all: Instance[]): boolean {
+    let readied = false;
+    const contexts = new Map(all.map((x) => [x.ctx.prefix, x.ctx]));
+    for (const ctx of contexts.values()) {
+      const conds = this.conditionsOf(ctx.graph);
+      ctx.graph.edges.forEach((edge, i) => {
+        const sources = Array.isArray(edge.from) ? edge.from : [edge.from];
+        if (sources.length < 2 || (edge.wait ?? "all") !== "all" || edge.to === END) return;
+        const edgeKey = ctx.prefix + i;
+        if ((this.rec.state.edges[edgeKey] ?? 0) > 0 || this.status(ctx.prefix + edge.to) !== undefined) return;
+        if (!sources.every((s) => this.status(ctx.prefix + s) === "completed")) return;
+        if (this.staleInto(ctx, edge.to)) return;
+        const last = ctx.prefix + sources.at(-1)!;
+        const cond = conds[i];
+        if (cond && !evaluate(cond, this.scope(ctx, last))) return;
+        this.rec.record({ type: "EdgeFollowed", edge: edgeKey, from: last, to: ctx.prefix + edge.to });
+        this.rec.record({ type: "NodeReady", node: ctx.prefix + edge.to });
+        readied = true;
+      });
+    }
+    return readied;
+  }
+
+  /** Whether stale work in this recipe leads into a step: a join into it waits until that's rebuilt or kept. */
+  private staleInto(ctx: Context, to: string): boolean {
+    return ctx.graph.nodes.some((n) => this.status(ctx.prefix + n.id) === "stale" && reaches(ctx.graph, n.id, to));
   }
 
   /** Whether this recipe (top level or one item) has followed an edge into END. */
@@ -1790,6 +1853,11 @@ export function onBranch(t: NodeState): Version[] {
   }
   const last = Math.max(...mine.map((v) => v.attempt));
   return mine.filter((v) => v.attempt === last);
+}
+
+/** Whether an input key is the step a refining step remakes (`after:speak` for too_long): never an input. */
+function ownTarget(node: Node, key: string): boolean {
+  return "refines" in node && !!node.refines && key === `after:${node.refines}`;
 }
 
 /** A plain reason for staleness from the inputs that changed. */
