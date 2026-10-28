@@ -1,3 +1,10 @@
+/**
+ * @kriya/store: where runs live. `openStore(dir)` opens the local store, by
+ * convention `.kriya/` at the project root:
+ *   dir/kriya.db   the event log and Library history (SQLite)
+ *   dir/blobs/     media, named by sha256, write-once
+ * See packages/store/README.md.
+ */
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import type Database from "better-sqlite3";
@@ -17,11 +24,7 @@ export type Store = {
   close(): void;
 };
 
-/**
- * Opens the local store in `dir` (by convention `.kriya/` at the project root):
- *   dir/kriya.db   events, Library history and projection tables
- *   dir/blobs/     media, named by sha256
- */
+/** Opens the store in `dir`, creating it if needed. */
 export function openStore(dir: string): Store {
   mkdirSync(dir, { recursive: true });
   const db = openDatabase(join(dir, "kriya.db"));

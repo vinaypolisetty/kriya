@@ -1,3 +1,8 @@
+/**
+ * @kriya/engine's public API: the recipe format (spec, load, validate), the
+ * condition language, events and run state, the recorder and the scheduler.
+ * See packages/engine/README.md.
+ */
 export * from "./spec.js";
 export * from "./condition.js";
 export * from "./validate.js";

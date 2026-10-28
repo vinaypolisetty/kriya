@@ -16,26 +16,37 @@ The first use case is *Mohalla Mitra*, an Instagram motion-comic series: story �
 
 ## Status
 
-**v0.1 in progress** (target: late November 2026). Today the repo contains:
+**v0.1 in progress** (target: late November 2026). Working today:
 
-- The **graph spec** as Zod schemas (`packages/engine/src/spec.ts`)
-- A **safe condition language** for edges (`condition.ts`)
-- A **validator** that catches broken references, unlimited loops, unknown buttons and undeclared types, with line numbers and "did you mean" suggestions (`validate.ts`, `load.ts`)
-- The **Mohalla Mitra recipes** as YAML (`examples/mohalla-mitra/`)
-- Tests for all of the above
+- **Recipes** in YAML, validated with line numbers and "did you mean" suggestions
+- **A durable engine:** an append-only event log, state rebuilt by replay, crash-safe calls with idempotency keys, for-each steps, joins, loop limits
+- **Versions, locks, branches and stale tracking**, with plain reasons for what changed; rebuild, retry, adopt and keep
+- **Real providers:** Claude (writing, judging, agents) and Replicate (images, clips, voices, music), with costs and model versions recorded; local ffmpeg tools, including a Reel assembler
+- **Checks and a fix loop:** a Claude judge plus knowledge-base rules that suggest crop, edit or retry
+- **The Library:** characters, places and tracks, with facet history
+- **A CLI** (`bin/kriya`) and **a browser app** (`kriya web`): run graphs, a review inbox, phone review over home wifi
 
-Next: event log, scheduler, version trees, locks and stale tracking. See [docs/16-roadmap.md](docs/16-roadmap.md).
+On Oct 26 the real Part 3 of *Mohalla Mitra* was made end to end through kriya: 13 panels, 4 clips and 19 voice lines, assembled into a 106-second Reel.
+
+What's next: [docs/16-roadmap.md](docs/16-roadmap.md).
 
 ## Quickstart
 
 ```bash
 pnpm install
-pnpm test                # unit tests
+pnpm test                # unit tests (no keys, no cost)
 pnpm typecheck           # TypeScript
 pnpm validate:examples   # validate every recipe under examples/
+pnpm check:conventions   # the repo's conventions (CONTRIBUTING.md)
+
+# a whole episode with fake models, from the terminal
+alias kriya="$PWD/bin/kriya"
+cd /tmp && kriya init p3 --example mohalla-mitra && cd p3
+kriya run part_recipe --input part_no=3 --input story_pages="Page 7…"
+kriya inbox
 ```
 
-Requires Node 20+ and pnpm 10+.
+Requires Node 20+ and pnpm 10+. For real models, put keys in the project's `.env` and set `models:` in `kriya.yaml` ([docs/cli.md](docs/cli.md)).
 
 ## What a recipe looks like
 
@@ -83,18 +94,25 @@ The validator explains mistakes in plain words:
 
 ```
 packages/
-  engine/            graph spec, conditions, validation, loader (runtime coming next)
+  engine/            the recipe format, validation, and the deterministic core (events, state, scheduler)
+  store/             the event log and Library history on SQLite; media by content hash
+  adapters/          Claude, Replicate and ffmpeg tools as jobs; the fix policy
+  cli/               projects on disk, the kriya commands, and the kriya web server
+  web/               the browser app (React): run graph, inbox, review, Library
 examples/
   mohalla-mitra/     part, shot and voice recipes for the reference use case
-docs/                full design: concepts, engine, spec, authoring, UI, decisions, roadmap
-CLAUDE.md            context and conventions for AI coding assistants
+docs/                design (01–19), architecture, CLI, decisions, roadmap, write-ups
+scripts/             repo checks (conventions)
+bin/kriya            runs the CLI from this checkout
 ```
 
 ## Documentation
 
 New here? Open the folder in VS Code and follow [docs/getting-started-vscode.md](docs/getting-started-vscode.md).
 
-Start with [docs/README.md](docs/README.md). The most important pages:
+**Changing the code?** Read [docs/architecture.md](docs/architecture.md) (how the packages fit, the life of a run, where to make a change) and [CONTRIBUTING.md](CONTRIBUTING.md) (conventions, tests, the review checklist). Each package has a README.
+
+For the design, start with [docs/README.md](docs/README.md). The most important pages:
 
 - [Vision](docs/01-vision.md): what this is and who it's for
 - [Core concepts](docs/02-concepts.md): levels, nodes, versions, branches, locks, context, stale

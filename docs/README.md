@@ -2,6 +2,17 @@
 
 These docs record the full design as of October 2026: what was decided, why, and what is still open. They are written so that someone new (or an AI coding assistant) can pick up the project without the original conversations.
 
+**Two kinds of docs.** The numbered pages (01–19) are the *design*: what kriya should be, and why. Some of it isn't built yet. The pages below them describe the *code as built*. When they disagree, the code and the [decision log](17-decisions.md) win.
+
+| Code docs | What they cover |
+|---|---|
+| [Architecture](architecture.md) | The packages, the life of a run, where state lives, where to make a change |
+| [Contributing](../CONTRIBUTING.md) | Conventions, comments, error messages, tests, the review checklist |
+| [Command line](cli.md) | Every `kriya` command |
+| Package READMEs | [engine](../packages/engine/README.md) · [store](../packages/store/README.md) · [adapters](../packages/adapters/README.md) · [cli](../packages/cli/README.md) · [web](../packages/web/README.md) |
+
+Design docs:
+
 | # | Doc | What it covers |
 |---|---|---|
 | 01 | [Vision](01-vision.md) | What kriya is, who it's for, what makes it different, scope |
@@ -25,7 +36,7 @@ These docs record the full design as of October 2026: what was decided, why, and
 | 19 | [Glossary](19-glossary.md) | Every term in one place |
 | — | [Getting started in VS Code](getting-started-vscode.md) | Install, open, test, push to GitHub, use Claude Code |
 
-Weekly build notes: [notes/](notes/) ([week 1](notes/week-01.md)). Command line: [cli.md](cli.md).
+Build notes and write-ups: [notes/](notes/) ([week 1](notes/week-01.md), [determinism](notes/writeup-determinism.md), [locks and stale work](notes/writeup-locks-stale.md)).
 
 Related artifacts kept outside the repo:
 - *Orchestrator: Spec & User Journey* (Claude doc): the first written spec and the Part 3 user journey

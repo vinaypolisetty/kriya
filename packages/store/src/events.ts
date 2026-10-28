@@ -1,7 +1,9 @@
 /**
- * The append-only event log. Current state is rebuilt by replaying events
- * (docs/03-engine.md §1). Day 5 adds the typed event union; here a payload is
- * any JSON value.
+ * The append-only event log on SQLite (docs/03-engine.md §1). Current state is
+ * rebuilt by replaying events. A trigger refuses UPDATE and DELETE, so history
+ * can't be rewritten. The store treats a payload as any JSON value; the typed
+ * events and their checks live in the engine (events.ts, recorder.ts). Schema
+ * changes are numbered migrations tracked in `user_version` (D-40).
  */
 import Database from "better-sqlite3";
 

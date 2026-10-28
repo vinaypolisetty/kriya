@@ -1,4 +1,8 @@
 #!/usr/bin/env -S npx tsx
+/**
+ * The `kriya` executable (run by bin/kriya): hands the arguments to `main` in
+ * commands.ts with the real terminal, and sets the exit code.
+ */
 import { main } from "./commands.js";
 
 // `kriya inbox | head` closes the pipe early: that's fine, just stop.

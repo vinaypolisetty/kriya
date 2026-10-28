@@ -12,6 +12,11 @@ Read before making design changes:
 - `docs/04-graph-spec.md`: the recipe file format
 - `docs/17-decisions.md`: decisions already made. Don't reverse them without asking.
 
+Read before changing code:
+- `docs/architecture.md`: how the packages fit, the life of a run, where to make a change
+- `CONTRIBUTING.md`: conventions, comments, error messages, tests, review checklist (follow it)
+- the package's own `README.md`
+
 ## Owner
 
 Vinay Polisetty (engineering manager; building this part-time, ~2 hours a day). The day-by-day plan is in `docs/16-roadmap.md`. Prefer small, reviewable changes that move the current day's task forward.
@@ -23,11 +28,12 @@ pnpm install
 pnpm test                 # vitest, all packages
 pnpm typecheck            # tsc --noEmit, all packages
 pnpm validate:examples    # validate every recipe in examples/
+pnpm check:conventions    # header comments, READMEs, decision refs, CLI docs, web routes, engine purity
 pnpm --filter @kriya/web build   # the browser inbox, served by `kriya web`
 bin/kriya help            # the CLI (docs/cli.md)
 ```
 
-Run all three before considering a change done. CI runs the same three.
+Run all four (test, typecheck, validate:examples, check:conventions) before considering a change done. CI runs the same, plus the web build.
 
 ## Layout
 
