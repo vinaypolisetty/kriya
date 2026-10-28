@@ -268,7 +268,7 @@ describe("for-each over the recipe's own inputs (D-73)", () => {
     );
     const log = new SqliteEventLog(openDatabase(":memory:"));
     const rec = Recorder.start(log, "run1");
-    const s = new Scheduler(graph("quarter_review"), rec, exec, graphs, LIBRARY);
+    const s = new Scheduler(graph("quarter_from_releases"), rec, exec, graphs, LIBRARY);
     s.start(RELEASE, { quarter: "Q3 2026", filings: FILINGS }, DESK);
     s.run();
     expect(rec.state.status).toBe("completed");
@@ -295,6 +295,33 @@ describe("for-each over the recipe's own inputs (D-73)", () => {
     expect(rec.state.status).toBe("completed");
     expect(rec.state.nodes["per_part[P1].per_line[L2].say"]?.versions["1.1"]?.output).toEqual({ said: "bye" });
     expect(rec.state.nodes["per_part[P2].per_line[L1].say"]?.versions["1.1"]?.output).toEqual({ said: "again" });
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+});
+
+describe("for-each over a plain list, and over another for-each's results (D-74)", () => {
+  it("tickers → find each release → report on each: the second for-each goes through what the first found", () => {
+    const DESK = { desk: { thesis: "growth", scoring: ["growth"], style: "plain" } };
+    const seen: Record<string, unknown> = {};
+    const exec = fakes(
+      {
+        research: (c) => ({ found: true, company: `${c.inputs.item} Inc.`, release: `${c.inputs.item} revenue up 9%`, url: `https://ir.example.com/${c.inputs.item}`, date: "2026-10-23" }),
+        summarize: (c) => ((seen[(c.inputs.item as { id: string }).id] = c.inputs.item), { headline: "ok", metrics: [], guidance: "none", risks: [] }),
+        score: () => ({ scores: [], total: 6 }),
+        write: () => ({ report: "# report" }),
+        rank: () => ({ ranking: [], summary: "done" }),
+      },
+      { check_find: () => ({ action: "approve" }), check_summary: () => ({ action: "approve" }), review: () => ({ action: "approve" }), approve_ranking: () => ({ action: "approve" }) },
+    );
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(graph("quarter_review"), rec, exec, graphs, LIBRARY);
+    s.start(RELEASE, { quarter: "Q3 2026", tickers: ["AAPL", "MSFT"] }, DESK);
+    s.run();
+    expect(rec.state.status).toBe("completed");
+    expect(rec.state.nodes.find?.items?.keys).toEqual(["AAPL", "MSFT"]);
+    expect(rec.state.nodes.per_company?.items?.keys).toEqual(["AAPL", "MSFT"]);
+    expect(seen.MSFT).toEqual({ id: "MSFT", company: "MSFT Inc.", release: "MSFT revenue up 9%", source: "https://ir.example.com/MSFT", date: "2026-10-23" });
     expect(replay(readRun(log, "run1"))).toEqual(rec.state);
   });
 });

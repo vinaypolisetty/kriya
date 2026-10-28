@@ -48,7 +48,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 - **Models**: `models: fake` in `kriya.yaml` (the default) makes up outputs from each step's declared types, no keys, no cost. Real providers are chosen per kind of step, and kinds left out stay fake:
   ```yaml
   models:
-    llm: anthropic     # text (llm.write), vision (llm.vision) and agents → Claude; key ANTHROPIC_API_KEY
+    llm: anthropic     # text (llm.write), vision (llm.vision), web research (llm.research) and agents → Claude; key ANTHROPIC_API_KEY
     image: replicate   # image.generate, image.edit → Nano Banana 2; token REPLICATE_API_TOKEN
     video: replicate   # video.from_image → Wan 2.7 image-to-video
     audio: replicate   # audio.speech → Gemini 3.1 Flash TTS; audio.music → Lyria 2

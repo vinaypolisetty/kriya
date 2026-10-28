@@ -414,6 +414,62 @@ edges:
   });
 });
 
+describe("llm.research: Claude with web search and web fetch (D-74)", () => {
+  const finder = load(`graph: find
+level: company
+inputs:
+  item: text
+nodes:
+  - id: research
+    kind: model
+    capability: llm.research
+    trust: always
+    params: { max_searches: 3, max_fetches: 2, domains: [apple.com] }
+    prompt: "Find the latest quarterly earnings release for {{item}}."
+    uses: [item]
+    out: { company: text, release: text, url: text, date: text }
+edges:
+  - { from: research, to: END }
+`);
+  const found = { company: "Apple Inc.", release: "Revenue $94.0 billion, up 10 percent", url: "https://www.apple.com/newsroom/q3", date: "July 30, 2026" };
+
+  it("searches and fetches with limits; a paused search is carried on; the pages read are the version's references; each search adds a cent", async () => {
+    const usage = (searches: number) => ({ input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, server_tool_use: { web_search_requests: searches, web_fetch_requests: 1 } });
+    const { client, requests } = fakeClient((_p, n) =>
+      n === 1
+        ? message([{ type: "server_tool_use", id: "s1", name: "web_search", input: { query: "Apple Q3 results" } }], "pause_turn", { usage: usage(2) })
+        : message([
+            { type: "web_fetch_tool_result", tool_use_id: "f1", content: { type: "web_fetch_result", url: "https://www.apple.com/newsroom/q3", content: { type: "document", source: { type: "text", media_type: "text/plain", data: "…" } } } },
+            { type: "text", text: JSON.stringify(found) },
+          ], "end_turn", { usage: usage(1) }),
+    );
+    const { s, rec, jobs, log } = start(finder, client, { item: "AAPL" });
+    await settle(s, jobs, describeError);
+
+    expect(requests).toHaveLength(2);
+    const tools = requests[0]!.tools as { type: string; max_uses: number; allowed_domains?: string[] }[];
+    expect(tools.map((t) => [t.type, t.max_uses, t.allowed_domains])).toEqual([["web_search_20260209", 3, ["apple.com"]], ["web_fetch_20260209", 2, undefined]]);
+    expect(requests[0]!.system).toMatch(/Find what the step asks for on the web/);
+    expect((requests[0]!.output_config as { format: { type: string } }).format.type).toBe("json_schema");
+    // The paused message goes back unchanged, after the question.
+    expect(requests[1]!.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect((requests[1]!.messages[1]!.content as { type: string }[])[0]!.type).toBe("server_tool_use");
+
+    const v = rec.state.nodes.research!.versions["1.1"]!;
+    expect(v.output).toEqual(found);
+    expect(v.references).toEqual([{ label: "page 1", ref: "https://www.apple.com/newsroom/q3" }]);
+    expect(v.costUsd).toBeCloseTo(0.008 * 2 + 0.03, 6); // two requests' tokens, three searches
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+
+  it("a search that keeps pausing stops after 6 rounds with a plain reason", async () => {
+    const { client } = fakeClient(() => message([{ type: "server_tool_use", id: "s", name: "web_search", input: {} }], "pause_turn"));
+    const { s, rec, jobs } = start(finder, client, { item: "AAPL" });
+    await settle(s, jobs, describeError);
+    expect(rec.state.nodes.research?.failure).toMatch(/didn't finish after 6 rounds/);
+  });
+});
+
 describe("fields typed library.<kind>: only names the Library has", () => {
   it("the schema Claude answers to lists the Library's places and characters; a kind with none is a plain error", async () => {
     const g = load(`graph: part

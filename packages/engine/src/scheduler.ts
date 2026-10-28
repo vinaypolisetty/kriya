@@ -363,7 +363,7 @@ export class Scheduler {
     const list = graph && "source" in from ? this.readList(from.source, from.version, from.path) : undefined;
     if (!graph || !list) return this.children(mapKey, node.graph);
     return list.flatMap((item) => {
-      const k = item != null && typeof item === "object" ? (item as Record<string, unknown>)[node.key] : undefined;
+      const k = itemKey(item, node.key);
       return typeof k === "string" || typeof k === "number" ? [{ prefix: `${mapKey}[${k}].`, graph, inputs: { item } }] : [];
     });
   }
@@ -404,7 +404,14 @@ export class Scheduler {
   private readList(source: string, version: string, path: string[]): unknown[] | undefined {
     let v: unknown = version === INPUTS ? this.inputsAt(source.slice(0, -INPUTS.length)) : this.rec.state.nodes[source]?.versions[version]?.output;
     for (const k of path) v = v != null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
-    return Array.isArray(v) ? v : undefined;
+    if (Array.isArray(v)) return v;
+    // A for-each step's results, as a whole (`over: find`, D-74): one row per item, its outputs
+    // side by side and its key as `id`, so a second for-each goes through what the first made.
+    const keys = path.length === 0 ? this.rec.state.nodes[source]?.items?.keys : undefined;
+    if (!keys || !v || typeof v !== "object") return undefined;
+    const columns = Object.entries(v as Record<string, unknown>);
+    if (!columns.every(([, c]) => Array.isArray(c) && c.length === keys.length)) return undefined;
+    return keys.map((id, i) => ({ id, ...Object.fromEntries(columns.map(([f, c]) => [f, (c as unknown[])[i]])) }));
   }
 
   private status(key: string): NodeStatus | undefined {
@@ -734,8 +741,13 @@ export class Scheduler {
     if (Object.keys(limits).length === 0) return;
     outputs.forEach((output, i) => {
       const issues: Verdict["issues"] = [];
-      for (const [field, { min, max }] of Object.entries(limits)) {
+      for (const [field, { min, max, is }] of Object.entries(limits)) {
         const v = output[field];
+        // `found: { is: true }` (D-74): "not found" when it isn't.
+        if (is !== undefined) {
+          if (v !== is) issues.push({ type: `${is ? "not_" : ""}${field}`, what: `${is ? "not " : ""}${field.replace(/_/g, " ")}` });
+          continue;
+        }
         if (typeof v !== "number") issues.push({ type: "missing", what: `no ${field}` });
         else if (max !== undefined && v > max) issues.push({ type: `${field}_over`, what: `${field} is ${v}, over ${max}` });
         else if (min !== undefined && v < min) issues.push({ type: `${field}_under`, what: `${field} is ${v}, under ${min}` });
@@ -1610,7 +1622,7 @@ export class Scheduler {
 
     const keys: string[] = [];
     for (const [i, item] of list.entries()) {
-      const k = item != null && typeof item === "object" ? (item as Record<string, unknown>)[node.key] : undefined;
+      const k = itemKey(item, node.key);
       if (typeof k !== "string" && typeof k !== "number") return this.fail(key, `item ${i + 1} of '${node.over}' has no '${node.key}'`);
       const s = String(k);
       if (!ITEM_KEY.test(s)) return this.fail(key, `item key '${s}' can only use letters, digits, - and _`);
@@ -1880,6 +1892,12 @@ export function onBranch(t: NodeState): Version[] {
   }
   const last = Math.max(...mine.map((v) => v.attempt));
   return mine.filter((v) => v.attempt === last);
+}
+
+/** An item's key in a for-each step: its `key` field, or the item itself in a list of plain names (`["AAPL", "MSFT"]`, D-74). */
+function itemKey(item: unknown, key: string): unknown {
+  if (typeof item === "string" || typeof item === "number") return item;
+  return item != null && typeof item === "object" ? (item as Record<string, unknown>)[key] : undefined;
 }
 
 /** Whether an input key is the step a refining step remakes (`after:speak` for too_long): never an input. */

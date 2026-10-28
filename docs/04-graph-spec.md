@@ -203,7 +203,7 @@ The executor gets `parent` (the version it starts from) and `instruction`. The s
   key: id                 # stable item key (default: id)
 ```
 
-`over` reads a list from a step's locked output, or from the recipe's own inputs: `inputs.filings` at the top, `item.lines` inside another map ([D-73](17-decisions.md)). Inputs were recorded when the run (or the item) started, so either way the map reads recorded data.
+`over` reads a list from a step's locked output, or from the recipe's own inputs: `inputs.filings` at the top, `item.lines` inside another map ([D-73](17-decisions.md)). A list of plain names (`["AAPL", "MSFT"]`) works too: each name is its own key and the child sees it as `item`. And `over: find`, naming another map, goes through that map's results: one row per item, its outputs side by side, its key as `id` ([D-74](17-decisions.md)). Inputs were recorded when the run (or the item) started, so either way the map reads recorded data.
 
 The child graph sees the item as `item`. Child instances are keyed by `item.<key>` so they survive list regeneration: the steps of shot P3-04 are `per_shot[P3-04].draw`, `per_shot[P3-04].pick`, …. Keys use letters, digits, `-` and `_`, and must be unique in the list.
 

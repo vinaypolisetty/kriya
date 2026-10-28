@@ -196,8 +196,15 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
   function checkChecks(n: Extract<Node, { kind: "model" | "tool" }>, i: number) {
     const { rubric, ...limits } = n.check!;
     const numbers = Object.entries(n.out).filter(([, t]) => t === "number").map(([f]) => f);
+    const booleans = Object.entries(n.out).filter(([, t]) => t === "boolean").map(([f]) => f);
     for (const [field, limit] of Object.entries(limits)) {
       const at: Issue["path"] = ["nodes", i, "check", field];
+      if (limit.is !== undefined) {
+        // A yes/no output the step must answer a certain way (D-74).
+        if (!booleans.includes(field)) err(at, `'${field}' isn't a yes/no (boolean) this step makes${suggest(field, booleans)} 'is:' checks one in its out (${booleans.join(", ") || "it has none"})`);
+        else if (limit.min !== undefined || limit.max !== undefined) err(at, `'${field}' is a yes/no: use is: true or is: false, not min or max`);
+        continue;
+      }
       if (!numbers.includes(field)) {
         err(at, `'${field}' isn't a number this step makes${suggest(field, [...numbers, "rubric"])} A check limits a number in its out (${numbers.join(", ") || "it has none"}) or has a rubric`);
       } else if (limit.min === undefined && limit.max === undefined) {

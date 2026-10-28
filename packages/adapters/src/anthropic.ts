@@ -3,6 +3,9 @@
  *
  * - `llm.write` / `llm.vision` model steps: one request per candidate, the
  *   answer constrained to the step's declared outputs (structured outputs).
+ * - `llm.research` (Day 34, D-74): the same, with Claude's web search and web
+ *   fetch on. A long search pauses and is carried on; the pages it read are
+ *   recorded as the version's references, and each search adds its cent.
  * - Checks (Day 20): a judge looks at each candidate's images against the
  *   step's `check.rubric` and answers pass or the issues, each with a fix.
  * - Agent steps: one request per turn. The engine owns the loop (D-26); this
@@ -71,6 +74,12 @@ export type AnthropicOptions = {
 
 const SYSTEM_STEP =
   "You are one step in a kriya recipe: a production pipeline where a person reviews the results. Do exactly what the step asks, using the inputs given. Reply with JSON that fits the schema.";
+
+const SYSTEM_RESEARCH =
+  "You are one step in a kriya recipe: a production pipeline where a person reviews the results. Find what the step asks for on the web: search, then read the pages themselves with web fetch. Prefer the original source over coverage of it. Copy facts and numbers exactly as the source gives them. Reply with JSON that fits the schema.";
+
+/** Web search is billed per search on top of tokens (web fetch is tokens only). */
+const USD_PER_SEARCH = 0.01;
 
 const SYSTEM_AGENT =
   "You are an agent running one step of a kriya recipe: a production pipeline where a person reviews the results. Work toward the goal with your tools. Ask the person with ask_human only when you need a decision or a fact only they have. When you're done, call finish with your result; that ends the step.";
@@ -146,6 +155,34 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
     return m;
   };
 
+  /**
+   * One `llm.research` answer: Claude with web search and web fetch. The API
+   * runs the searches inside the request; when a long one pauses
+   * (`pause_turn`), the paused message goes back unchanged and it carries on.
+   * `params`: `max_searches` (default 5), `max_fetches` (default 5), `domains`
+   * (only search these sites), `effort` (this step's own, e.g. `medium` to spend less).
+   */
+  const research = async (c: Anthropic, model: string, content: Anthropic.Beta.Messages.BetaContentBlockParam[], schema: Record<string, unknown>, p: Record<string, unknown>) => {
+    const tools = [
+      { type: "web_search_20260209", name: "web_search", max_uses: Number(p.max_searches ?? 5), ...(Array.isArray(p.domains) ? { allowed_domains: p.domains.map(String) } : {}) },
+      { type: "web_fetch_20260209", name: "web_fetch", max_uses: Number(p.max_fetches ?? 5), max_content_tokens: 40000 },
+    ] as unknown as Anthropic.Beta.Messages.BetaToolUnion[];
+    const messages: Anthropic.Beta.Messages.BetaMessageParam[] = [{ role: "user", content }];
+    const pages = new Set<string>();
+    let spent = 0;
+    for (let round = 1; ; round++) {
+      const m = await request(c, { model, system: SYSTEM_RESEARCH, output_config: { effort: (p.effort as Effort | undefined) ?? effort, format: { type: "json_schema", schema } }, tools, messages });
+      const searches = (m.usage as { server_tool_use?: { web_search_requests?: number } | null }).server_tool_use?.web_search_requests ?? 0;
+      spent += cost(m) + searches * USD_PER_SEARCH;
+      for (const b of m.content as { type: string; content?: { type?: string; url?: string } }[]) {
+        if (b.type === "web_fetch_tool_result" && b.content?.type === "web_fetch_result" && b.content.url) pages.add(b.content.url);
+      }
+      if (m.stop_reason !== "pause_turn") return { m, cost: Math.round(spent * 1e6) / 1e6, pages: [...pages] };
+      if (round >= 6) throw new Error("the web research didn't finish after 6 rounds; try the step again, or narrow what it looks for");
+      messages.push({ role: "assistant", content: m.content as unknown as Anthropic.Beta.Messages.BetaContentBlockParam[] });
+    }
+  };
+
   return {
     managesContext: true,
 
@@ -162,10 +199,15 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
           const content = stepContent(node.prompt ?? "", ctx, node.capability === "llm.vision");
           const prompt = content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
           const references = content.flatMap((b, i) => (b.type === "image" && b.source.type === "url" ? [{ label: `image ${i + 1}`, ref: b.source.url }] : []));
+          const model = node.model ?? opts.model ?? DEFAULT_MODEL;
+          if (node.capability === "llm.research") {
+            const found = await Promise.all(Array.from({ length: node.options }, () => research(c, model, content, schema, node.params ?? {})));
+            return { outputs: found.map((f) => parseJson(f.m)), meta: found.map((f) => ({ model: f.m.model, cost_usd: f.cost, prompt, references: f.pages.map((url, i) => ({ label: `page ${i + 1}`, ref: url })) })) };
+          }
           const answers = await Promise.all(
             Array.from({ length: node.options }, () =>
               request(c, {
-                model: node.model ?? opts.model ?? DEFAULT_MODEL,
+                model,
                 system: SYSTEM_STEP,
                 output_config: { effort, format: { type: "json_schema", schema } },
                 messages: [{ role: "user", content }],

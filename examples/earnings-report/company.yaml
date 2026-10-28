@@ -5,7 +5,7 @@ level: company
 inherits: [desk]
 
 inputs:
-  item: json   # one filing: id, company, release
+  item: json   # one filing: id (ticker), company, release (its text), source (where it came from)
 
 types:
   metric:
@@ -81,10 +81,10 @@ nodes:
     prompt: |
       Write a one-page report on {{item.company}}'s quarter in Markdown: the headline, the numbers that matter,
       the guidance, how it fits the thesis criterion by criterion (with the scores), and the risks.
-      {{desk.style}}
+      {{desk.style}} End with one line naming the source: {{item.source}}
       Summary: {{summarize.headline}} Metrics: {{summarize.metrics}} Guidance: {{summarize.guidance}} Risks: {{summarize.risks}}
       Scores: {{score.scores}} Total: {{score.total}} out of 10
-    uses: [item.company, desk.style, summarize.headline, summarize.metrics, summarize.guidance, summarize.risks, score.scores, score.total]
+    uses: [item.company, item.source, desk.style, summarize.headline, summarize.metrics, summarize.guidance, summarize.risks, score.scores, score.total]
     check:
       rubric:   # the reviewer sees what this finds next to the report
         - Every number appears in the summary or the scores, with the same value; nothing is computed (no differences or percentages of its own).
@@ -97,7 +97,7 @@ nodes:
     name: Read the report
     review: edit_text
     show: write.report
-    beside: [score.total, summarize.headline]
+    beside: [item.source, score.total, summarize.headline]
     actions:
       - { id: approve, locks: true }
       - { id: edit, needs: [note] }

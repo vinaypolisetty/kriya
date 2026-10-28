@@ -2,11 +2,13 @@
   {
     "id": "ACME",
     "company": "Acme Tea Co. (fictional)",
-    "release": "Acme Tea Co. reports third quarter 2026 results.\nRevenue was $412 million in Q3 2026, up 14% from $361 million in Q3 2025, led by packaged tea, which grew 19%.\nOperating margin was 18.2%, up from 16.9% a year earlier, as shipping costs fell.\nNet income was $51 million, or $1.02 per share, against $41 million, or $0.83 per share, in Q3 2025.\nFree cash flow for the quarter was $63 million. The company ended the quarter with $210 million in cash and $150 million of debt.\nOutlook: Acme raises its 2026 revenue guidance to $1.60-1.64 billion, from $1.55-1.60 billion.\nRisks named by management: tea leaf prices in East Africa, and one retailer that is 22% of sales."
+    "release": "Acme Tea Co. reports third quarter 2026 results.\nRevenue was $412 million in Q3 2026, up 14% from $361 million in Q3 2025, led by packaged tea, which grew 19%.\nOperating margin was 18.2%, up from 16.9% a year earlier, as shipping costs fell.\nNet income was $51 million, or $1.02 per share, against $41 million, or $0.83 per share, in Q3 2025.\nFree cash flow for the quarter was $63 million. The company ended the quarter with $210 million in cash and $150 million of debt.\nOutlook: Acme raises its 2026 revenue guidance to $1.60-1.64 billion, from $1.55-1.60 billion.\nRisks named by management: tea leaf prices in East Africa, and one retailer that is 22% of sales.",
+    "source": "Sample release (fictional), bundled with kriya"
   },
   {
     "id": "LNTR",
     "company": "Lantern Rail Ltd. (fictional)",
-    "release": "Lantern Rail Ltd. announces results for the third quarter of 2026.\nRevenue was $1.08 billion, up 3% from $1.05 billion in Q3 2025. Freight volumes were flat; prices rose 3%.\nOperating margin was 24.5%, down from 26.0% in Q3 2025, on higher fuel and labor costs.\nNet income was $162 million, compared with $171 million a year earlier.\nFree cash flow was $95 million. Net debt was $4.2 billion at quarter end, up from $4.0 billion at the end of 2025.\nOutlook: Lantern keeps its 2026 revenue guidance of $4.2-4.3 billion and lowers its operating margin target to 24-25%, from 26%.\nRisks named by management: a labor agreement that expires in March 2027, and weaker grain exports."
+    "release": "Lantern Rail Ltd. announces results for the third quarter of 2026.\nRevenue was $1.08 billion, up 3% from $1.05 billion in Q3 2025. Freight volumes were flat; prices rose 3%.\nOperating margin was 24.5%, down from 26.0% in Q3 2025, on higher fuel and labor costs.\nNet income was $162 million, compared with $171 million a year earlier.\nFree cash flow was $95 million. Net debt was $4.2 billion at quarter end, up from $4.0 billion at the end of 2025.\nOutlook: Lantern keeps its 2026 revenue guidance of $4.2-4.3 billion and lowers its operating margin target to 24-25%, from 26%.\nRisks named by management: a labor agreement that expires in March 2027, and weaker grain exports.",
+    "source": "Sample release (fictional), bundled with kriya"
   }
 ]
