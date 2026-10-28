@@ -101,7 +101,7 @@ packages/
   web/               the browser app (React): run graph, inbox, review, Library
 examples/
   mohalla-mitra/     part, shot and voice recipes for the reference use case
-  earnings-report/   a text-only example: summarize, score and rank a quarter's earnings releases
+  earnings-report/   a text-only example: fetch results from Polygon (or paste releases), summarize, score, rank
 docs/                design (01–19), architecture, CLI, decisions, roadmap, write-ups
 scripts/             repo checks (conventions)
 bin/kriya            runs the CLI from this checkout

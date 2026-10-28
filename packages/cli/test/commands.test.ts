@@ -646,20 +646,24 @@ describe("plain errors", () => {
   it("an example brings its own settings and sample files; the hint names its top recipe (D-73)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kriya-"));
     const r = await kriya(dir, "init", "q3", "--example", "earnings-report");
-    expect(r.out).toBe("✓ Created q3 with the earnings-report recipes\n  Next: cd q3 && kriya run quarter_review --input quarter=… --input filings=…");
+    expect(r.out).toBe("✓ Created q3 with the earnings-report recipes\n  Next: cd q3 && kriya run quarter_review --input quarter=… --input tickers=…");
     const cwd = join(dir, "q3");
-    expect(readdirSync(join(cwd, "recipes")).sort()).toEqual(["company.yaml", "quarter.yaml"]);
+    expect(readdirSync(join(cwd, "recipes")).sort()).toEqual(["company.yaml", "quarter.yaml", "releases.yaml"]);
     expect(existsSync(join(cwd, "filings.json")) && existsSync(join(cwd, "README.md"))).toBe(true);
     const settings = readFileSync(join(cwd, "kriya.yaml"), "utf8");
     expect(settings).toMatch(/^name: q3$/m);
     expect(settings).toMatch(/^ {2}desk:$/m);
     expect(settings).not.toMatch(/character/);
 
-    // With fakes, a passing summary locks itself (when_confident); each report then waits to be read.
-    expect((await kriya(cwd, "run", "quarter_review", "--input", "quarter=Q3 2026", "--input", "filings=@filings.json")).code).toBe(0);
+    // From pasted releases, with fakes: a passing summary locks itself (when_confident); each report waits to be read.
+    expect((await kriya(cwd, "run", "quarter_from_releases", "--input", "quarter=Q3 2026", "--input", "filings=@filings.json")).code).toBe(0);
     const inbox = (await kriya(cwd, "inbox")).out;
     expect(inbox).toContain("per_company[ACME].review: Read the report");
     expect(inbox).toContain("per_company[LNTR].review: Read the report");
+
+    // From Polygon, with the fetch faked (models.data isn't polygon): made-up filings, the same reports after.
+    expect((await kriya(cwd, "run", "quarter_review", "--input", "quarter=Q3 2026", "--input", 'tickers=["AAPL"]', "--id", "live")).code).toBe(0);
+    expect((await kriya(cwd, "status", "live")).out).toMatch(/✓ fetch · locked 1\.1/);
   });
 
   it("init refuses to overwrite a project", async () => {

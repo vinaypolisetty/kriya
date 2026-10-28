@@ -1,11 +1,12 @@
-# Company recipe: runs once per earnings release. Summarize from the release only (a judge checks
-# every number against it), score against the thesis, write the report, and a person reads it.
+# Company recipe: runs once per company. Summarize from its reported results only (a judge checks
+# every number against them), score against the thesis, write the report, and a person reads it.
+# The results are an earnings release you pasted, or what Polygon reported (quarter_review).
 graph: company_report
 level: company
 inherits: [desk]
 
 inputs:
-  item: json   # one filing: id, company, release
+  item: json   # one filing: id (ticker), company, release (the reported results, as text)
 
 types:
   metric:
@@ -30,15 +31,16 @@ nodes:
     name: Summarize the release
     capability: llm.write
     prompt: |
-      Summarize {{item.company}}'s quarter from its earnings release, using only what the release says.
-      Give every number with its unit and period, and the change it reports.
-      Release:
+      Summarize {{item.company}}'s quarter from its reported results below, using only what they say.
+      Give every number with its unit and period, and the change they report. Quote growth rates and
+      margins only as the results give them; don't work out your own.
+      Results:
       {{item.release}}
     uses: [item.company, item.release]
     check:
       rubric:
-        - Every number appears in the release, with the same value and period.
-        - The guidance is what the release says, not a forecast of your own.
+        - Every number appears in the results, with the same value and period.
+        - Any guidance is what the results say, not a forecast of your own; if they give none, say so.
         - No buy, sell or hold call.
     out:
       headline: text

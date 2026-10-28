@@ -268,7 +268,7 @@ describe("for-each over the recipe's own inputs (D-73)", () => {
     );
     const log = new SqliteEventLog(openDatabase(":memory:"));
     const rec = Recorder.start(log, "run1");
-    const s = new Scheduler(graph("quarter_review"), rec, exec, graphs, LIBRARY);
+    const s = new Scheduler(graph("quarter_from_releases"), rec, exec, graphs, LIBRARY);
     s.start(RELEASE, { quarter: "Q3 2026", filings: FILINGS }, DESK);
     s.run();
     expect(rec.state.status).toBe("completed");

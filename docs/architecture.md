@@ -28,7 +28,7 @@ Read [02-concepts](02-concepts.md) first if words like *lock*, *stale* or *candi
 |---|---|---|---|
 | [`engine`](../packages/engine/README.md) | The recipe format, validation, and the deterministic core: events → state → which step runs next | `zod`, `yaml` | Only to read recipe files (`load.ts`). The run core does no I/O, no clock, no network |
 | [`store`](../packages/store/README.md) | Where runs live: the append-only event log and Library history in SQLite, media as content-addressed files | `better-sqlite3` | Disk only |
-| [`adapters`](../packages/adapters/README.md) | Turns engine requests into real work: Claude, Replicate, local ffmpeg tools; the job queue; the fix policy | `engine`, `@anthropic-ai/sdk` | Yes: providers and ffmpeg |
+| [`adapters`](../packages/adapters/README.md) | Turns engine requests into real work: Claude, Replicate, Polygon, local ffmpeg tools; the job queue; the fix policy | `engine`, `@anthropic-ai/sdk` | Yes: providers and ffmpeg |
 | [`cli`](../packages/cli/README.md) | A project on disk (`kriya.yaml`, `recipes/`, `library/`), the commands, and the `kriya web` HTTP server | all of the above | Disk, providers (through adapters), HTTP |
 | [`web`](../packages/web/README.md) | The browser app: run graph, step panel, inbox, review screen, Library | `react` | Only `kriya web`'s API |
 
@@ -57,7 +57,7 @@ What happens on `kriya run part_recipe`, then `kriya decide 1 lock`, then a cras
 
 1. **Load the project.** [`cli/project.ts`](../packages/cli/src/project.ts) reads `kriya.yaml`, then `recipes/*.yaml` through [`engine/load.ts`](../packages/engine/src/load.ts), which runs the schema and [`validate.ts`](../packages/engine/src/validate.ts) and reports problems with file:line. [`cli/library.ts`](../packages/cli/src/library.ts) reads `library/`. A recipe with errors never starts.
 2. **Open the store.** `openStore(".kriya")` gives the event log, the blob store and the Library history.
-3. **Wire the executors.** `executors()` in [`commands.ts`](../packages/cli/src/commands.ts) picks a real adapter per step (Claude for `llm.*` and agents, Replicate for images, clips, voice and music, ffmpeg for tools) and falls back to [`fake.ts`](../packages/cli/src/fake.ts) for anything left as `fake` in `kriya.yaml`.
+3. **Wire the executors.** `executors()` in [`commands.ts`](../packages/cli/src/commands.ts) picks a real adapter per step (Claude for `llm.*` and agents, Replicate for images, clips, voice and music, Polygon for `polygon.financials`, ffmpeg for tools) and falls back to [`fake.ts`](../packages/cli/src/fake.ts) for anything left as `fake` in `kriya.yaml`.
 4. **Start.** `Scheduler.start()` records `RunStarted` and makes the first steps ready.
 5. **Run.** `Scheduler.run()` loops: pick the first ready step (in a fixed order), run it, follow the edges whose conditions hold, repeat. Each step's events go in one transaction (`atomic`).
 6. **Call out.** A model step calls `Executors.produce(node, ctx)`. A real adapter starts the provider call in [`Jobs`](../packages/adapters/src/jobs.ts) and returns `{ ticket }` at once; the step is `Suspended`. Before any outside call, the scheduler **commits** everything so far (`external`), so a crash can only fall between calls, never inside a step (D-46).

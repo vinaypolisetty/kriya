@@ -1,6 +1,6 @@
 # @kriya/adapters
 
-Turns the engine's requests into real work: Claude for writing, judging and agents; Replicate for images, clips, voices and music; ffmpeg for local media tools. Every call runs as a job: the engine gets a ticket at once, and `settle()` delivers the result when it arrives. Also home to the fix policy, which is pure and decides what to press on a review screen.
+Turns the engine's requests into real work: Claude for writing, judging and agents; Replicate for images, clips, voices and music; Polygon for company financials; ffmpeg for local media tools. Every call runs as a job: the engine gets a ticket at once, and `settle()` delivers the result when it arrives. Also home to the fix policy, which is pure and decides what to press on a review screen.
 
 Depends on `@kriya/engine` and `@anthropic-ai/sdk`. Replicate is plain `fetch`.
 
@@ -13,6 +13,7 @@ Depends on `@kriya/engine` and `@anthropic-ai/sdk`. Replicate is plain `fetch`.
 | [`replicate.ts`](src/replicate.ts) | `replicateExecutors`: `image.generate`, `image.edit`, `video.from_image`, `audio.speech`, `audio.music`; the job ledger; throttle handling (D-56, D-58, D-69) |
 | [`tools.ts`](src/tools.ts) | `mediaTools`: `crop`, `compress`, `assemble_reel`, run locally as jobs (D-62) |
 | [`workers/assemble_reel.py`](workers/assemble_reel.py) | The Reel assembler: Python, Pillow and ffmpeg; reads a manifest, prints one JSON line |
+| [`polygon.ts`](src/polygon.ts) | `polygonTools`: the `polygon.financials` tool step: each ticker's quarterly statements as release-style text, changes worked out in code; legacy-endpoint fallback (D-74) |
 | [`fixes.ts`](src/fixes.ts) | `suggestFix`: verdicts → crop < edit < retry < lock; knowledge-base seed rules (D-64) |
 | [`schema.ts`](src/schema.ts) | A step's `out` types as a strict JSON Schema; `library.<kind>` becomes an enum of Library names (D-70) |
 | [`files.ts`](src/files.ts), [`duration.ts`](src/duration.ts) | A file's type from its bytes or name; a WAV or MP4's length from its bytes |

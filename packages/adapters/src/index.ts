@@ -11,3 +11,4 @@ export * from "./duration.js";
 export * from "./files.js";
 export * from "./tools.js";
 export * from "./fixes.js";
+export * from "./polygon.js";

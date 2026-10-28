@@ -20,8 +20,9 @@ export const ProjectFile = z
     name: z.string().min(1),
     /**
      * Which providers run which steps. `fake` (the default): made-up outputs, no keys.
-     * Per kind of step: `{ llm: anthropic, image: replicate, video: replicate, audio: replicate }`;
-     * kinds left out stay fake. `anthropic` is short for `{ llm: anthropic }`.
+     * Per kind of step: `{ llm: anthropic, image: replicate, video: replicate, audio: replicate, data: polygon }`;
+     * kinds left out stay fake. `anthropic` is short for `{ llm: anthropic }`. `data` runs data
+     * tool steps (`polygon.financials`, D-74).
      */
     models: z
       .union([
@@ -32,6 +33,7 @@ export const ProjectFile = z
             image: z.enum(["fake", "replicate"]).optional(),
             video: z.enum(["fake", "replicate"]).optional(),
             audio: z.enum(["fake", "replicate"]).optional(),
+            data: z.enum(["fake", "polygon"]).optional(),
           })
           .strict(),
       ])
@@ -64,6 +66,8 @@ export const ProjectFile = z
     tools: z
       .union([z.literal("fake"), z.object({ python: z.string().optional(), font: z.string().optional() }).strict()])
       .default("fake"),
+    /** Polygon settings for `models: { data: polygon }`: `base` is the API host (default https://api.polygon.io). */
+    polygon: z.object({ base: z.string().url().optional() }).strict().optional(),
     /** Claude settings for `models: anthropic`; steps can still pin their own `model`. */
     claude: z.object({ model: z.string().optional(), effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional() }).strict().optional(),
     recipes: z.string().default("recipes"),

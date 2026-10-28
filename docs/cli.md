@@ -52,8 +52,9 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
     image: replicate   # image.generate, image.edit → Nano Banana 2; token REPLICATE_API_TOKEN
     video: replicate   # video.from_image → Wan 2.7 image-to-video
     audio: replicate   # audio.speech → Gemini 3.1 Flash TTS; audio.music → Lyria 2
+    data: polygon      # polygon.financials tool steps → Polygon (Massive); key POLYGON_API_KEY
   ```
-  (`models: anthropic` is short for `{ llm: anthropic }`.) Keys go in `.env` at the project root. Images need their looks in the Library, and voices their voice (see **The Library** below). Per capability:
+  (`models: anthropic` is short for `{ llm: anthropic }`.) `polygon: { base: https://api.massive.com }` points Polygon at another host (the default is `https://api.polygon.io`). Keys go in `.env` at the project root. Images need their looks in the Library, and voices their voice (see **The Library** below). Per capability:
   ```yaml
   replicate:                       # optional, per capability; a step's own model: and params: win
     image.generate: { model: google/nano-banana-2, params: { resolution: 1K, output_format: png } }
