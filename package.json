@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "postinstall": "pnpm --filter @kriya/web build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "validate:examples": "pnpm --filter @kriya/engine exec tsx src/cli-validate.ts ../../examples",
