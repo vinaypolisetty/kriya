@@ -25,8 +25,9 @@ export function loadText(text: string, file = "<inline>"): LoadResult {
   return loadSources([{ file, text }]);
 }
 
+/** Every recipe file under `dir`. A `kriya.yaml` is project settings, never a recipe. */
 export function loadDir(dir: string): LoadResult {
-  const files = walk(dir).filter((f) => /\.ya?ml$/.test(f));
+  const files = walk(dir).filter((f) => /\.ya?ml$/.test(f) && !/(^|[\\/])kriya\.ya?ml$/.test(f));
   return loadSources(files.map((f) => ({ file: relative(process.cwd(), f), text: readFileSync(f, "utf8") })));
 }
 

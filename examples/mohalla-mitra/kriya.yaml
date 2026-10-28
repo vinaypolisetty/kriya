@@ -1,0 +1,15 @@
+# Project settings `kriya init --example mohalla-mitra` starts from (the name and models are added).
+context:
+  series:
+    style: 2D Indian cartoon, flat colors, warm afternoon light
+    rules: Original Bollywood-style music only; Hinglish voices, English captions
+    cast: [Mitra, Bheem, Pinki, Tinku, Pinku, Kamla, Biscuit]
+    music:
+      main: music/main-theme.mp3
+      clue: music/emotional-clue.mp3
+      villain: music/villain.mp3
+      chase: music/comedy-chase.mp3
+kinds:
+  character: [look, voice, speech, rules]
+  place: [look]
+  music: [track]

@@ -77,6 +77,9 @@ const SYSTEM_AGENT =
 
 const SYSTEM_JUDGE =
   "You check one candidate made by a step in a production pipeline, before a person sees it. Look at the image closely. It passes only if every rule holds. For each rule it breaks, give one issue. Be strict about the rules and ignore everything else.";
+/** The judge for written work: no image, so it reads the candidate against what the step was given. */
+const SYSTEM_JUDGE_TEXT =
+  "You check one candidate written by a step in a production pipeline, before a person sees it. Read it closely against what the step was asked and the material it was given: a number, name or claim that the material doesn't support is an issue. It passes only if every rule holds. For each rule it breaks, give one issue. Be strict about the rules and ignore everything else.";
 
 /** What the judge answers, as a strict JSON Schema: pass, and the issues with a fix for each. */
 const VERDICT_SCHEMA = {
@@ -97,6 +100,27 @@ const VERDICT_SCHEMA = {
           where: { type: "string", description: "where in the image (e.g. right edge), or empty if all over" },
           fix: { type: "string", enum: ["crop", "edit", "retry"], description: "crop if cutting an edge removes it, edit if one detail is wrong, retry if it's wrong overall" },
           keep: { type: "string", description: "for a crop: the area to keep, as x,y,w,h fractions of the image (e.g. 0,0,0.8,1 drops the right fifth); empty otherwise" },
+        },
+      },
+    },
+  },
+};
+
+/** The same verdict for written work: no crop, and `where` names the field or sentence. */
+const TEXT_VERDICT_SCHEMA = {
+  ...VERDICT_SCHEMA,
+  properties: {
+    ...VERDICT_SCHEMA.properties,
+    issues: {
+      ...VERDICT_SCHEMA.properties.issues,
+      items: {
+        ...VERDICT_SCHEMA.properties.issues.items,
+        properties: {
+          ...VERDICT_SCHEMA.properties.issues.items.properties,
+          type: { type: "string", description: "a short snake_case name, e.g. unsupported_number, missing_section, advice, wrong_company" },
+          where: { type: "string", description: "which field or sentence, or empty if all over" },
+          fix: { type: "string", enum: ["edit", "retry"], description: "edit if one part is wrong, retry if it's wrong overall" },
+          keep: { type: "string", description: "always empty" },
         },
       },
     },
@@ -159,18 +183,30 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       const ticket = `check:${ctx.idempotencyKey}`;
       const c = client();
       const media = opts.media;
-      if (!media) throw new Error("the judge has nowhere to read images from");
       const rubric = node.check.rubric;
       const fields = Object.entries(node.out).filter(([, t]) => t === "image").map(([f]) => f);
+      // A step with no image is written work: the judge reads it (D-73).
+      const written = fields.length === 0;
+      if (!written && !media) throw new Error("the judge has nowhere to read images from");
       const asked = "prompt" in node && node.prompt ? judgeText(node.prompt, ctx) : (node.name ?? node.id);
+      const rules = `Rules:\n${rubric.map((r, i) => `${i + 1}. ${r}`).join("\n")}`;
       opts.jobs.start(ticket, {
         kind: "verdicts",
         run: () =>
           Promise.all(
             candidates.map(async (cand): Promise<Judged> => {
+              if (written) {
+                const m = await request(c, {
+                  model: opts.model ?? DEFAULT_MODEL,
+                  system: SYSTEM_JUDGE_TEXT,
+                  output_config: { effort, format: { type: "json_schema", schema: TEXT_VERDICT_SCHEMA } },
+                  messages: [{ role: "user", content: [{ type: "text", text: `What the step was asked, with the material it was given:\n${asked}\n\nThe candidate:\n${show(cand.output)}\n\n${rules}` }] }],
+                });
+                return verdictOf(m, cand.version);
+              }
               const images = fields.flatMap((f): Anthropic.Beta.Messages.BetaImageBlockParam[] => {
                 const v = cand.output[f];
-                const img = typeof v === "string" ? media.read(v) : undefined;
+                const img = typeof v === "string" ? media!.read(v) : undefined;
                 if (!img) return [];
                 if ("url" in img) return [{ type: "image", source: { type: "url", url: img.url } }];
                 if (!/^image\/(png|jpeg|webp|gif)$/.test(img.mime)) return [];
@@ -181,11 +217,9 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
                 model: opts.model ?? DEFAULT_MODEL,
                 system: SYSTEM_JUDGE,
                 output_config: { effort, format: { type: "json_schema", schema: VERDICT_SCHEMA } },
-                messages: [{ role: "user", content: [...images, { type: "text" as const, text: `What the step was asked:\n${asked}\n\nRules:\n${rubric.map((r, i) => `${i + 1}. ${r}`).join("\n")}` }] }],
+                messages: [{ role: "user", content: [...images, { type: "text" as const, text: `What the step was asked:\n${asked}\n\n${rules}` }] }],
               });
-              const v = parseJson(m) as { pass: boolean; issues: { type: string; what: string; where: string; fix: string; keep: string }[] };
-              const issues = v.issues.map(({ where, keep, ...i }) => ({ ...i, ...(where ? { where } : {}), ...(keep && i.fix === "crop" ? { keep } : {}) }));
-              return { version: cand.version, pass: v.pass && issues.length === 0, issues, model: m.model, cost_usd: cost(m) };
+              return verdictOf(m, cand.version);
             }),
           ),
       });
@@ -214,6 +248,13 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       return new Pending(ticket);
     },
   };
+}
+
+/** The judge's answer as a verdict to record: empty fields dropped, `keep` only on a crop. */
+function verdictOf(m: Message, version: string): Judged {
+  const v = parseJson(m) as { pass: boolean; issues: { type: string; what: string; where: string; fix: string; keep: string }[] };
+  const issues = v.issues.map(({ where, keep, ...i }) => ({ ...i, ...(where ? { where } : {}), ...(keep && i.fix === "crop" ? { keep } : {}) }));
+  return { version, pass: v.pass && issues.length === 0, issues, model: m.model, cost_usd: cost(m) };
 }
 
 /** A plain-words reason for a failed call, for the step's failure. */

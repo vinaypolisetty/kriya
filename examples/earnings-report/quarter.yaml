@@ -1,0 +1,64 @@
+# Quarter recipe: one report per company that reported, then the quarter ranked against the desk's thesis.
+graph: quarter_review
+level: quarter
+inherits: [desk]   # reads the desk's thesis, scoring and style
+description: Read each company's earnings release, score it against the thesis, and rank the quarter.
+
+inputs:
+  quarter: text            # e.g. Q3 2026
+  filings: list<filing>    # one per company: --input filings=@filings.json
+
+types:
+  filing:
+    fields:
+      id: text             # the ticker; each company's steps are keyed by it (per_company[ACME].summarize)
+      company: text
+      release: text        # the earnings release, as text
+  standing:
+    fields:
+      company: text
+      total: number
+      why: text
+
+outputs:
+  ranking: rank.ranking
+
+nodes:
+  - id: per_company
+    kind: map
+    name: Report on each company
+    over: inputs.filings
+    graph: company_report
+
+  - id: rank
+    kind: model
+    name: Rank the quarter
+    capability: llm.write
+    prompt: |
+      Rank the companies that reported in {{inputs.quarter}} by how well they fit this thesis:
+      {{desk.thesis}}
+      Use only the reports and scores below, best fit first, one line each on why it sits there.
+      Then a short summary of the quarter. {{desk.style}}
+      Companies: {{per_company.company}}
+      Scores out of 10: {{per_company.total}}
+      Reports: {{per_company.report}}
+    uses: [inputs.quarter, desk.thesis, desk.style, per_company.company, per_company.total, per_company.report]
+    out:
+      ranking: list<standing>
+      summary: text
+
+  - id: approve_ranking
+    kind: screen
+    name: Approve the ranking
+    review: approve
+    show: rank.ranking
+    beside: [rank.summary]
+    actions:
+      - { id: approve, locks: true }
+      - { id: redo, needs: [note] }
+
+edges:
+  - { from: per_company, to: rank }
+  - { from: rank, to: approve_ranking }
+  - { from: approve_ranking, to: rank, when: "action == 'redo'", max_loops: 3 }
+  - { from: approve_ranking, to: END, when: "action == 'approve'" }

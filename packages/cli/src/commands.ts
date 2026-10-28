@@ -9,7 +9,7 @@ import { basename, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { stringify } from "yaml";
+import { parse, stringify } from "yaml";
 import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
 import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
@@ -86,17 +86,6 @@ export async function main(argv: string[], io: IO): Promise<number> {
 
 const EXAMPLES = fileURLToPath(new URL("../../../examples", import.meta.url));
 
-const EXAMPLE_CONTEXT: Record<string, ProjectContext> = {
-  "mohalla-mitra": {
-    series: {
-      style: "2D Indian cartoon, flat colors, warm afternoon light",
-      rules: "Original Bollywood-style music only; Hinglish voices, English captions",
-      cast: ["Mitra", "Bheem", "Pinki", "Tinku", "Pinku", "Kamla", "Biscuit"],
-      music: { main: "music/main-theme.mp3", clue: "music/emotional-clue.mp3", villain: "music/villain.mp3", chase: "music/comedy-chase.mp3" },
-    },
-  },
-};
-type ProjectContext = Record<string, Record<string, unknown>>;
 
 /** The example projects that ship with kriya: one folder each under examples/. */
 function examples(): string[] {
@@ -118,19 +107,30 @@ function init(args: string[], io: IO): number {
 
   mkdirSync(join(root, "recipes"), { recursive: true });
   mkdirSync(join(root, "library"), { recursive: true });
-  if (example) cpSync(join(EXAMPLES, example), join(root, "recipes"), { recursive: true });
-  const settings = {
-    name: basename(root),
-    models: "fake",
-    recipes: "recipes",
-    context: example ? (EXAMPLE_CONTEXT[example] ?? {}) : {},
-    kinds: { character: ["look", "voice", "speech", "rules"], place: ["look"], music: ["track"] },
-  };
+  // An example is a folder: its recipes (*.yaml) go to recipes/, its kriya.yaml seeds the settings,
+  // and anything else (sample inputs, a README) goes to the project root.
+  let seed: Record<string, unknown> = {};
+  if (example) {
+    const dir = join(EXAMPLES, example);
+    for (const f of readdirSync(dir)) {
+      if (f === "kriya.yaml") seed = (parse(readFileSync(join(dir, f), "utf8")) ?? {}) as Record<string, unknown>;
+      else cpSync(join(dir, f), join(root, /\.ya?ml$/.test(f) ? "recipes" : "", f), { recursive: true });
+    }
+  }
+  const settings = { name: basename(root), models: "fake", recipes: "recipes", context: {}, kinds: {}, ...seed };
   writeFileSync(join(root, "kriya.yaml"), `# kriya project settings\n${stringify(settings)}`);
   writeFileSync(join(root, ".gitignore"), ".kriya/\n.env\n");
   io.out(`✓ Created ${folder}${example ? ` with the ${example} recipes` : ""}`);
-  io.out(example ? `  Next: cd ${folder} && kriya run part_recipe --input part_no=3 --input story_pages="…"` : `  Next: add a recipe to ${folder}/recipes/`);
+  io.out(example ? `  Next: cd ${folder} && ${firstRun(loadProject(root))}` : `  Next: add a recipe to ${folder}/recipes/`);
   return 0;
+}
+
+/** How to start a project's top recipe (the one no other recipe runs), with its inputs: `kriya run part_recipe --input part_no=…`. */
+function firstRun(project: Project): string {
+  const inner = new Set(project.graphs.flatMap((g) => g.nodes.flatMap((n) => (n.kind === "map" || n.kind === "subgraph" ? [n.graph] : []))));
+  const top = project.graphs.find((g) => !inner.has(g.graph)) ?? project.graphs[0];
+  if (!top) return "kriya run <recipe>";
+  return [`kriya run ${top.graph}`, ...Object.keys(top.inputs).map((i) => `--input ${i}=…`)].join(" ");
 }
 
 // ── run ─────────────────────────────────────────────────────────────────────

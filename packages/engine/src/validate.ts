@@ -206,7 +206,13 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
         err(at, `min (${limit.min}) is above max (${limit.max})`);
       }
     }
-    if (rubric && !Object.values(n.out).includes("image")) err(["nodes", i, "check", "rubric"], "a rubric is judged by looking at images, and this step makes none");
+    // The judge looks at images, or reads written work (D-73); it can't hear or watch.
+    const types = Object.values(n.out).map((t) => t.replace(/^list<(.+)>$/, "$1"));
+    if (rubric && !types.includes("image")) {
+      const media = types.find((t) => t === "audio" || t === "video");
+      if (media) err(["nodes", i, "check", "rubric"], `a rubric is judged by looking at images or reading words, and this step makes ${media}; limit a number instead, e.g. seconds: { max: 8 }`);
+      else if (types.length === 0) err(["nodes", i, "check", "rubric"], "a rubric needs something to judge, and this step declares no outputs (out:)");
+    }
   }
 
   /** `result` is the one candidate the edge's source step just made (D-43). */

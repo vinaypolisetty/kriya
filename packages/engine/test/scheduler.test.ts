@@ -246,3 +246,55 @@ describe("for-each (map) and join: the whole Part", () => {
     expect(state.nodes.per_shot!.versions["1.1"]!.output.clip).toEqual([]);
   });
 });
+
+describe("for-each over the recipe's own inputs (D-73)", () => {
+  const DESK = { desk: { thesis: "growth with rising margins", scoring: ["growth", "margin"], style: "plain" } };
+  const FILINGS = [
+    { id: "ACME", company: "Acme Tea", release: "Revenue $412M, up 14%." },
+    { id: "LNTR", company: "Lantern Rail", release: "Revenue $1.08B, up 3%." },
+  ];
+
+  it("the earnings example: one report per filing in the run's inputs, then the quarter ranked from all of them", () => {
+    const company = (c: StepContext) => (c.inputs.item as { company: string }).company;
+    let ranked: StepContext | undefined;
+    const exec = fakes(
+      {
+        summarize: (c) => ({ headline: `${company(c)} reported`, metrics: [], guidance: "kept", risks: [] }),
+        score: (c) => ({ scores: [], total: company(c) === "Acme Tea" ? 8 : 4 }),
+        write: (c) => ({ report: `# ${company(c)}` }),
+        rank: (c) => ((ranked = c), { ranking: [], summary: "Acme first" }),
+      },
+      { check_summary: () => ({ action: "approve" }), review: () => ({ action: "approve" }), approve_ranking: () => ({ action: "approve" }) },
+    );
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(graph("quarter_review"), rec, exec, graphs, LIBRARY);
+    s.start(RELEASE, { quarter: "Q3 2026", filings: FILINGS }, DESK);
+    s.run();
+    expect(rec.state.status).toBe("completed");
+    expect(rec.state.nodes.per_company?.items?.keys).toEqual(["ACME", "LNTR"]);
+    expect(rec.state.nodes["per_company[LNTR].summarize"]?.versions["1.1"]?.output).toMatchObject({ headline: "Lantern Rail reported" });
+    expect(ranked?.uses).toMatchObject({ "per_company.company": ["Acme Tea", "Lantern Rail"], "per_company.total": [8, 4], "per_company.report": ["# Acme Tea", "# Lantern Rail"] });
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+
+  it("a for-each inside another goes through its item's list (item.lines)", () => {
+    const [outer, inner, leaf] = ["outer", "inner", "leaf"].map((id) => id);
+    const g = (text: string) => loadText(text).graphs[0]!;
+    const all = [
+      g(`graph: ${outer}\nlevel: part\ninputs: { parts: json }\nnodes:\n  - { id: per_part, kind: map, over: inputs.parts, graph: ${inner} }\nedges:\n  - { from: per_part, to: END }\n`),
+      g(`graph: ${inner}\nlevel: shot\ninputs: { item: json }\nnodes:\n  - { id: per_line, kind: map, over: item.lines, graph: ${leaf} }\nedges:\n  - { from: per_line, to: END }\n`),
+      g(`graph: ${leaf}\nlevel: line\ninputs: { item: json }\nnodes:\n  - { id: say, kind: model, capability: llm.write, trust: always, prompt: "{{item.text}}", uses: [item.text], out: { said: text } }\nedges:\n  - { from: say, to: END }\n`),
+    ];
+    const exec = fakes({ say: (c) => ({ said: (c.inputs.item as { text: string }).text }) });
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(all[0]!, rec, exec, all, LIBRARY);
+    s.start(RELEASE, { parts: [{ id: "P1", lines: [{ id: "L1", text: "hi" }, { id: "L2", text: "bye" }] }, { id: "P2", lines: [{ id: "L1", text: "again" }] }] });
+    s.run();
+    expect(rec.state.status).toBe("completed");
+    expect(rec.state.nodes["per_part[P1].per_line[L2].say"]?.versions["1.1"]?.output).toEqual({ said: "bye" });
+    expect(rec.state.nodes["per_part[P2].per_line[L1].say"]?.versions["1.1"]?.output).toEqual({ said: "again" });
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+});

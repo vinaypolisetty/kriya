@@ -1,0 +1,12 @@
+# Project settings `kriya init --example earnings-report` starts from (the name and models are added).
+# The desk is the level above every quarter: its thesis and scoring are locked context each report reads.
+context:
+  desk:
+    thesis: Companies growing revenue at least 10% a year, with operating margins that are rising, guidance they keep raising, and cash that covers their debt.
+    scoring:
+      - Revenue growth against the same quarter last year
+      - Operating margin, and which way it moved
+      - Guidance for the year - raised, kept or cut
+      - Cash - free cash flow against debt
+    style: Plain English for a busy reader. Every number with its unit and period. Describe how a company fits the thesis; never say to buy, sell or hold.
+kinds: {}

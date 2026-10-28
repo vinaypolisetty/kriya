@@ -269,6 +269,8 @@ const approvalScreen = (node: Producer): ScreenNode => ({
 const ACTIVE: NodeStatus[] = ["blocked", "ready", "running", "checking", "fixing", "waiting_external", "awaiting_human"];
 const ITEM_KEY = /^[A-Za-z0-9_-]+$/;
 const MAX_STEPS = 100_000;
+/** A map's source when its list is the recipe's own inputs (`inputs.filings`): the key `inputs`, the version `inputs`. */
+export const INPUTS = "inputs";
 
 export class Scheduler {
   private readonly graphs: Map<string, Graph>;
@@ -357,9 +359,8 @@ export class Scheduler {
    */
   private currentChildren(mapKey: string, node: Extract<Node, { kind: "map" }>, ctx: Context): Context[] {
     const graph = this.graphs.get(node.graph);
-    const [root, ...path] = node.over.split(".");
-    const src = this.rec.state.nodes[ctx.prefix + root];
-    const list = graph && src?.locked ? this.readList(ctx.prefix + root, src.locked.version, path) : undefined;
+    const from = this.listSource(node.over, ctx);
+    const list = graph && "source" in from ? this.readList(from.source, from.version, from.path) : undefined;
     if (!graph || !list) return this.children(mapKey, node.graph);
     return list.flatMap((item) => {
       const k = item != null && typeof item === "object" ? (item as Record<string, unknown>)[node.key] : undefined;
@@ -376,8 +377,32 @@ export class Scheduler {
     return items.keys.map((k, i) => ({ prefix: `${mapKey}[${k}].`, graph, inputs: { item: list[i] } }));
   }
 
+  /**
+   * Where a map's list comes from: a step's locked output (`shot_list.shots`),
+   * or, since D-73, this recipe's own inputs (`inputs.filings`, or `item.lines`
+   * inside another map). Inputs are recorded already (the run's at RunStarted,
+   * an item's in its parent's list), so the map reads recorded data either way.
+   */
+  private listSource(over: string, ctx: Context): { source: string; version: string; path: string[] } | { missing: string } {
+    const [root, ...path] = over.split(".");
+    if (root === "inputs" || root === "item") return { source: `${ctx.prefix}${INPUTS}`, version: INPUTS, path: root === "item" ? ["item", ...path] : path };
+    const locked = this.rec.state.nodes[ctx.prefix + root]?.locked;
+    return locked ? { source: ctx.prefix + root, version: locked.version, path } : { missing: `'${over}' isn't locked yet, so there's no list to go through` };
+  }
+
+  /** The inputs of the recipe at `prefix`: the run's at the top, an item's inside a map. */
+  private inputsAt(prefix: string): Record<string, unknown> | undefined {
+    if (prefix === "") return this.rec.state.inputs;
+    // `per_company[ACME].` → ACME's entry in the list per_company went through, read from its record.
+    const [, mapKey, k] = /^(.*)\[([^\]]+)\]\.$/.exec(prefix) ?? [];
+    const items = mapKey ? this.rec.state.nodes[mapKey]?.items : undefined;
+    if (!items) return undefined;
+    const list = this.readList(items.source, items.version, items.path);
+    return list ? { item: list[items.keys.indexOf(k!)] } : undefined;
+  }
+
   private readList(source: string, version: string, path: string[]): unknown[] | undefined {
-    let v: unknown = this.rec.state.nodes[source]?.versions[version]?.output;
+    let v: unknown = version === INPUTS ? this.inputsAt(source.slice(0, -INPUTS.length)) : this.rec.state.nodes[source]?.versions[version]?.output;
     for (const k of path) v = v != null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
     return Array.isArray(v) ? v : undefined;
   }
@@ -1578,11 +1603,9 @@ export class Scheduler {
     const child = this.graphs.get(node.graph);
     if (!child) return this.fail(key, `it runs recipe '${node.graph}', which isn't loaded`);
 
-    const [root, ...path] = node.over.split(".");
-    const sourceKey = ctx.prefix + root;
-    const locked = this.rec.state.nodes[sourceKey]?.locked;
-    if (!locked) return this.fail(key, `'${node.over}' isn't locked yet, so there's no list to go through`);
-    const list = this.readList(sourceKey, locked.version, path);
+    const from = this.listSource(node.over, ctx);
+    if ("missing" in from) return this.fail(key, from.missing);
+    const list = this.readList(from.source, from.version, from.path);
     if (!list) return this.fail(key, `'${node.over}' isn't a list`);
 
     const keys: string[] = [];
@@ -1596,7 +1619,7 @@ export class Scheduler {
     }
 
     this.rec.record({ type: "AttemptStarted", node: key, attempt: n.attempts + 1 });
-    this.rec.record({ type: "MapExpanded", node: key, keys, source: sourceKey, version: locked.version, path });
+    this.rec.record({ type: "MapExpanded", node: key, keys, source: from.source, version: from.version, path: from.path });
     for (const k of keys) {
       const prefix = `${key}[${k}].`;
       const seen = again && Object.keys(this.rec.state.nodes).some((s) => s.startsWith(prefix));

@@ -27,7 +27,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 
 | Command | Does |
 |---|---|
-| `kriya init <folder> [--example <name>]` | Starts a project; `kriya init --examples` lists the examples |
+| `kriya init <folder> [--example <name>]` | Starts a project; `kriya init --examples` lists the examples (`mohalla-mitra`, `earnings-report`). An example brings its recipes, its settings (context, Library kinds) and sample files, and the command prints how to run it |
 | `kriya run <recipe> [--input name=value]… [--id name]` | Starts a run. `@file` reads a value from a file |
 | `kriya status [run]` | All runs, or one run's steps |
 | `kriya show <run> [step] [version]` | What a run made: every step with its versions, model and cost; or one step's full output (YAML), with an agent's turns and tool calls |

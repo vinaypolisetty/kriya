@@ -170,8 +170,12 @@ edges:
     expect(problems(step("{ seconds: {} }"))).toEqual(["say the limit, e.g. seconds: { max: 8 }"]);
     expect(problems(step("{ seconds: { min: 9, max: 8 } }"))).toEqual(["min (9) is above max (8)"]);
   });
-  it("a rubric on a step that makes no image", () => {
-    expect(problems(step('{ rubric: ["clear"] }'))).toEqual(["a rubric is judged by looking at images, and this step makes none"]);
+  it("a rubric on a step that makes audio: the judge can't listen (written work is fine, D-73)", () => {
+    expect(problems(step('{ rubric: ["clear"] }'))).toEqual(["a rubric is judged by looking at images or reading words, and this step makes audio; limit a number instead, e.g. seconds: { max: 8 }"]);
+  });
+  it("a rubric on written work is fine; on a step with no outputs there's nothing to judge", () => {
+    expect(problems(step('{ rubric: ["every number is in the release"] }', "{ summary: text, total: number, notes: list<text> }"))).toEqual([]);
+    expect(problems(step('{ rubric: ["clear"] }', "{}"))).toEqual(["a rubric needs something to judge, and this step declares no outputs (out:)"]);
   });
   it("an edge reading 'verdict' from a step with no check", () => {
     expect(problems(`graph: g

@@ -364,6 +364,56 @@ edges:
   });
 });
 
+describe("a rubric on written work: the judge reads it (D-73)", () => {
+  const summary = load(`graph: company
+level: company
+inputs:
+  item: json
+nodes:
+  - id: summarize
+    kind: model
+    capability: llm.write
+    prompt: "Summarize {{item.company}}'s quarter from this release only:\\n{{item.release}}"
+    uses: [item.company, item.release]
+    check:
+      rubric: ["Every number appears in the release, with the same value."]
+    out: { headline: text, revenue: text }
+  - id: review
+    kind: screen
+    review: approve
+    show: summarize.headline
+    actions:
+      - { id: approve, locks: true }
+edges:
+  - { from: summarize, to: review }
+  - { from: review, to: END }
+`);
+
+  it("no image and no media store needed: the candidate's text goes to Claude with what the step was given; no crop on offer", async () => {
+    const { client, requests } = fakeClient(() => message([{ type: "text", text: JSON.stringify({ pass: false, issues: [{ type: "unsupported_number", what: "revenue 12.4 isn't in the release (it says 12.1)", where: "revenue", fix: "edit", keep: "" }] }) }]));
+    const jobs = new Jobs();
+    const claude = anthropicExecutors({ graphs: [summary], jobs, client });
+    const exec = { produce: () => [{ headline: "Acme Tea grew", revenue: "$12.4M" }], check: claude.check, decide: () => undefined };
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(summary, rec, exec, [summary]);
+    s.start(RELEASE, { item: { company: "Acme Tea", release: "Revenue was $12.1M." } });
+    await settle(s, jobs, describeError);
+
+    const p = requests[0]!;
+    expect(p.system).toMatch(/written by a step/);
+    const content = p.messages[0]!.content as { type: string; text?: string }[];
+    expect(content).toHaveLength(1);
+    expect(content[0]!.text).toContain("Summarize Acme Tea's quarter from this release only:\nRevenue was $12.1M.");
+    expect(content[0]!.text).toContain("The candidate:\n");
+    expect(content[0]!.text).toContain("$12.4M");
+    const schema = (p.output_config as { format: { schema: { properties: { issues: { items: { properties: { fix: { enum: string[] } } } } } } } }).format.schema;
+    expect(schema.properties.issues.items.properties.fix.enum).toEqual(["edit", "retry"]);
+    expect(rec.state.nodes.summarize!.versions["1.1"]!.verdicts[0]).toMatchObject({ pass: false, issues: [{ type: "unsupported_number", where: "revenue", fix: "edit" }] });
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+});
+
 describe("fields typed library.<kind>: only names the Library has", () => {
   it("the schema Claude answers to lists the Library's places and characters; a kind with none is a plain error", async () => {
     const g = load(`graph: part

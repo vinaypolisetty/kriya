@@ -30,4 +30,4 @@ Common thread: branches for alternatives, locks for decisions, stale tracking wh
 
 Two real use cases with different shapes, to prove the abstraction isn't one-off:
 1. **Mohalla Mitra Part 3** — media-heavy, many human picks.
-2. **Earnings-report agent** — text-only: fetch → summarize → score → pick → report.
+2. **Earnings report** — text-only: summarize each release (judged against it) → score against a thesis → write → read → rank the quarter. In [`examples/earnings-report`](../examples/earnings-report/README.md) (Day 33). Fetching the filings is still the creator's job.
