@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse, stringify } from "yaml";
 import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
-import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, MissingKey, MissingPolygonKey, MissingToken, polygonTools, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
+import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, MissingKey, MissingToken, replicateExecutors, settle, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
@@ -682,7 +682,7 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
   const models = project.settings.models;
   const media = realMedia(project);
   const toolRun = project.settings.tools;
-  if (models.llm !== "anthropic" && media.length === 0 && toolRun === "fake" && models.data !== "polygon") return { ...fake, decide: autoDecide };
+  if (models.llm !== "anthropic" && media.length === 0 && toolRun === "fake") return { ...fake, decide: autoDecide };
   const env = join(project.root, ".env");
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
   const real = [
@@ -696,7 +696,6 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
           ...(toolRun.font ? { font: resolve(project.root, toolRun.font) } : {}),
         })]
       : []),
-    ...(models.data === "polygon" ? [polygonTools({ jobs, ...(project.settings.polygon?.base ? { base: project.settings.polygon.base } : {}) })] : []),
     ...(media.length ? [replicateExecutors({ graphs: project.graphs, jobs, media: projectMedia(project, store), ledger: fileLedger(project), capabilities: media, ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
   ];
   const claude = models.llm === "anthropic" ? (real.find((r) => "turn" in r) as ReturnType<typeof anthropicExecutors>) : undefined;
@@ -787,7 +786,7 @@ export async function openRun(project: Project, store: Store, id: string, io: IO
       await drive(s, jobs, io);
     } catch (e) {
       // A step waiting on Claude with no key: say so, and still show and answer everything else.
-      if (!(e instanceof MissingKey) && !(e instanceof MissingToken) && !(e instanceof MissingPolygonKey)) throw e;
+      if (!(e instanceof MissingKey) && !(e instanceof MissingToken)) throw e;
       io.err(`! ${id}: ${e.message}`);
     }
   }

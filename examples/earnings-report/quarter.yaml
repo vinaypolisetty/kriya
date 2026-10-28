@@ -1,20 +1,19 @@
-# Quarter recipe: fetch each company's latest reported quarter from Polygon, report on each, then rank
-# the quarter against the desk's thesis. (quarter_from_releases does the same from releases you paste.)
+# Quarter recipe: one report per company that reported, then the quarter ranked against the desk's thesis.
 graph: quarter_review
 level: quarter
 inherits: [desk]   # reads the desk's thesis, scoring and style
-description: Fetch each company's latest quarter from Polygon, score it against the thesis, and rank them.
+description: Read each company's earnings release, score it against the thesis, and rank the quarter.
 
 inputs:
-  quarter: text            # e.g. Q3 2026, for the ranking's wording
-  tickers: list<text>      # --input tickers='["AAPL","MSFT"]'
+  quarter: text            # e.g. Q3 2026
+  filings: list<filing>    # one per company: --input filings=@filings.json
 
 types:
   filing:
     fields:
-      id: text             # the ticker; each company's steps are keyed by it (per_company[AAPL].summarize)
+      id: text             # the ticker; each company's steps are keyed by it (per_company[ACME].summarize)
       company: text
-      release: text        # the reported results, as text
+      release: text        # the earnings release, as text
   standing:
     fields:
       company: text
@@ -25,20 +24,10 @@ outputs:
   ranking: rank.ranking
 
 nodes:
-  - id: fetch
-    kind: tool
-    name: Fetch the results
-    tool: polygon.financials   # models: { data: polygon } and POLYGON_API_KEY in .env; fake otherwise
-    uses: [inputs.tickers]
-    args:
-      tickers: inputs.tickers
-    out:
-      filings: list<filing>
-
   - id: per_company
     kind: map
     name: Report on each company
-    over: fetch.filings
+    over: inputs.filings
     graph: company_report
 
   - id: rank
@@ -69,7 +58,6 @@ nodes:
       - { id: redo, needs: [note] }
 
 edges:
-  - { from: fetch, to: per_company }
   - { from: per_company, to: rank }
   - { from: rank, to: approve_ranking }
   - { from: approve_ranking, to: rank, when: "action == 'redo'", max_loops: 3 }
