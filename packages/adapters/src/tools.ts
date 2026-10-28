@@ -10,6 +10,8 @@
  * - `assemble_reel`: the Mohalla Mitra Reel assembler (workers/assemble_reel.py):
  *   shots timed to their voice lines, pan and zoom on stills, clips held on
  *   their last frame, captions, an end card, music ducked under the voices.
+ *   `fit: whole` shows each wide panel entire over a blurred copy, instead of
+ *   filling the tall frame and cropping the sides (`pan`, the default).
  *
  * A tool's args may name one of the step's `uses` to get its value
  * (`reel: assemble.reel`); anything else is passed as written.
@@ -132,6 +134,8 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       });
       return { ...(clip != null ? { clip: file(o, clip, `c${i}`) } : { image: file(o, panel, `p${i}`) }), lines: said, ...(shot.music ? { music: shot.music } : {}) };
     });
+    const fit = arg(node, ctx, "fit") ?? "pan";
+    if (fit !== "pan" && fit !== "whole") throw new ToolError(`'${node.id}' has fit: ${JSON.stringify(fit)}; use pan (fill the frame, crop the sides) or whole (show the whole picture)`);
     const music = arg(node, ctx, "music");
     const manifest = {
       build: o.dir,
@@ -142,6 +146,7 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       hook: arg(node, ctx, "hook") ?? "",
       title: arg(node, ctx, "title") ?? "",
       max_mb: Number(arg(node, ctx, "max_mb") ?? 30),
+      fit,
       music: Object.fromEntries(Object.entries((music ?? {}) as Record<string, unknown>).map(([cue, v]) => [cue, file(o, v, `m_${cue.replace(/\W/g, "_")}`)])),
     };
     writeFileSync(join(o.dir, "manifest.json"), JSON.stringify(manifest, null, 2));

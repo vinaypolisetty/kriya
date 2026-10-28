@@ -72,7 +72,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
     series:
       music: { main: music/main-theme.mp3, villain: music/villain.mp3 }   # by cue; each shot's `music` picks one
   ```
-  `kriya decide <n> crop --pick 1.2 --region 0.1,0,0.8,1` crops a panel (fractions of the image, or pixels); the crop becomes the panel's next version. `assemble_reel` times each shot to its voice lines, pans over stills, plays clips and holds their last frame, adds captions (`caption_en`) and an end card (the hook), ducks the music under the voices, and keeps the copy under `max_mb`. Tools cost nothing and are recorded as `local:<tool>`.
+  `kriya decide <n> crop --pick 1.2 --region 0.1,0,0.8,1` crops a panel (fractions of the image, or pixels); the crop becomes the panel's next version. `assemble_reel` times each shot to its voice lines, pans over stills, plays clips and holds their last frame, adds captions (`caption_en`) and an end card (the hook), ducks the music under the voices, and keeps the copy under `max_mb`. With `fit: whole` it shows each wide panel entire over a blurred copy instead of cropping its sides (D-75). Tools cost nothing and are recorded as `local:<tool>`.
 - **`kriya.yaml`** holds the project's name, the models, the tools, the inherited context (e.g. `series: { style, rules, cast }`) and the Library's `kinds:`.
 - **The Library** is the `library/` folder: one YAML file per character, place or track, with its `name` (what recipes use, like `item.speaker`), its `kind`, and its facets (D-61):
   ```yaml

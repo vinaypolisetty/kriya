@@ -82,6 +82,7 @@ nodes:
       music: series.music      # the series' tracks, by cue; ducked under the voices
       title: MOHALLA MITRA
       max_mb: 30
+      fit: pan           # fill the frame and pan, cropping a wide panel's sides; whole shows every panel entire
     out:
       reel: video
       seconds: number

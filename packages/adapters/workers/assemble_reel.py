@@ -5,6 +5,8 @@ that was hardcoded for that episode read from the manifest instead:
 
   * each shot is a segment, timed to its voice lines (at least `min` seconds)
   * stills pan and zoom (alternating drift); clips play, then hold their last frame
+  * `fit: whole` shows each wide panel or clip entire, across the middle, over a
+    blurred copy of itself (the default, `pan`, fills the frame and crops the sides)
   * captions and the end card are drawn with Pillow and overlaid (no drawtext needed)
   * music sections follow each shot's cue and duck under the voices
   * a second copy is encoded to fit under `max_mb` for Instagram
@@ -27,6 +29,7 @@ except ImportError:
 M = json.load(open(sys.argv[1]))
 S = M["build"]
 FONT = M["font"]
+FIT = M.get("fit", "pan")
 
 X = 0.7            # crossfade
 H = X / 2
@@ -92,8 +95,25 @@ def kf(points):
     return expr
 
 
+# Behind a whole panel or clip: a copy of it filling the frame, blurred and darkened.
+BACKDROP = f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=40:3,eq=brightness=-0.12"
+
+
+def whole(src, name, i):
+    """A still, entire: across the middle at full width, growing slowly to it, over its blurred self."""
+    d, sd = L[name], segdur[name]
+    z = f"({kf([(H, 0.94), (sd + H, 1.0)])})"
+    w0, h0 = Image.open(src).size
+    fc = (f"[0:v]split[a][b];[a]{BACKDROP}[bg];"
+          f"[b]scale=w='trunc(1080*{z}/2)*2':h='trunc(1080*{z}*{h0 / w0:.5f}/2)*2':eval=frame:flags=bicubic[fg];"
+          f"[bg][fg]overlay=x='(W-w)/2':y='(H-h)/2':eval=frame,{N}[v]")
+    ff("-loop", "1", "-framerate", "30", "-t", f"{d:.3f}", "-i", src, "-filter_complex", fc, "-map", "[v]", *ENC, f"{S}/{name}.mp4")
+
+
 def still(src, name, i):
     """A still: scaled to fill the height, a slow zoom, drifting left or right (alternating)."""
+    if FIT == "whole":
+        return whole(src, name, i)
     d, sd = L[name], segdur[name]
     a, b = (0.4, 0.55) if i % 2 == 0 else (0.55, 0.4)
     xk = [(H, a), (sd + H, b)]
@@ -109,6 +129,10 @@ def still(src, name, i):
 
 def clip(src, name):
     """A clip, muted, filling the frame (cropped, never stretched), holding its last frame."""
+    if FIT == "whole":
+        fc = (f"[0:v]tpad=stop_mode=clone:stop_duration=30,split[a][b];[a]{BACKDROP}[bg];"
+              f"[b]scale=1080:-2:flags=lanczos[fg];[bg][fg]overlay=x='(W-w)/2':y='(H-h)/2',{N}[v]")
+        return ff("-i", src, "-filter_complex", fc, "-map", "[v]", "-t", f"{L[name]:.3f}", *ENC, f"{S}/{name}.mp4")
     ff("-i", src, "-vf", f"tpad=stop_mode=clone:stop_duration=30,"
        f"scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,{N}",
        "-t", f"{L[name]:.3f}", *ENC, f"{S}/{name}.mp4")

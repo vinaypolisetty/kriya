@@ -193,4 +193,55 @@ edges:
     expect(durationOf(reel)).toBeCloseTo(out.seconds, 0);
     expect(reel.length).toBeLessThan(5e6);
   }, 120_000);
+
+  /** One shot, one line: the assembler with `fit` set as given. */
+  const oneShot = (fit: string) =>
+    recipe(`graph: part
+level: part
+inputs:
+  shots: json
+  lines: json
+  panels: json
+  voices: json
+nodes:
+  - id: assemble
+    kind: tool
+    tool: assemble_reel
+    uses: [inputs.shots, inputs.lines, inputs.panels, inputs.voices]
+    args: { shots: inputs.shots, lines: inputs.lines, panels: inputs.panels, voices: inputs.voices, fit: ${fit} }
+    out: { reel: video, seconds: number }
+edges:
+  - { from: assemble, to: END }
+`);
+
+  /** The colour of one pixel of a video's frame at `t` seconds. */
+  const pixel = (video: Uint8Array, t: number, x: number, y: number) => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-pixel-"));
+    writeFileSync(join(dir, "v.mp4"), video);
+    return [...execFileSync("ffmpeg", ["-v", "error", "-ss", String(t), "-i", join(dir, "v.mp4"), "-frames:v", "1", "-vf", `crop=2:2:${x}:${y}`, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])].slice(0, 3);
+  };
+
+  it.skipIf(!hasPillow || !FONT)("assemble_reel: fit whole shows a wide panel's edges, which pan crops away", async () => {
+    // A grey panel with a green strip down its left edge: only a whole panel shows the strip.
+    const media = memoryMedia();
+    const panel = media.put(make("s.png", "-f", "lavfi", "-i", "color=gray:size=1280x720", "-vf", "drawbox=x=0:y=0:w=128:h=720:color=green:t=fill", "-frames:v", "1"));
+    const voice = media.put(make("l.wav", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "24000", "-ac", "1"));
+    const inputs = { shots: [{ id: "S1", lines: [{ id: "L1" }] }], lines: [{ id: "L1", caption_en: "Hi" }], panels: [panel], voices: [voice] };
+    const green = ([r, g, b]: number[]) => g! > 90 && g! > r! + 40 && g! > b! + 40;
+    const reel = async (fit: string) => {
+      const { rec, done } = run(oneShot(fit), media, {}, () => undefined, inputs);
+      await done;
+      expect(rec.state.nodes.assemble!.failure).toBeUndefined();
+      return media.get((Object.values(rec.state.nodes.assemble!.versions)[0]!.output as { reel: string }).reel);
+    };
+    expect(green(pixel(await reel("whole"), 3, 40, 960))).toBe(true);
+    expect(green(pixel(await reel("pan"), 3, 40, 960))).toBe(false);
+  }, 120_000);
+
+  it("assemble_reel: an unknown fit says which ones there are", async () => {
+    const media = memoryMedia();
+    const { rec, done } = run(oneShot("stretch"), media, {}, () => undefined, { shots: [{ id: "S1" }], lines: [], panels: [media.put(new Uint8Array([1]))], voices: [] });
+    await done;
+    expect(rec.state.nodes.assemble!.failure).toMatch(/fit: "stretch"; use pan .* or whole/);
+  });
 });

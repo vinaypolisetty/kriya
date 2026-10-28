@@ -123,7 +123,7 @@ Agents may only call the tools listed. Each turn is recorded. (Decision: explici
   out: { reel: video, seconds: number }
 ```
 
-A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) and `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`).
+A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) and `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`, and `fit`: `pan` (the default) fills the tall frame and pans across a wide panel, cropping its sides; `whole` shows each panel and clip entire across the middle, over a blurred copy of itself, [D-75](17-decisions.md)).
 
 ### `screen`: a UI action (human decision)
 
