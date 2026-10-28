@@ -21,7 +21,7 @@ export function NodePanel({ n, run, onClose, onOpenItem }: { n: GNode; run: stri
       {n.waitingOnYou && (
         <a className="button primary" href={`#/review/${encodeURIComponent(`${run}:${n.key}`)}`}>Review now</a>
       )}
-      {n.failure && <p className="note fail">{n.failure}</p>}
+      {n.status === "failed" && n.failure && <p className="note fail">{n.failure}</p>}
       {n.status === "failed" && <RetryButton run={run} n={n} />}
       {n.blockedReason && <p className="note fail">{n.blockedReason}</p>}
       {n.staleReason && <p className="note">Stale: {n.staleReason}</p>}
