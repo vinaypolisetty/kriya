@@ -302,3 +302,10 @@ button.icon { min-height: 32px; width: 32px; padding: 0; border: 0; font-size: 2
 .happened .tone-check { border-left-color: var(--teal); }
 .happened .tone-fail { border-left-color: var(--fail); }
 button.link { background: none; border: 0; padding: 6px 0; color: var(--teal); cursor: pointer; min-height: 40px; }
+
+/* Boxes on the run graph move like cards on a board (Day 36); the layout is this browser's. */
+.graph .box { cursor: grab; user-select: none; }
+.graph .box.dragging { cursor: grabbing; z-index: 2; box-shadow: 0 8px 24px rgba(28, 27, 25, 0.18); transition: none; }
+.graph .box img { -webkit-user-drag: none; }
+.graph-scroll { position: relative; }
+.layout-reset { position: sticky; top: 12px; left: calc(100% - 140px); z-index: 3; float: right; margin: 12px 12px 0 0; min-height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
