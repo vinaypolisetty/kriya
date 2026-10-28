@@ -12,8 +12,12 @@
  * when every item has, and its output is one list per child output, in the
  * order of the source list, with `null` where an item produced nothing (D-41).
  *
- * Still to come: lock policy (Day 8), real tickets and waiting (Day 11),
- * re-running a map with reuse of unchanged items (Day 10), `subgraph` steps.
+ * Everything that leaves the engine goes through the interfaces below
+ * (`Executors`, `Tools`, `Blobs`, `Assets`). Events between two outside calls
+ * are written in one transaction (`atomic`), and committed before each call
+ * (`external`), so a crash falls between calls, never inside a step (D-46).
+ *
+ * Not built yet: `subgraph` steps, run upgrades, proposals for locked nodes (D-28).
  */
 import { contextMode, END, stepText, type AgentNode, type Graph, type Node, type ScreenNode } from "./spec.js";
 import { createHash } from "node:crypto";

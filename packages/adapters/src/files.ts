@@ -1,3 +1,8 @@
+/**
+ * File types for media kriya handles: from a file's first bytes (`sniff`, used
+ * for blobs, which have no name) or from its extension (`MIME`, for files in
+ * the project), and the extension to give each type (`EXT`).
+ */
 /** What kind of file some bytes are, from their first bytes: images, audio and video kriya handles. */
 export function sniff(b: Uint8Array): string {
   const at = (i: number, s: string) => [...s].every((c, j) => b[i + j] === c.charCodeAt(0));
