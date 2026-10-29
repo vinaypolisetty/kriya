@@ -734,8 +734,8 @@ describe("plain errors", () => {
 
   it("an unknown example lists the ones that exist", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kriya-cli-"));
-    expect((await kriya(dir, "init", "p3", "--example", "mohalla-example")).err).toBe("✗ there's no example called 'mohalla-example'. Examples: earnings-report, mohalla-mitra");
-    expect((await kriya(dir, "init", "--examples")).out).toBe("Examples: earnings-report, mohalla-mitra");
+    expect((await kriya(dir, "init", "p3", "--example", "mohalla-example")).err).toBe("✗ there's no example called 'mohalla-example'. Examples: earnings-report, funny-clips, mohalla-mitra");
+    expect((await kriya(dir, "init", "--examples")).out).toBe("Examples: earnings-report, funny-clips, mohalla-mitra");
   });
 
   it("an example brings its own settings and sample files; the hint names its top recipe (D-73)", async () => {

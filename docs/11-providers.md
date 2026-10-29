@@ -52,6 +52,8 @@ Tools are code steps with typed inputs and outputs.
 | `compress` | Re-encode under a size limit (e.g. < 30 MB for sending) |
 | `trim` / `hold_frame` | Keep the good part of a clip and hold its last good frame |
 | `assemble_reel` | The Part 2 ffmpeg assembly script: 1080×1920, shots timed to voice lines, pan/zoom on stills, crossfades, English captions, music sections ducked under voices, end card, compressed < 30 MB. Strips model audio (Wan's audio is always discarded). |
+| `extract_frames` / `stills` | Small frames every N seconds with their times, for Claude to look through; a full-size still at each chosen moment, to draw from (D-80) |
+| `insert_caricatures` | Cuts caricatures into a video at their moments: one full screen with a push in, one after another, or popped over the frozen frame where each subject stands; captions; sound paused during each cut (D-80) |
 
 The tools run on the creator's machine with ffmpeg, as jobs like model calls (D-62). `assemble_reel` is the Part 3 assembler made general (`packages/adapters/workers/assemble_reel.py`, Python + Pillow): everything that was hardcoded for one episode comes from the recipe. A container worker for hosted runs comes later.
 

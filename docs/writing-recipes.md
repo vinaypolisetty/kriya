@@ -186,4 +186,4 @@ kriya checks recipes before anything runs (`kriya status` is enough), and says w
 - More step kinds: `agent` (a model with tools, looping until done), `tool` (crop, compress, assemble a Reel), `subgraph`, `refines` (an edit that makes new versions of another step). See [04-graph-spec](04-graph-spec.md).
 - Characters, places and tracks a recipe can name (`{{item.characters@look}}`): the Library, in [cli.md](cli.md).
 - Real models: set `models:` in `kriya.yaml` and put keys in `.env` ([cli.md](cli.md)).
-- Two full examples: [`examples/mohalla-mitra`](../examples/mohalla-mitra) and [`examples/earnings-report`](../examples/earnings-report/README.md).
+- Three full examples: [`examples/mohalla-mitra`](../examples/mohalla-mitra), [`examples/earnings-report`](../examples/earnings-report/README.md) and [`examples/funny-clips`](../examples/funny-clips/README.md) (a video you already have: a for-each inside a for-each, and `attach` to carry the frame into it).

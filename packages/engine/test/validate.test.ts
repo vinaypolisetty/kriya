@@ -14,7 +14,7 @@ describe("example recipes", () => {
   it("all load with no errors", () => {
     const { graphs, problems } = loadDir(EXAMPLES);
     expect(problems.filter((p) => p.severity === "error")).toEqual([]);
-    expect(graphs.map((g) => g.graph).sort()).toEqual(["company_report", "find_release", "part_recipe", "quarter_from_releases", "quarter_review", "shot_recipe", "voice_recipe"]);
+    expect(graphs.map((g) => g.graph).sort()).toEqual(["caricature", "clip", "company_report", "drawing", "find_release", "part_recipe", "quarter_from_releases", "quarter_review", "shot_recipe", "voice_recipe"]);
   });
 });
 
