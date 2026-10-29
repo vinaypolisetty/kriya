@@ -64,14 +64,6 @@ nodes:
         For over_frame, a single character on a plain white background, nothing else.
       caption: at most 6 words, lands like a punchline.
     uses: [item.what, item.cast, comedy.humour, comedy.style, item.frame]
-    check:
-      rubric:
-        - A stranger would laugh out loud.
-        - Everyone picked earns their place in the joke.
-        - The joke is about what happened in this clip, not a generic fall gag.
-        - It punches at the situation, not at anyone's looks.
-        - The caption is 6 words or fewer.
-        - Each image_prompt asks for at most three things beyond the people.
     out:
       premise: text
       layout: text

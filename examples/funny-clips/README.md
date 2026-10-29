@@ -6,7 +6,7 @@ kriya:
 1. **takes a frame every half second** from the video. Claude can't watch video, but it can look through frames;
 2. **finds the funny moments.** Claude lists each one with the second the gag lands, what happened, and everyone in the frame, people and animals, with what they look like and where they stand;
 3. **you check the moments.** Approve, or say what's off in a note ("drop m2; the fall is at 16.5; add the dog at 31") and Claude looks again;
-4. **writes the joke for each moment.** Claude, as a roast comic, picks who's in it (often not just the one who fell: the friend who laughed, the dog that planned it), how they appear, and a caption of 6 words at most. A judge drops takes that wouldn't make a stranger laugh or that punch at someone's looks; you pick the funniest of three, or ask for another ("meaner", "make it about the phone");
+4. **writes the joke for each moment.** Claude, as a roast comic, picks who's in it (often not just the one who fell: the friend who laughed, the dog that planned it), how they appear, and a caption of 6 words at most. No AI judge: you review every take and pick the funniest of three, or ask for another ("meaner", "make it about the phone");
 5. **draws each caricature from the real frame**, three to pick from, so they still look like themselves;
 6. **cuts them in.** The video plays up to each moment, cuts away for a second and a half, and comes back where it left off.
 

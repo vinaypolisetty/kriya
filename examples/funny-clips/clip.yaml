@@ -62,11 +62,6 @@ nodes:
       whoever is watching or laughing, the dog, the cat on the wall. For each, what they look like,
       their role, and box, where they are in the frame as fractions (x, y from the top left, w, h).
     uses: [frames.frames, frames.times, frames.seconds]
-    check:
-      rubric:
-        - Each moment is a fall or a clear gag, not just someone moving.
-        - Every person and animal visible at the moment is in its cast.
-        - Each time is when the gag lands, not the run-up.
     out:
       moments: list<moment>
 
