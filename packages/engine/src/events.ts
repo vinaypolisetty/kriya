@@ -41,7 +41,8 @@ export const EngineEvent = z.discriminatedUnion("type", [
   on("MentionAdded", { node: NodeKey, ref: z.string().min(1), note: z.string().optional() }),
   /** The creator removed one automatic input from one step (✕ on a chip). */
   on("DefaultRemoved", { node: NodeKey, ref: z.string().min(1) }),
-  on("NodeReady", { node: NodeKey }),
+  /** A step can run. `note` is set when a failed step is tried again with a change (Q-24): the next attempt's instruction. */
+  on("NodeReady", { node: NodeKey, note: z.string().min(1).optional() }),
   /**
    * The scheduler followed an edge. `edge` is its index in the graph's `edges`,
    * prefixed inside a map item (`per_shot[P3-04].1`), so each item counts its own loops toward `max_loops`.

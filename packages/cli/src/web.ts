@@ -6,23 +6,37 @@
  *   GET  /api/runs         every run: its recipe, status, what's waiting on you, cost, stale work
  *   GET  /api/runs/<id>/graph[?at=per_shot[P3-04]]
  *                          a run as its recipe's graph with each step's live state (Day 24, D-67);
- *                          `at` opens one item of a for-each step
- *   GET  /api/runs/<id>/trace[?at=…][&key=…]
+ *                          `at` opens one item of a for-each step; `given` is what it was started with
+ *   GET  /api/runs/<id>/trace[?at=…][&key=…][&all=1]
  *                          what happened, from the event log (Day 36): one step's lines in plain words
- *                          (`key`), how often each arrow was taken, and each review's last answer
+ *                          (`key`), how often each arrow was taken, and each review's last answer;
+ *                          `all` gives every line in the scope and each decision with what it was made on
  *   GET  /api/inbox        what's waiting on you, with each candidate's checks and the suggested fix
  *   GET  /api/media/<sha>  an image, clip or voice line from the blob store
  *   POST /api/decide       press a button: { run, key, action, selection?, note?, region? }
- *   POST /api/retry        try a failed step again: { run, key } (a for-each step retries its failed items)
+ *   POST /api/retry        try a failed step again: { run, key, note?, leaveOut? } (a for-each step retries its
+ *                          failed items); a note or inputs left out try it with a change (Q-24)
  *   POST /api/branch       branch off from a version: { run, key, name, from } (Day 26, D-71)
  *   POST /api/switch       switch a step to another of its branches: { run, key, branch }
  *   GET  /api/tips         what keeps failing and the words that would prevent it, and the tips applied (D-76)
  *   POST /api/tips         say yes or no to a tip: { id, answer: "apply" | "dismiss" } (saved in kb.yaml)
+ *   GET  /api/recipes      every recipe file, oldest first: its YAML as written, when the file was made,
+ *                          the graph it defines, whether it's top level (no other recipe runs it), and its problems
+ *   GET  /api/recipes/<id>/graph
+ *                          a recipe as a graph before any run: every step not started
  *   GET  /api/library      the Library, read-only: who's in it by kind, each facet's current version
  *                          (files as media), its history, and what each is missing
  *   GET  /api/events       server-sent events: `changed` whenever any run's log grows,
  *                          from this server or a `kriya` command in another terminal
  *   GET  /*                the web app (packages/web, built)
+ *
+ * Started in a folder of projects instead of a project (`kriya web` in
+ * `~/projects`, each project a folder with its kriya.yaml), home is a card per
+ * project, and each project is served under its folder's name:
+ *
+ *   GET  /api/projects     every project in the folder: its name, recipes, runs, what's waiting on you
+ *   *    /p/<folder>/…     that project's app and every route above (`/p/mohalla-mitra/api/inbox`)
+ *   GET  /api/media/<sha>  a file from whichever project's blob store has it
  *
  * With `lan`, it listens on the home network too, so a phone can review over
  * wifi (D-38, D-68): a request from another device needs the pairing cookie,
@@ -34,20 +48,20 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeError, sniff, suggestFix, type FixRule } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
-import type { RunState } from "@kriya/engine";
-import { allInbox, drive, openRun, type Entry, type IO } from "./commands.js";
+import { findGraph, type RunState } from "@kriya/engine";
+import { allInbox, drive, openRun, recipeId, type Entry, type IO } from "./commands.js";
 import { answerTip, projectTips } from "./kb.js";
+import { traceView } from "./trace.js";
 import { libraryAssets, MEDIA } from "./library.js";
 import { loadProject, type Project } from "./project.js";
 
 /** The built web app. */
-import { traceView } from "./trace.js";
 const APP = fileURLToPath(new URL("../../web/dist", import.meta.url));
 const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json" };
 
@@ -98,9 +112,21 @@ function pairingToken(root: string): string {
   return token;
 }
 
-export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
-  const store = openStore(join(first.root, ".kriya"));
-  const token = opts.lan ? pairingToken(first.root) : undefined;
+/** One project's API: everything under /api/ for it. `handle` answers false for a request that isn't its. */
+type ProjectApi = {
+  handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<false | void>;
+  /** What the project card says: its runs and how many wait on you. */
+  runs(): Promise<{ waiting: number }[]>;
+  store: Store;
+  close(): Promise<void>;
+};
+
+/** A folder of projects: each subfolder with a kriya.yaml, by name. */
+export type Projects = { folder: string; projects: Project[] };
+
+export async function startWeb(target: Project | Projects, opts: WebOptions): Promise<Web> {
+  const many = "projects" in target;
+  const token = opts.lan ? pairingToken(many ? target.folder : target.root) : undefined;
   const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
   const local = (req: IncomingMessage) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
   const paired = (req: IncomingMessage) => {
@@ -109,6 +135,106 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     const cookie = /(?:^|;\s*)kriya_pair=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
     return cookie !== undefined && same(decodeURIComponent(cookie), token);
   };
+  // A project's store opens the first time it's asked for, so a folder of projects costs nothing until you pick one.
+  const apis = new Map<string, ProjectApi>();
+  const folderOf = (p: Project) => relative(many ? target.folder : p.root, p.root) || ".";
+  const apiOf = (p: Project) => {
+    let a = apis.get(p.root);
+    if (!a) apis.set(p.root, (a = projectApi(p, opts)));
+    return a;
+  };
+
+  const server: Server = createServer((req, res) => {
+    handle(req, res).catch((e: unknown) => {
+      const status = e instanceof BadRequest ? 400 : e instanceof Error && !(e instanceof TypeError) ? 409 : 500;
+      json(res, status, { error: e instanceof Error ? e.message : String(e) });
+      if (status === 500) opts.io.err(`! ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
+    });
+  });
+
+  async function handle(req: IncomingMessage, res: ServerResponse) {
+    const url = new URL(req.url ?? "/", "http://kriya");
+    if (token && url.pathname === "/pair") {
+      if (!same(url.searchParams.get("token") ?? "", token)) return page(res, 403, "That pairing link isn't right. Open the one `kriya web --lan` printed (or scan its QR code) on this phone.");
+      res.writeHead(302, { "set-cookie": `kriya_pair=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 90}`, location: "/" });
+      return res.end();
+    }
+    if (!paired(req)) {
+      if (url.pathname.startsWith("/api/") || /^\/p\/[^/]+\/api\//.test(url.pathname)) return json(res, 401, { error: "this device isn't paired: open the link `kriya web --lan` printed, or scan its QR code" });
+      return page(res, 401, "This phone isn't paired with kriya yet. On the computer running `kriya web --lan`, scan the QR code (or open the link it printed) with this phone.");
+    }
+    if (!many) {
+      if ((await apiOf(target).handle(req, res, url)) !== false) return;
+    } else {
+      if (req.method === "GET" && url.pathname === "/api/projects") return json(res, 200, { folder: target.folder, projects: await projectCards() });
+      const media = /^\/api\/media\/([0-9a-f]{64})$/.exec(url.pathname);
+      if (req.method === "GET" && media) {
+        // Blobs are named by their bytes, so whichever project has it, it's the same file.
+        for (const p of target.projects) if ((await apiOf(p).handle(req, res, url)) !== false) return;
+      }
+      const inside = /^\/p\/([^/]+)(\/.*)?$/.exec(url.pathname);
+      if (inside) {
+        const name = decodeURIComponent(inside[1]!);
+        const p = target.projects.find((x) => folderOf(x) === name);
+        if (!p) throw new BadRequest(`there's no project '${name}' in ${target.folder}`);
+        const rest = inside[2] ?? "/";
+        if (rest.startsWith("/api/")) {
+          const local = new URL(url);
+          local.pathname = rest;
+          if ((await apiOf(p).handle(req, res, local)) !== false) return;
+        } else if (req.method === "GET") return serveApp(rest, res);
+      }
+    }
+    if (req.method === "GET" && /^(\/p\/[^/]+)?\/api\/media\//.test(url.pathname)) return json(res, 404, { error: "no such file" });
+    if (req.method === "GET" && !url.pathname.startsWith("/api/")) return serveApp(url.pathname, res);
+    json(res, 404, { error: `no ${req.method} ${url.pathname}` });
+  }
+
+  /** A card per project, in folder order: what the home page shows when kriya web is started in a folder of projects. */
+  async function projectCards() {
+    if (!many) return [];
+    return Promise.all(
+      target.projects.map(async (p) => {
+        const top = p.graphs.filter((g) => !p.graphs.some((o) => o.nodes.some((n) => (n.kind === "map" || n.kind === "subgraph") && n.graph === g.graph)));
+        const errors = p.problems.filter((x) => x.severity === "error").length;
+        let runs: { waiting: number }[] = [];
+        try {
+          runs = await apiOf(p).runs();
+        } catch {
+          // a project with problems still gets its card; its own pages say what's wrong
+        }
+        return {
+          folder: folderOf(p),
+          name: p.settings.name,
+          recipes: top.map((g) => ({ graph: g.graph, description: g.description ?? "" })),
+          runs: runs.length,
+          waiting: runs.reduce((n, r) => n + r.waiting, 0),
+          problems: errors,
+        };
+      }),
+    );
+  }
+
+  await new Promise<void>((ok) => server.listen(opts.port ?? 4317, opts.lan ? "0.0.0.0" : "127.0.0.1", ok));
+  const addr = server.address() as { port: number };
+  const lanUrls = opts.lan
+    ? Object.values(networkInterfaces())
+        .flat()
+        .filter((i) => i && i.family === "IPv4" && !i.internal)
+        .map((i) => `http://${i!.address}:${addr.port}`)
+    : [];
+  return {
+    url: `http://127.0.0.1:${addr.port}`,
+    ...(token ? { lan: { urls: lanUrls, pair: `${lanUrls[0] ?? `http://127.0.0.1:${addr.port}`}/pair?token=${token}` } } : {}),
+    async close() {
+      await new Promise<void>((ok) => server.close(() => ok()));
+      await Promise.all([...apis.values()].map((a) => a.close()));
+    },
+  };
+}
+
+function projectApi(first: Project, opts: WebOptions): ProjectApi {
+  const store = openStore(join(first.root, ".kriya"));
   /** The project as it is now: recipes and the Library are files the creator edits while the server runs. */
   const current = (): Project => {
     const p = loadProject(first.root);
@@ -153,7 +279,7 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
       const nodes = Object.values(rec.state.nodes);
       out.push({
         id,
-        recipe: rec.state.graph,
+        recipe: recipeId(project, rec.state.graph),
         status: rec.state.status,
         waiting: rec.state.status === "running" ? s.inbox().length : 0,
         working: busy.has(id),
@@ -171,14 +297,14 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     const project = current();
     const { rec, s } = await openRun(project, store, id, quiet, { readOnly: true });
     // `at` names one item of a for-each step (`per_shot[P3-04]`, nested ones chained): walk down to its recipe.
-    let g = project.graphs.find((x) => x.graph === rec.state.graph);
+    let g = findGraph(project.graphs, rec.state.graph);
     let prefix = "";
-    const trail: { label: string; at: string }[] = [{ label: rec.state.graph, at: "" }];
+    const trail: { label: string; at: string }[] = [{ label: g?.graph ?? rec.state.graph, at: "" }];
     for (const [, mapId, item] of at.matchAll(/(\w+)\[([^\]]+)\]/g)) {
       const map = g?.nodes.find((n) => n.id === mapId);
       if (!map || map.kind !== "map") throw new BadRequest(`'${mapId}' isn't a for-each step in this run`);
       prefix += `${mapId}[${item}].`;
-      g = project.graphs.find((x) => x.graph === map.graph);
+      g = findGraph(project.graphs, map.graph);
       trail.push({ label: item!, at: prefix.slice(0, -1) });
     }
     if (!g) throw new BadRequest(`this run's recipe '${rec.state.graph}' isn't in your recipes any more`);
@@ -194,9 +320,21 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     const nodes = g.nodes.map((n) => {
       const key = prefix + n.id;
       const st = rec.state.nodes[key];
+      // Each item with its own steps and a picture of what it made, so the box can open them in place.
+      const inner = n.kind === "map" ? findGraph(project.graphs, n.graph) : undefined;
       const items =
         n.kind === "map" && st?.items
-          ? st.items.keys.map((k) => ({ key: `${key}[${k}]`, label: k, status: itemStatus(rec.state.nodes, `${key}[${k}].`) }))
+          ? st.items.keys.map((k) => {
+              const at = `${key}[${k}].`;
+              const steps = (inner?.nodes ?? []).map((c) => ({ key: at + c.id, name: c.name ?? c.id, status: rec.state.nodes[at + c.id]?.status ?? "not_started", waitingOnYou: waiting.has(at + c.id) }));
+              const made = (inner?.nodes ?? []).flatMap((c) => {
+                const cs = rec.state.nodes[at + c.id];
+                const v = cs && (cs.locked ? cs.versions[cs.locked.version] : Object.values(cs.versions).at(-1));
+                const t = v ? thumb(v.output) : undefined;
+                return t?.type.startsWith("image/") ? [t] : [];
+              });
+              return { key: `${key}[${k}]`, label: k, status: itemStatus(rec.state.nodes, at), steps, ...(made.length ? { thumb: made.at(-1)! } : {}) };
+            })
           : undefined;
       const versions = st
         ? Object.values(st.versions).map((v) => {
@@ -218,29 +356,25 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
         ...(st ? { branch: st.branch, branches: Object.entries(st.branches).map(([name, b]) => ({ name, ...(b.from ? { from: b.from } : {}) })) } : {}),
         ...(st?.locked ? { locked: st.locked } : {}),
         ...(st?.failure ? { failure: st.failure } : {}),
+        ...(st?.status === "failed" && (n.kind === "model" || n.kind === "agent") ? { leavable: s.leavable(key) } : {}),
         ...(st?.staleReason ? { staleReason: st.staleReason } : {}),
         ...(st?.blockedReason ? { blockedReason: st.blockedReason } : {}),
         ...(items ? { items } : {}),
       };
     });
-    const edges = g.edges.flatMap((e) =>
-      (Array.isArray(e.from) ? e.from : [e.from]).map((from) => ({
-        from,
-        to: e.to,
-        ...(e.when ? { label: edgeLabel(e.when) } : Array.isArray(e.from) && e.from.length > 1 ? { label: "wait for all" } : {}),
-        ...(e.max_loops !== undefined ? { back: true, limit: e.max_loops } : {}),
-      })),
-    );
-    return { run: id, recipe: g.graph, at, trail, status: rec.state.status, costUsd: rec.state.costUsd, inputs: g.inputs, nodes, edges };
+    const edges = arrows(g);
+    return { run: id, recipe: g.graph, at, trail, status: rec.state.status, costUsd: rec.state.costUsd, inputs: g.inputs, given: s.inputsAt(prefix) ?? {}, nodes, edges };
   };
 
-  /** A failed step tried again (`kriya retry`): recorded at once, then the run carries on in the background. */
-  const retry = async (body: { run?: unknown; key?: unknown }) => {
-    const { run, key } = body;
+  /** A failed step tried again (`kriya retry`), maybe with a change: recorded at once, then the run carries on in the background. */
+  const retry = async (body: { run?: unknown; key?: unknown; note?: unknown; leaveOut?: unknown }) => {
+    const { run, key, note, leaveOut } = body;
     if (typeof run !== "string" || typeof key !== "string") throw new BadRequest("say which run and step: { run, key }");
+    if (note !== undefined && typeof note !== "string") throw new BadRequest("a note is words: { run, key, note: \"say it gently\" }");
+    if (leaveOut !== undefined && !(Array.isArray(leaveOut) && leaveOut.every((r) => typeof r === "string"))) throw new BadRequest("say what to leave out as a list: { run, key, leaveOut: [\"line.emotion\"] }");
     const started = queue.then(async () => {
       const { s, jobs } = await openRun(current(), store, run, quiet, { readOnly: true });
-      s.retry(key);
+      s.retry(key, { ...(note ? { note } : {}), ...(leaveOut ? { leaveOut: leaveOut as string[] } : {}) });
       return { s, jobs };
     });
     queue = started.then(
@@ -268,6 +402,34 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     });
     queue = done.catch(() => undefined);
     await done;
+  };
+
+  /** The recipe files as written, problems and all: a broken recipe is the one you most need to see. */
+  const recipes = () => {
+    const project = loadProject(first.root);
+    const dir = join(project.root, project.settings.recipes);
+    // A recipe another one runs (for-each, subgraph) is a part of it; the rest are the project's top level.
+    const runBy = new Set(project.graphs.flatMap((g) => g.nodes.flatMap((n) => (n.kind === "map" || n.kind === "subgraph" ? [findGraph(project.graphs, n.graph)?.graph ?? n.graph] : []))));
+    return readdirSync(dir, { recursive: true, encoding: "utf8" })
+      .filter((f) => /\.ya?ml$/.test(f) && statSync(join(dir, f)).isFile())
+      // In the order they were made, so home keeps them where you put them (a fresh clone ties, then A–Z).
+      .map((f) => ({ f, created: statSync(join(dir, f)).birthtime.toISOString() }))
+      .sort((a, b) => a.created.localeCompare(b.created) || a.f.localeCompare(b.f))
+      .map(({ f, created }) => {
+        const text = readFileSync(join(dir, f), "utf8");
+        const id = /^graph:\s*([\w-]+)/m.exec(text)?.[1];
+        const g = project.graphs.find((x) => x.graph === id);
+        const problems = project.problems.filter((p) => resolve(p.file) === join(dir, f)).map((p) => ({ line: p.line, message: p.message, severity: p.severity }));
+        return { file: f, text, created, ...(g ? { graph: g.graph, level: g.level, steps: g.nodes.length, top: !runBy.has(g.graph), ...(g.description ? { description: g.description } : {}) } : {}), problems };
+      });
+  };
+
+  /** A recipe as a graph before any run: every step still to come. */
+  const recipeGraph = (id: string) => {
+    const g = findGraph(current().graphs, id);
+    if (!g) throw new BadRequest(`there's no recipe '${id}'`);
+    const nodes = g.nodes.map((n) => ({ id: n.id, key: n.id, kind: n.kind, name: n.name ?? n.id, detail: describeNode(n), status: "not_started", waitingOnYou: false, costUsd: 0, versions: [] }));
+    return { run: "", recipe: g.graph, at: "", trail: [{ label: g.graph, at: "" }], status: "not_started", costUsd: 0, inputs: g.inputs, nodes, edges: arrows(g) };
   };
 
   /** The Library as it is on disk now, with every version kriya has seen of each facet. */
@@ -345,32 +507,14 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     for (const c of clients) c.write(`event: changed\ndata: ${now}\n\n`);
   }, 500);
 
-  const server: Server = createServer((req, res) => {
-    handle(req, res).catch((e: unknown) => {
-      const status = e instanceof BadRequest ? 400 : e instanceof Error && !(e instanceof TypeError) ? 409 : 500;
-      json(res, status, { error: e instanceof Error ? e.message : String(e) });
-      if (status === 500) opts.io.err(`! ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
-    });
-  });
-
-  async function handle(req: IncomingMessage, res: ServerResponse) {
-    const url = new URL(req.url ?? "/", "http://kriya");
-    if (token && url.pathname === "/pair") {
-      if (!same(url.searchParams.get("token") ?? "", token)) return page(res, 403, "That pairing link isn't right. Open the one `kriya web --lan` printed (or scan its QR code) on this phone.");
-      res.writeHead(302, { "set-cookie": `kriya_pair=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 90}`, location: "/" });
-      return res.end();
-    }
-    if (!paired(req)) {
-      if (url.pathname.startsWith("/api/")) return json(res, 401, { error: "this device isn't paired: open the link `kriya web --lan` printed, or scan its QR code" });
-      return page(res, 401, "This phone isn't paired with kriya yet. On the computer running `kriya web --lan`, scan the QR code (or open the link it printed) with this phone.");
-    }
+  async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<false | void> {
     if (req.method === "GET" && url.pathname === "/api/inbox") return json(res, 200, { project: first.settings.name, items: await inbox() });
     if (req.method === "GET" && url.pathname === "/api/runs") return json(res, 200, { project: first.settings.name, runs: await runs() });
     const traced = /^\/api\/runs\/([^/]+)\/trace$/.exec(url.pathname);
     if (req.method === "GET" && traced) {
       const id = decodeURIComponent(traced[1]!);
       if (!store.events.runs().includes(id)) throw new BadRequest(`there's no run '${id}'`);
-      const opts = { at: url.searchParams.get("at") ?? "", ...(url.searchParams.get("key") ? { key: url.searchParams.get("key")! } : {}) };
+      const opts = { at: url.searchParams.get("at") ?? "", ...(url.searchParams.get("key") ? { key: url.searchParams.get("key")! } : {}), all: url.searchParams.has("all") };
       return json(res, 200, traceView(store.events.read(id), current().graphs, opts));
     }
     const graph = /^\/api\/runs\/([^/]+)\/graph$/.exec(url.pathname);
@@ -399,6 +543,9 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
       }
       return json(res, 200, { tips: found, applied: project.kb.applied });
     }
+    if (req.method === "GET" && url.pathname === "/api/recipes") return json(res, 200, { project: first.settings.name, recipes: recipes() });
+    const recipe = /^\/api\/recipes\/([^/]+)\/graph$/.exec(url.pathname);
+    if (req.method === "GET" && recipe) return json(res, 200, recipeGraph(decodeURIComponent(recipe[1]!)));
     if (req.method === "GET" && url.pathname === "/api/library") return json(res, 200, { project: first.settings.name, kinds: first.settings.kinds, entities: library() });
     if (req.method === "POST" && url.pathname === "/api/decide") {
       await decide(JSON.parse((await readBody(req)) || "{}"));
@@ -414,29 +561,21 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
     const media = /^\/api\/media\/([0-9a-f]{64})$/.exec(url.pathname);
     if (req.method === "GET" && media) {
       const bytes = store.blobs.get(media[1]!);
-      if (!bytes) return json(res, 404, { error: "no such file" });
+      if (!bytes) return false; // another project's, or nobody's
       res.writeHead(200, { "content-type": sniff(bytes), "cache-control": "public, max-age=31536000, immutable" });
-      return res.end(bytes);
+      res.end(bytes);
+      return;
     }
-    if (req.method === "GET" && !url.pathname.startsWith("/api/")) return serveApp(url.pathname, res);
-    json(res, 404, { error: `no ${req.method} ${url.pathname}` });
+    return false;
   }
 
-  await new Promise<void>((ok) => server.listen(opts.port ?? 4317, opts.lan ? "0.0.0.0" : "127.0.0.1", ok));
-  const addr = server.address() as { port: number };
-  const lanUrls = opts.lan
-    ? Object.values(networkInterfaces())
-        .flat()
-        .filter((i) => i && i.family === "IPv4" && !i.internal)
-        .map((i) => `http://${i!.address}:${addr.port}`)
-    : [];
   return {
-    url: `http://127.0.0.1:${addr.port}`,
-    ...(token ? { lan: { urls: lanUrls, pair: `${lanUrls[0] ?? `http://127.0.0.1:${addr.port}`}/pair?token=${token}` } } : {}),
+    handle,
+    runs,
+    store,
     async close() {
       clearInterval(ticker);
       for (const c of clients) c.end();
-      await new Promise<void>((ok) => server.close(() => ok()));
       await queue;
       store.close();
     },
@@ -445,13 +584,13 @@ export async function startWeb(first: Project, opts: WebOptions): Promise<Web> {
 
 /** The recipe a step key is in, walking down for-each items: `per_shot[P3-04].pick` → shot_recipe and `per_shot[P3-04].`. */
 function recipeOf(project: Project, state: RunState, key: string) {
-  let g = project.graphs.find((x) => x.graph === state.graph);
+  let g = findGraph(project.graphs, state.graph);
   let prefix = "";
   for (const [, mapId, item] of key.matchAll(/(\w+)\[([^\]]+)\]\./g)) {
     const map = g?.nodes.find((n) => n.id === mapId);
     if (!map || map.kind !== "map") return undefined;
     prefix += `${mapId}[${item}].`;
-    g = project.graphs.find((x) => x.graph === map.graph);
+    g = findGraph(project.graphs, map.graph);
   }
   return g ? { g, prefix } : undefined;
 }
@@ -555,6 +694,18 @@ function describeNode(n: Project["graphs"][number]["nodes"][number]): string {
     case "subgraph":
       return `Runs ${n.graph}`;
   }
+}
+
+/** A recipe's arrows for the graph: one per source, with the words on it and loops marked. */
+function arrows(g: Project["graphs"][number]) {
+  return g.edges.flatMap((e) =>
+    (Array.isArray(e.from) ? e.from : [e.from]).map((from) => ({
+      from,
+      to: e.to,
+      ...(e.when ? { label: edgeLabel(e.when) } : Array.isArray(e.from) && e.from.length > 1 ? { label: "wait for all" } : {}),
+      ...(e.max_loops !== undefined ? { back: true, limit: e.max_loops } : {}),
+    })),
+  );
 }
 
 /** An edge's condition, as the words on its arrow: the button it follows, or the check it reads. */

@@ -10,6 +10,10 @@
  * - `assemble_reel`: the Mohalla Mitra Reel assembler (workers/assemble_reel.py):
  *   shots timed to their voice lines, pan and zoom on stills, clips held on
  *   their last frame, captions, an end card, music ducked under the voices.
+ *   `fit: whole` shows each wide panel entire over a blurred copy, instead of
+ *   filling the tall frame and cropping the sides (`pan`, the default);
+ *   `background: black` puts it on black instead of the blurred copy;
+ *   `leave_out: [shot ids]` drops those shots and their lines from the cut.
  * - `extract_frames`: small frames of a video every `every` seconds, with their
  *   times, for a vision step to look through (Claude sees frames, not video).
  * - `stills`: a full-size frame of the video at each item's `t`, added to the
@@ -132,7 +136,10 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       throw new ToolError(`'${node.id}' needs args shots and panels (and usually lines, voices, clips, hook, music), each naming one of its uses, e.g. shots: shot_list.shots`);
     }
     const lineList = Array.isArray(lines) ? (lines as { id?: string }[]) : [];
-    const segments = (shots as { id?: string; lines?: { id?: string }[]; music?: string }[]).map((shot, i) => {
+    const leaveOut = arg(node, ctx, "leave_out") ?? [];
+    if (!Array.isArray(leaveOut)) throw new ToolError(`'${node.id}' has leave_out: ${JSON.stringify(leaveOut)}; give a list of shot ids, e.g. leave_out: [P2-12]`);
+    const segments = (shots as { id?: string; lines?: { id?: string }[]; music?: string }[]).flatMap((shot, i) => {
+      if (shot.id != null && leaveOut.includes(shot.id)) return [];
       const clip = Array.isArray(clips) ? clips[i] : undefined;
       const panel = panels[i];
       if (panel == null && clip == null) throw new ToolError(`shot ${shot.id ?? i + 1} has no panel or clip to show`);
@@ -143,8 +150,12 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
         const full: Record<string, unknown> = { ...l, ...lineList[at] };
         return [{ audio: file(o, audio, `v${i}_${at}`), caption: String(full.caption_en ?? full.caption ?? "") }];
       });
-      return { ...(clip != null ? { clip: file(o, clip, `c${i}`) } : { image: file(o, panel, `p${i}`) }), lines: said, ...(shot.music ? { music: shot.music } : {}) };
+      return [{ ...(clip != null ? { clip: file(o, clip, `c${i}`) } : { image: file(o, panel, `p${i}`) }), lines: said, ...(shot.music ? { music: shot.music } : {}) }];
     });
+    const fit = arg(node, ctx, "fit") ?? "pan";
+    if (fit !== "pan" && fit !== "whole") throw new ToolError(`'${node.id}' has fit: ${JSON.stringify(fit)}; use pan (fill the frame, crop the sides) or whole (show the whole picture)`);
+    const background = arg(node, ctx, "background") ?? "blur";
+    if (background !== "blur" && background !== "black") throw new ToolError(`'${node.id}' has background: ${JSON.stringify(background)}; use blur (a blurred copy of the picture) or black`);
     const music = arg(node, ctx, "music");
     const manifest = {
       build: o.dir,
@@ -155,6 +166,9 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       hook: arg(node, ctx, "hook") ?? "",
       title: arg(node, ctx, "title") ?? "",
       max_mb: Number(arg(node, ctx, "max_mb") ?? 30),
+      fit,
+      background,
+      captions: arg(node, ctx, "captions") !== false,
       music: Object.fromEntries(Object.entries((music ?? {}) as Record<string, unknown>).map(([cue, v]) => [cue, file(o, v, `m_${cue.replace(/\W/g, "_")}`)])),
     };
     writeFileSync(join(o.dir, "manifest.json"), JSON.stringify(manifest, null, 2));

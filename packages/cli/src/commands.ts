@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse, stringify } from "yaml";
-import { formatProblems, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
+import { findGraph, formatProblems, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
 import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, TIP_AFTER, MissingKey, MissingToken, replicateExecutors, settle, type FixRule, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
@@ -36,7 +36,8 @@ const HELP = `kriya: run recipes with people in the loop
   kriya lock <run> <step> <version> [--why text]  lock a version yourself
   kriya rebuild <run>                             redo the run's stale work
   kriya keep <run> <step> [--why text]            keep stale work as it is; the run carries on
-  kriya retry <run> <step>                        try a failed step again (a new attempt)
+  kriya retry <run> <step> [--note text] [--leave-out ref]…
+                                                  try a failed step again (a new attempt), with a change if it keeps being refused
   kriya web [--port 4317] [--lan]                 kriya in your browser, live; --lan pairs your phone over wifi
   kriya check <run> <step>                        judge a step's latest candidates against its rubric again
   kriya library [entity]                          the Library: who's in it, what each is missing, every version
@@ -150,19 +151,19 @@ async function run(args: string[], io: IO): Promise<number> {
   const project = checkedProject(io);
   const recipe = positionals[0];
   if (!recipe) throw new UserError(`say which recipe to run: kriya run <recipe> (you have: ${project.graphs.map((g) => g.graph).join(", ")})`);
-  const graph = project.graphs.find((g) => g.graph === recipe);
+  const graph = findGraph(project.graphs, recipe);
   if (!graph) throw new UserError(`there's no recipe '${recipe}' (you have: ${project.graphs.map((g) => g.graph).join(", ")})`);
 
   const inputs = parseInputs(values.input ?? [], graph.inputs, io.cwd, recipe);
   const store = openStore(join(project.root, ".kriya"));
   try {
     const runs = store.events.runs();
-    const id = values.id ?? `${recipe}-${runs.filter((r) => r.startsWith(`${recipe}-`)).length + 1}`;
+    const id = values.id ?? `${graph.graph}-${runs.filter((r) => r.startsWith(`${graph.graph}-`)).length + 1}`;
     if (runs.includes(id)) throw new UserError(`there's already a run called '${id}'`);
     const rec = Recorder.start(store.events, id);
     const { s, jobs } = scheduler(project, graph.graph, rec, store);
     s.start(releaseOf(project.graphs, graph.graph), inputs, project.settings.context);
-    io.out(`✓ Started ${id} (${recipe})`);
+    io.out(`✓ Started ${id} (${graph.graph})`);
     await drive(s, jobs, io);
     report(io, rec.state, s.inbox());
     return 0;
@@ -206,12 +207,12 @@ async function status(args: string[], io: IO): Promise<number> {
       if (runs.length === 0) io.out("No runs yet. Start one with: kriya run <recipe>");
       for (const r of runs) {
         const { rec, s, changed } = await openRun(project, store, r, io, { quiet: true });
-        io.out(`${r.padEnd(24)} ${rec.state.graph.padEnd(16)} ${summary(rec.state, s.inbox().length)}${changed ? " · recipes changed" : ""}`);
+        io.out(`${r.padEnd(24)} ${recipeId(project, rec.state.graph).padEnd(16)} ${summary(rec.state, s.inbox().length)}${changed ? " · recipes changed" : ""}`);
       }
       return 0;
     }
     const { rec, s } = await openRun(project, store, id, io);
-    io.out(`${id} · ${rec.state.graph} · ${summary(rec.state, s.inbox().length)}`);
+    io.out(`${id} · ${recipeId(project, rec.state.graph)} · ${summary(rec.state, s.inbox().length)}`);
     for (const key of s.steps()) io.out(`  ${line(key, rec.state.nodes[key]!)}`);
     const failed = s.steps().filter((k) => rec.state.nodes[k]!.status === "failed" && !s.steps().some((o) => o.startsWith(`${k}[`) && rec.state.nodes[o]!.status === "failed"));
     if (failed.length) io.out(`  Try again: ${failed.map((k) => `kriya retry ${id} '${k}'`).join("  ·  ")}`);
@@ -282,7 +283,7 @@ async function show(args: string[], io: IO): Promise<number> {
     const { rec, s } = await openRun(project, store, id, io);
     const state = rec.state;
     if (!step) {
-      io.out(`${id} · ${state.graph} · ${summary(state, s.inbox().length)} · spent ${usd(state.costUsd)}`);
+      io.out(`${id} · ${recipeId(project, state.graph)} · ${summary(state, s.inbox().length)} · spent ${usd(state.costUsd)}`);
       for (const key of s.steps()) {
         const n = state.nodes[key]!;
         const versions = Object.values(n.versions).map((v) => `${v.id}${n.locked?.version === v.id ? " 🔒" : ""}${v.model ? ` ${v.model}` : ""}${v.costUsd ? ` ${usd(v.costUsd)}` : ""}`);
@@ -507,13 +508,15 @@ async function keep(args: string[], io: IO): Promise<number> {
 }
 
 async function retry(args: string[], io: IO): Promise<number> {
-  const [id, step] = args;
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { note: { type: "string" }, "leave-out": { type: "string", multiple: true, default: [] } } });
+  const [id, step] = positionals;
   if (!id || !step) throw new UserError("say which run and step: kriya retry <run> <step> (kriya status <run> lists the failed ones)");
   const project = checkedProject(io);
   const store = openStore(join(project.root, ".kriya"));
   try {
     const { rec, s, jobs } = await openRun(project, store, id, io);
-    io.out(`✓ Retrying ${s.retry(step).join(", ")}`);
+    const leaveOut = values["leave-out"]!;
+    io.out(`✓ Retrying ${s.retry(step, { ...(values.note ? { note: values.note } : {}), leaveOut }).join(", ")}${values.note ? `, asking: "${values.note}"` : ""}${leaveOut.length ? `, without ${leaveOut.join(", ")}` : ""}`);
     await drive(s, jobs, io);
     report(io, rec.state, s.inbox());
     return 0;
@@ -524,15 +527,24 @@ async function retry(args: string[], io: IO): Promise<number> {
 
 // ── web ─────────────────────────────────────────────────────────────────────
 
-/** Serves the review inbox until you stop it (Ctrl+C). */
+/**
+ * Serves the review inbox until you stop it (Ctrl+C). In a folder of projects (no kriya.yaml here,
+ * but in the folders inside it), home is a card per project to pick from.
+ */
 async function webCommand(args: string[], io: IO): Promise<number> {
   const { values } = parseArgs({ args, options: { port: { type: "string" }, lan: { type: "boolean" } } });
-  const project = checkedProject(io);
   const port = values.port ? Number(values.port) : 4317;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UserError(`--port should be a number like 4317, not '${values.port}'`);
+  const inside = existsSync(join(io.cwd, "kriya.yaml"))
+    ? []
+    : readdirSync(io.cwd, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith(".") && existsSync(join(io.cwd, d.name, "kriya.yaml")))
+        .map((d) => d.name)
+        .sort();
+  const target = inside.length ? { folder: io.cwd, projects: inside.map((name) => loadProject(join(io.cwd, name))) } : checkedProject(io);
   const { startWeb } = await import("./web.js");
-  const w = await startWeb(project, { port, io, ...(values.lan ? { lan: true } : {}) });
-  io.out(`✓ kriya is at ${w.url}  (Ctrl+C to stop)`);
+  const w = await startWeb(target, { port, io, ...(values.lan ? { lan: true } : {}) });
+  io.out(`✓ kriya is at ${w.url}  (Ctrl+C to stop)${inside.length ? `\n  ${inside.length} projects: ${inside.join(", ")}` : ""}`);
   if (w.lan) {
     const { default: QR } = await import("qrcode");
     io.out(`\nOn your phone (same wifi), scan this once to pair it, or open:\n  ${w.lan.pair}\n`);
@@ -695,8 +707,11 @@ export function checkedProject(io: IO): Project {
   return project;
 }
 
+/** A run's recipe by its id now: a run started before a rename recorded the old one (D-78). */
+export const recipeId = (project: Project, graphId: string) => findGraph(project.graphs, graphId)?.graph ?? graphId;
+
 function scheduler(project: Project, graphId: string, rec: Recorder, store: Store): { s: Scheduler; jobs: Jobs } {
-  const graph = project.graphs.find((g) => g.graph === graphId);
+  const graph = findGraph(project.graphs, graphId);
   if (!graph) throw new UserError(`this run uses recipe '${graphId}', which isn't in your recipes any more`);
   const jobs = new Jobs();
   const tools = fakeTools();

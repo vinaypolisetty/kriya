@@ -148,14 +148,32 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
     await kriya(cwd, "decide", "1", "approve");
     const web = await startWeb(loadProject(cwd), { port: 0, io: { out: () => {}, err: () => {}, cwd } });
     try {
-      const g = (await (await fetch(`${web.url}/api/runs/part/graph`)).json()) as { nodes: { id: string; items?: { key: string; label: string; status: string }[] }[] };
+      type Step = { key: string; name: string; status: string; waitingOnYou: boolean };
+      const g = (await (await fetch(`${web.url}/api/runs/part/graph`)).json()) as { nodes: { id: string; items?: { key: string; label: string; status: string; steps: Step[] }[] }[] };
       const shots = g.nodes.find((n) => n.id === "per_shot")!.items!;
       expect(shots.map((i) => [i.key, i.status])).toEqual([["per_shot[S1]", "awaiting_human"], ["per_shot[S2]", "awaiting_human"], ["per_shot[S3]", "awaiting_human"]]);
+      // Each item carries its own steps, so the box can open them in place: the pick waits on you, the drawing is made.
+      expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].pick")).toEqual({ key: "per_shot[S1].pick", name: "Pick one panel", status: "awaiting_human", waitingOnYou: true });
+      expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].draw")!.waitingOnYou).toBe(false);
       const one = (await (await fetch(`${web.url}/api/runs/part/graph?at=${encodeURIComponent("per_shot[S2]")}`)).json()) as { recipe: string; trail: { label: string }[]; nodes: { key: string; status: string }[] };
       expect(one.recipe).toBe("shot_recipe");
       expect(one.trail.map((t) => t.label)).toEqual(["part_recipe", "S2"]);
       expect(one.nodes.find((n) => n.key === "per_shot[S2].pick")!.status).toBe("awaiting_human");
       expect((await fetch(`${web.url}/api/runs/part/graph?at=nope[x]`)).status).toBe(400);
+
+      // The Inputs box: what the run, and each item, was started with; every decision with what it was made on.
+      expect(((await (await fetch(`${web.url}/api/runs/part/graph`)).json()) as { given: unknown }).given).toEqual({ part_no: 3, story_pages: "x" });
+      expect(((await (await fetch(`${web.url}/api/runs/part/graph?at=${encodeURIComponent("per_shot[S2]")}`)).json()) as { given: { item: { id: string } } }).given.item.id).toBe("S2");
+      const whole = (await (await fetch(`${web.url}/api/runs/part/trace?all=1`)).json()) as { lines: { text: string }[]; decisions: unknown[] };
+      expect(whole.lines[0]!.text).toMatch(/^Run started: part_recipe with part_no=3, story_pages=x/);
+      expect(whole.decisions).toEqual([
+        expect.objectContaining({ key: "approve_shots", step: "Approve the shot list", reviews: "shot_list", action: "approve", by: "human", on: [expect.objectContaining({ version: "1.1" })], locked: "Break it into shots 1.1", next: "Make each shot" }),
+      ]);
+      // A step's panel shows the decisions made on it, here or on the screen that reviews it.
+      const step = (key: string) => fetch(`${web.url}/api/runs/part/trace?key=${key}`).then((r) => r.json() as Promise<{ decisions: { key: string }[] }>);
+      expect((await step("shot_list")).decisions.map((d) => d.key)).toEqual(["approve_shots"]);
+      expect((await step("approve_shots")).decisions.map((d) => d.key)).toEqual(["approve_shots"]);
+      expect((await step("assemble")).decisions).toEqual([]);
       const picks = ((await (await fetch(`${web.url}/api/inbox`)).json()) as { items: WebItem[] }).items.filter((i) => i.key.endsWith(".pick"));
       expect(picks.map((i) => [i.batch, i.item])).toEqual([["part:per_shot[].pick", "S1"], ["part:per_shot[].pick", "S2"], ["part:per_shot[].pick", "S3"]]); // one batch: every shot's pick
     } finally {
@@ -170,6 +188,8 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       expect(r.status).toBe(409);
       expect(((await r.json()) as { error: string }).error).toBe("'draw' hasn't failed (it's completed), so there's nothing to retry");
       expect((await fetch(`${web.url}/api/retry`, { method: "POST", body: "{}" })).status).toBe(400);
+      expect((await fetch(`${web.url}/api/retry`, { method: "POST", body: JSON.stringify({ run: "shot", key: "draw", note: 3 }) })).status).toBe(400);
+      expect((await fetch(`${web.url}/api/retry`, { method: "POST", body: JSON.stringify({ run: "shot", key: "draw", leaveOut: "line.emotion" }) })).status).toBe(400);
     } finally {
       await web.close();
     }
@@ -236,6 +256,31 @@ describe("versions and branches from the browser (Day 26, D-71)", () => {
       expect((await post(web, "/api/branch", { run: "shot", key: "draw", name: "Darker Sky", from: "1.1" })).body.error).toMatch(/lowercase letters/);
       expect((await post(web, "/api/branch", { run: "shot", key: "draw", name: "warm" })).status).toBe(400);
       expect(await shown(web)).toEqual(["1.2"]); // nothing above changed anything
+    } finally {
+      await web.close();
+    }
+  });
+});
+
+describe("the project's recipes on the home page", () => {
+  it("lists every recipe file as written, with the graph it defines and its problems", async () => {
+    const { cwd, web } = await waitingShot();
+    try {
+      type Body = { recipes: { file: string; text: string; created: string; graph?: string; level?: string; steps?: number; problems: { line: number }[] }[] };
+      const body = (await (await fetch(`${web.url}/api/recipes`)).json()) as Body;
+      const shot = body.recipes.find((x) => x.graph === "shot_recipe")!;
+      expect(shot).toMatchObject({ level: "shot", problems: [] });
+      expect(shot.steps).toBeGreaterThan(0);
+      expect(shot.text).toBe(readFileSync(join(cwd, "recipes", shot.file), "utf8"));
+
+      writeFileSync(join(cwd, "recipes", "broken.yaml"), "graph: broken\nlevel: shot\nnodes:\n  - id: a\n    kind: modle\n");
+      const after = (await (await fetch(`${web.url}/api/recipes`)).json()) as Body;
+      const broken = after.recipes.find((x) => x.file === "broken.yaml")!;
+      expect(broken.graph).toBeUndefined();
+      // Oldest file first: the one just written comes last.
+      expect(after.recipes.at(-1)!.file).toBe("broken.yaml");
+      expect(after.recipes.every((x) => !Number.isNaN(Date.parse(x.created)))).toBe(true);
+      expect(broken.problems.length).toBeGreaterThan(0);
     } finally {
       await web.close();
     }
@@ -398,6 +443,41 @@ describe("what happened, in the browser (Day 36)", () => {
 
       const missing = await fetch(`${web.url}/api/runs/nope/trace`);
       expect(missing.status).toBe(400);
+    } finally {
+      await web.close();
+    }
+  });
+});
+
+describe("kriya web in a folder of projects", () => {
+  it("home lists each project; each is served under /p/<folder>/, its media from the top too", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-web-many-"));
+    await kriya(dir, "init", "comic", "--example", "mohalla-mitra");
+    await kriya(dir, "init", "desk", "--example", "earnings-report");
+    const shot = JSON.stringify({ id: "P3-04", characters: ["Mitra"], place: "Chai stall", action: "Mitra writes", lines: [], animate: false });
+    expect((await kriya(join(dir, "comic"), "run", "shot_recipe", "--input", `item=${shot}`, "--id", "shot")).code).toBe(0);
+    const web = await startWeb({ folder: dir, projects: ["comic", "desk"].map((p) => loadProject(join(dir, p))) }, { port: 0, io: { out: () => {}, err: () => {}, cwd: dir } });
+    try {
+      const home = (await (await fetch(`${web.url}/api/projects`)).json()) as { projects: { folder: string; recipes: { graph: string }[]; runs: number; waiting: number }[] };
+      expect(home.projects.map((p) => [p.folder, p.runs, p.waiting])).toEqual([["comic", 1, 1], ["desk", 0, 0]]);
+      expect(home.projects[1]!.recipes.map((r) => r.graph).sort()).toEqual(["quarter_from_releases", "quarter_review"]); // not the ones that run inside them
+
+      const inbox = await get(web, "/p/comic/api/inbox");
+      expect(inbox.body.project).toBe("comic");
+      expect(inbox.body.items).toHaveLength(1);
+      expect((await get(web, "/p/desk/api/inbox")).body.items).toEqual([]);
+      expect((await get(web, "/api/inbox")).status).toBe(404); // no project picked
+      expect((await get(web, "/p/nobody/api/inbox")).body.error).toBe(`there's no project 'nobody' in ${dir}`);
+
+      // A file in one project's store, asked for from the top: whichever project has it serves it.
+      const store = openStore(join(dir, "desk", ".kriya"));
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const { hash } = store.blobs.put(png);
+      store.close();
+      const r = await fetch(`${web.url}/api/media/${hash}`);
+      expect([r.status, r.headers.get("content-type")]).toEqual([200, "image/png"]);
+      expect((await get(web, `/api/media/${"0".repeat(64)}`)).body.error).toBe("no such file");
+      expect((await fetch(`${web.url}/p/comic/`)).headers.get("content-type")).toMatch(/text\/(html|plain)/); // the app
     } finally {
       await web.close();
     }

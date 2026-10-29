@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadDir, loadText } from "../src/load.js";
-import { contextMode } from "../src/spec.js";
+import { contextMode, findGraph } from "../src/spec.js";
 
 const EXAMPLES = resolve(__dirname, "../../../examples");
 
@@ -84,6 +84,25 @@ describe("graph checks", () => {
     expect(e[0]!.line).toBe(6);
     writeFileSync(join(dir, "post.yaml"), post("item"));
     expect(loadDir(dir).problems.filter((p) => p.severity === "error")).toEqual([]);
+  });
+
+  it("a renamed recipe's old ids still name it, and no other recipe can use them (D-78)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-val-"));
+    const recipe = (id: string, was = "") => `graph: ${id}\nlevel: x\n${was}nodes:\n${tool("t")}edges:\n  - { from: t, to: END }\n`;
+    writeFileSync(join(dir, "episode.yaml"), recipe("episode", "was: [part_recipe]\n"));
+    // A for-each still naming the old id finds the recipe under its new one.
+    writeFileSync(join(dir, "batch.yaml"), "graph: batch\nlevel: batch\ninputs:\n  xs: list<text>\nnodes:\n  - { id: each, kind: map, over: inputs.xs, graph: part_recipe }\nedges:\n  - { from: each, to: END }\n");
+    const ok = loadDir(dir);
+    expect(ok.problems.filter((p) => p.severity === "error")).toEqual([]);
+    expect(findGraph(ok.graphs, "part_recipe")?.graph).toBe("episode");
+    expect(findGraph(ok.graphs, "episode")?.graph).toBe("episode");
+
+    writeFileSync(join(dir, "other.yaml"), recipe("other", "was: [episode, part_recipe, other]\n"));
+    expect(loadDir(dir).problems.filter((p) => p.severity === "error").map((p) => p.message)).toEqual([
+      "'episode' is the id of another recipe. `was` lists the ids this recipe had before it was renamed; take 'episode' out of it",
+      "'part_recipe' is already an old id of 'episode'. `was` lists the ids this recipe had before it was renamed; take 'part_recipe' out of it",
+      "'other' is the id of this recipe now. `was` lists the ids this recipe had before it was renamed; take 'other' out of it",
+    ]);
   });
 
   it("checks screen buttons used in conditions", () => {

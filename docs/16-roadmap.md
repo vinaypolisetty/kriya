@@ -85,19 +85,90 @@ Days 14a–14c use the four days the plan ran ahead by Day 13. They make kriya r
 | 41 | Sun Nov 22 | Tag v0.1; publish posts; share | v0.1 released |
 | 42 | Mon Nov 23 | Resume/LinkedIn; three interview stories | Stories ready; v0.2 planned |
 
-## v0.2 — Builder
+### Found making genie Part 2 (Oct 28)
 
-**Sandboxed agent tools** (moved from v0.4, D-32): agents write and run their own tools in Deno / Docker sandboxes; secrets broker; promotion to trusted tools with review.
+The real run of *The Genie of the Old Well*, Part 2, turned up these. Done ones are kept for the record; the rest go into the days above when there's room, before the polish.
 
-Recipe view, step cards, UI-action settings, conditions with pickers, drag and drop (dnd-kit), validation in the UI, click-through test, publish, run upgrades.
+| # | What | Why | Done when |
+|---|---|---|---|
+| G-1 | **Try again with a change** ✅ (D-79): a failed step tries again with a note and without the inputs you leave out, from `kriya retry` or the step's panel | Gemini refused a voice line three times running; plain retry (D-59) can't change the input | A refused line goes through after leaving out its emotion |
+| G-2 | **A failed refining step hands its target back done** ✅. `too_long` (refines `speak`) was refused and left `speak` "running"; every restart asked Replicate for a line nobody wanted, and the run stopped replaying | Found when genie-2 crashed `kriya web`. Repaired by appending events; nothing deleted but three rows, backed up | Test: a refused refiner, then a restart, makes no new job |
+| G-3 | **Refining steps' other failures.** Audit `edit` and `crop` (and `adopt`, `replay_change`) for the same hole as G-2: failing while blocked, failing the judge, a refused ticket, a crash mid-attempt | G-2 was the first refiner to fail for real; the others share the code path and have no failure tests | One test per refiner per failure kind |
+| G-4 | **Looking never spends.** `kriya status`, `show`, `log` and `library` open runs read-only; only `run`, `decide`, `retry`, `rebuild` and a new `kriya resume <run>` drive. Today every command `recover()`s first (D-48), so a status check ran a queued retry | Checking on a run must be safe at any time, mid-repair most of all | `kriya status` on a run with a ready step records nothing |
+| G-5 | **Change a line's words from the browser** (D-35's item edit, v0.1 slice): edit one item of a locked list (a shot's action, a line's Hinglish) as a recorded change; that item's work goes stale, the others keep theirs | Twice the creator typed a rewritten line into the retry note, which only changes *how* it's said. The note box now says so, but the real need is editing the words | A line edited in the browser re-voices only that line |
+| G-6 | **One writer per run in `kriya web`.** Each button opens a new Scheduler while an earlier one may still be settling jobs for the same run; the Recorder doesn't check it's at the log's head. Not the cause of G-2, but nothing stops it | Two writers with different views of a run would corrupt its log | The Recorder refuses to append behind the log; the server reuses one live Scheduler per run |
+| G-7 | **Episode recipe asks for 4 to 6 animated shots**, not exactly 4 | The model dropped the script's biggest moment (P2-06) to keep the count at 4 | Recipe change in the Mohalla Mitra project |
+| G-8 | **Lalit gets a character sheet** | The only main character described in words alone; P2-08's retry lost his shirt and mustache | `library/lalit.yaml` has `look.image` |
+| G-9 | **A tool's settings are checked like a recipe's.** Each local tool declares its args as a strict Zod schema; `validate` refuses an unknown one and names the nearest | The recipe said `fit: whole`; master's assembler didn't know it and silently cropped every panel of Part 2 and burned captions in | A recipe with `fti: whole` fails validation with "did you mean fit?" |
+| G-10 | **Land the Reel settings** (a decision, with the PR): `fit: pan\|whole`, `background: blur\|black`, `captions`, with tests. They sit uncommitted in the working tree; PR #43 (`fit` only) was closed unmerged | Part 1 was built from a side checkout that had them, Part 2 from master that didn't | Merged, and Parts 1 and 2 rebuild the same from master |
+| G-11 | **Local tools are pinned too** (rule 6): the assemble event records a hash of the tool's code and worker, shown by `kriya show` | The same recipe built different Reels depending on which checkout `kriya web` ran from, and whether it had restarted since the code changed. Finding out which code made a cut took reading old session logs | `kriya show <run> assemble` prints the tool version |
+| G-12 | **Files a step reads are stored by content.** `music/*.mp3` (and any path arg) goes into the blob store when read, and the event records the hash | Swapping music files under the same names changed the Reel and kriya couldn't tell; rebuilding genie-1 today would use whatever `music/` holds now | Replacing a track marks the Reels that used it stale |
+| G-13 | **Music per story**, overriding the series' tracks (through `inherits`, or music as a Library kind, Q-25c) | The Genie's own cues reached both Reels only by copying them over the series files for one rebuild and copying back, twice | The Genie story sets its tracks; Tanker Raja keeps its own |
+| G-14 | **Cut a shot from the review screen**: a recorded decision on the run ("leave out P2-12"), not a recipe edit. Today's `leave_out: [P2-12]` in `episode.yaml` is a stopgap that applies to every episode | Shot 12 repeated Shot 6's "meri ek ichha" beat; dropping it after review meant changing the recipe. Fix also insists on a note even when the change isn't one | Cut on the review screen; the next cut leaves the shot out and the event says who cut it |
+| G-15 | **One aspect ratio per series**, read by both `draw` and `assemble` | Panels were drawn 16:9 for a 9:16 Reel, so the assembler had to crop or letterbox | Changing it in `kriya.yaml` changes both |
+| G-16 | **A story checker on the shot list** flags a repeated line or beat before any image is drawn | Shot 12 got an image, a clip and three voices before it was cut as redundant | Part 2's shot list gets a note on P2-12 |
 
-## v0.3 — Smart authoring
+G-9 to G-12 and G-14 are kriya code; G-10 and G-9 first, since one stops the other's failure from happening silently. G-13, G-15 and G-16 need a decision each.
 
-Builder assistant (chat → graph operations, with an eval set of "request → expected change"), canvas view (React Flow), branch/adopt UI, knowledge-base tips in the builder, custom blocks.
+G-7 and G-8 are project changes in `~/Orchestrator/projects/mohalla-mitra`, not kriya code; they're here so Part 3 doesn't repeat them.
 
-## v0.4 — Others can use it
+## Pace after v0.1
 
-Hosted option, accounts, guided key setup, templates and forks, phone polish, hosted-grade sandboxing (Firecracker / gVisor), onboarding.
+v0.1 ran at about the full-time estimate's pace (Day 35's work landed Oct 27, three weeks early), so the full-time table below is the part-time plan. Dates assume v0.1 ships Nov 23; move them up by however far ahead it ships.
+
+| Release | Weeks | Dates |
+|---|---|---|
+| v0.2 Builder | 6 | Nov 24 → Jan 4 |
+| v0.3 Smart authoring | 5 | Jan 5 → Feb 8 |
+| v0.4 Others can use it | 6 | Feb 9 → Mar 22 |
+
+Same rules as v0.1: tick a week when its "done when" is met; if one overruns, drop the lowest task, never the release's finish line.
+
+## v0.2 — Builder (Nov 24 → Jan 4)
+
+Goal: build and change recipes in the browser, and let agents write and run their own tools safely. Graph operations come first: the editor here and the assistant in v0.3 both stand on them (D-17).
+
+| Wk | Dates | Focus | Done when |
+|---|---|---|---|
+| 1 | Nov 24–30 | **Graph operations** in the engine: pure functions (`add_node`, `remove_node`, `move_node`, `connect`, `set_config`, `set_condition`, `wrap_in_map`, `add_field`, `add_button`) from a graph to the next graph plus problems; undo and redo. **Writing recipes back** with the `yaml` Document API, keeping comments and order (D-33) | Every op round-trips on the Mohalla Mitra and earnings-report recipes; the file diff is only the change |
+| 2 | Dec 1–7 | **Sandbox runner on Deno** (D-77): permissions limit network to an allowlist, no env, one work folder. Runs are jobs (D-53, D-62); results are recorded, never re-run on replay. **Secrets broker**: a local proxy adds keys, so agent code never sees them (D-32) | An agent writes a tool, runs it, and a crash-resume replays its result without running it again |
+| 3 | Dec 8–14 | **Agent-written tools become trusted tools.** `run_code` as a built-in agent tool over the workspace (D-52). Promotion is a screen: the code, its tests and its permissions; Approve writes it to `tools/` | One tool goes from sandbox to trusted through the inbox |
+| 4 | Dec 15–21 | **Build mode in the browser**: recipe view, step cards, settings forms generated from the node schemas, UI-action settings (buttons → where they go), validation as you edit | A Part recipe edited in the browser gives a clean YAML diff |
+| 5 | Dec 22–28 | **Drag and drop** (dnd-kit): palette into a slot, reorder, into a for-each; a non-drag alternative for each. **Conditions as sentences with pickers** (D-36); no assistant conversion yet | earnings-report built from scratch in the browser |
+| 6 | Dec 29–Jan 4 | **Click-through test** (fake models, $0), **publish**, **run upgrades** (a run moves to a new release; only changed work goes stale, D-45). Tag v0.2 | A run in progress upgrades and only the affected shots go stale |
+
+Run upgrades are the riskiest week: today a release is a hash pinned at the start of a run, with no way to move. If anything slips, cut click-through polish, not upgrades. The canvas, the assistant and custom blocks wait for v0.3.
+
+## v0.3 — Smart authoring (Jan 5 → Feb 8)
+
+Goal: say what you want and get a correct change to the recipe; see branching flows as a canvas.
+
+| Wk | Dates | Focus | Done when |
+|---|---|---|---|
+| 1 | Jan 5–11 | **Eval set first**: ~40 "request → expected change" cases from real Mohalla Mitra and earnings edits, scored on validating and changing the right parts of the graph | Harness runs; a baseline score is recorded |
+| 2 | Jan 12–18 | **Builder assistant**: a Claude agent whose only write tools are the graph operations; reads the graph, catalog, Library and run history. Proposes a change set shown in the recipe; Apply / Change / Discard is one undo step | ≥ 80% on the eval set |
+| 3 | Jan 19–25 | **The assistant inside the forms**: typed conditions converted to pickers (D-36), inferred output fields (D-37), fixes offered for validation errors, "Describe it" as a starting point | A typed condition comes back as pickers and saves as the condition language |
+| 4 | Jan 26–Feb 1 | **Canvas view** (`@xyflow/react`) editing through the same operations; each button its own arrow, loops dashed with their limit. The run view keeps its own graph, tuned for phones | A branch wired on the canvas shows up in the recipe view |
+| 5 | Feb 2–8 | **Knowledge-base tips in the builder** (D-76) on the step cards they're for; **branch/adopt UI**; **custom blocks** (save a subgraph, insert it anywhere). Tag v0.3 | A tip shows on a card and applies in one click |
+
+Custom blocks are the first cut if week 5 overruns.
+
+## v0.4 — Others can use it (Feb 9 → Mar 22)
+
+Goal: an invite-only hosted beta for about ten creators, not open sign-up. (Proposed; not yet a decision.)
+
+| Wk | Dates | Focus |
+|---|---|---|
+| 1 | Feb 9–15 | **Hosting**: one machine per workspace with its own SQLite and blobs on a volume, so the engine barely changes; hosted-grade sandboxing (Firecracker / gVisor) |
+| 2 | Feb 16–22 | **Accounts** and **guided key setup**: creators' own keys (D-9), encrypted at rest, used through the secrets broker; a spend cap per workspace |
+| 3 | Feb 23–Mar 1 | **Templates and forks**: a template is a recipe folder, a fork is a copy (D-33). Motion comic, Earnings report, Faceless explainer |
+| 4 | Mar 2–8 | **Onboarding**: pick a template → click-through with fake models, no keys → add a key → a first real run under $1 |
+| 5 | Mar 9–15 | **PWA and push** (D-38); phone polish |
+| 6 | Mar 16–22 | Security pass on code execution and keys; invite the beta; tag v0.4 |
+
+## Later
+
+- **Docker sandbox** (D-77): when an agent-written tool needs native programs (Python, ffmpeg) that Deno can't give it.
 
 ## Full-time estimate (for reference)
 

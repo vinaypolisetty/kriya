@@ -181,6 +181,17 @@ kriya checks recipes before anything runs (`kriya status` is enough), and says w
 
 `pnpm validate:examples` (in the kriya repo) or the same check in your project catches these before a run.
 
+## Renaming a recipe
+
+Runs remember the recipe id they started with. To rename one, change `graph:` and keep the old id in `was:`, so those runs still open and carry on ([D-78](17-decisions.md)):
+
+```yaml
+graph: episode
+was: [part_recipe]
+```
+
+The file name doesn't matter; rename it freely.
+
 ## Where next
 
 - More step kinds: `agent` (a model with tools, looping until done), `tool` (crop, compress, assemble a Reel), `subgraph`, `refines` (an edit that makes new versions of another step). See [04-graph-spec](04-graph-spec.md).

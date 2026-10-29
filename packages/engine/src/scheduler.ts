@@ -288,7 +288,8 @@ export class Scheduler {
     bundle: Graph[] = [],
     options: { assets?: Assets; tools?: Tools; blobs?: Blobs } = {},
   ) {
-    this.graphs = new Map([...bundle, graph].map((g) => [g.graph, g]));
+    // By id and by any id a recipe had before (D-78), so a for-each naming an old id still finds it.
+    this.graphs = new Map([...bundle, graph].flatMap((g) => [g.graph, ...(g.was ?? [])].map((id) => [id, g] as const)));
     this.assets = options.assets ?? { facet: () => undefined };
     this.tools = options.tools ?? { call: () => { throw new Error("no tools are set up"); } };
     this.blobs = options.blobs ?? memoryBlobs();
@@ -393,8 +394,8 @@ export class Scheduler {
     return locked ? { source: ctx.prefix + root, version: locked.version, path } : { missing: `'${over}' isn't locked yet, so there's no list to go through` };
   }
 
-  /** The inputs of the recipe at `prefix`: the run's at the top, an item's inside a map. */
-  private inputsAt(prefix: string): Record<string, unknown> | undefined {
+  /** The inputs of the recipe at `prefix`: the run's at the top, an item's inside a map. Also what `kriya web` shows on a run's Inputs box. */
+  inputsAt(prefix: string): Record<string, unknown> | undefined {
     if (prefix === "") return this.rec.state.inputs;
     // `per_company[ACME].` → ACME's entry in the list per_company went through, read from its record.
     const [, mapKey, k] = /^(.*)\[([^\]]+)\]\.$/.exec(prefix) ?? [];
@@ -676,7 +677,7 @@ export class Scheduler {
   private produceRequest(key: string, node: Producer, ctx: Context): StepContext {
     const n = this.rec.state.nodes[key]!;
     const target = node.refines ? ctx.prefix + node.refines : key;
-    const { parent, instruction, region } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: this.retryNote(key, node, ctx), region: undefined };
+    const { parent, instruction, region } = this.source(key, node, ctx);
     const sc = this.context(key, node, ctx, n.attempts, target, parent, instruction);
     if (region !== undefined) sc.region = region;
     sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}`;
@@ -686,7 +687,7 @@ export class Scheduler {
   /** Records a call's outputs as candidates and applies the lock policy. */
   private accept(key: string, node: Producer, ctx: Context, outputs: Record<string, unknown>[], meta: CallMeta[] = []): void {
     const target = node.refines ? ctx.prefix + node.refines : key;
-    const { parent, instruction } = node.refines ? this.refineSource(ctx, node.refines) : { parent: undefined, instruction: this.retryNote(key, node, ctx) };
+    const { parent, instruction } = this.source(key, node, ctx);
     const attempt = this.rec.state.nodes[target]!.attempts;
     const inputs = this.inputsOf(key, node, ctx);
     const assets = this.received(key, node, ctx).assets;
@@ -796,6 +797,19 @@ export class Scheduler {
   private finishProduce(key: string, node: Producer, ctx: Context): void {
     if (node.refines) this.rec.record({ type: "NodeCompleted", node: ctx.prefix + node.refines });
     this.complete(key, ctx);
+  }
+
+  /**
+   * What a model or tool step starts from: a refining step's source version and
+   * the screen's note, else a retry note; plus the change a failed step was
+   * tried again with (Q-24), added to either.
+   */
+  private source(key: string, node: Producer, ctx: Context): { parent?: string; instruction?: string; region?: unknown } {
+    const n = this.rec.state.nodes[key]!;
+    const change = n.retry?.attempt === n.attempts ? n.retry.note : undefined;
+    const got = node.refines ? this.refineSource(ctx, node.refines) : { instruction: change ? undefined : this.retryNote(key, node, ctx) };
+    const instruction = [got.instruction, change].filter(Boolean).join(". ") || undefined;
+    return { ...got, instruction };
   }
 
   /**
@@ -1247,21 +1261,48 @@ export class Scheduler {
    * Tries a failed step again as a new attempt (Q-23), so a provider that
    * refused or gave up is asked afresh under a new idempotency key. Naming a
    * failed map retries its failed items; failed maps around the step run again
-   * and keep their finished items (D-35). Call `run()` after.
+   * and keep their finished items (D-35). With a change (Q-24) the step tries
+   * again with a note as its instruction and without the inputs it leaves out,
+   * both recorded, so a provider that refuses the same input every time gets a
+   * different one. Call `run()` after.
    */
-  retry(key: string): string[] {
+  retry(key: string, change: { note?: string; leaveOut?: string[] } = {}): string[] {
     return this.atomic(() => {
       const n = this.rec.state.nodes[key];
       if (!n) throw new Error(`there's no step '${key}' in this run`);
       if (n.status !== "failed") throw new Error(`'${key}' hasn't failed (it's ${n.status}), so there's nothing to retry`);
+      const note = change.note?.trim();
+      const leaveOut = change.leaveOut ?? [];
+      if (note || leaveOut.length) {
+        const kind = this.instances().find((x) => x.key === key)?.node.kind;
+        if (kind !== "model" && kind !== "agent") throw new Error(`a change goes on the step that failed, not on '${key}': try again with a change on one of its failed items (kriya status lists them)`);
+        const can = this.leavable(key);
+        for (const ref of leaveOut) {
+          if (!can.includes(ref)) throw new Error(`'${key}' can't leave out '${ref}'${can.length ? `: it can leave out ${can.join(", ")}` : ": it has nothing it can do without"}`);
+        }
+      }
       const failed = this.instances().filter(
         (x) => this.status(x.key) === "failed" && (x.key === key || key.startsWith(`${x.key}[`) || x.key.startsWith(`${key}[`)),
       );
       this.reopen(`retrying ${key}`);
-      for (const x of failed) this.rec.record({ type: "NodeReady", node: x.key });
+      for (const ref of leaveOut) this.rec.record({ type: "DefaultRemoved", node: key, ref });
+      for (const x of failed) this.rec.record({ type: "NodeReady", node: x.key, ...(note && x.key === key ? { note } : {}) });
       const steps = failed.filter((x) => x.node.kind !== "map").map((x) => x.key);
       return steps.length ? steps : [key];
     });
+  }
+
+  /**
+   * The inputs a step can be tried again without (Q-24): what it declares in
+   * `uses` but not in its prompt (the words to say or draw stay), and hasn't
+   * already left out. An emotion, a facet, a style.
+   */
+  leavable(key: string): string[] {
+    const node = this.instances().find((x) => x.key === key)?.node;
+    if (!node || (node.kind !== "model" && node.kind !== "agent")) return [];
+    const inPrompt = new Set(promptRefs(stepText(node)));
+    const removed = this.rec.state.nodes[key]?.removed ?? [];
+    return [...new Set("uses" in node ? node.uses : [])].filter((r) => !inPrompt.has(r) && !removed.includes(r));
   }
 
   private reopen(reason: string): void {
@@ -1696,6 +1737,11 @@ export class Scheduler {
 
   private fail(key: string, reason: string): void {
     this.rec.record({ type: "NodeFailed", node: key, reason });
+    // A refining step started an attempt on its target too; failing, it hands the target back
+    // done, as `finishProduce` does. Left running, `recover` would make the target again.
+    const x = this.instances().find((i) => i.key === key);
+    const target = x && isProducer(x.node) && x.node.refines ? x.ctx.prefix + x.node.refines : undefined;
+    if (target && this.rec.state.nodes[target]?.status === "running") this.rec.record({ type: "NodeCompleted", node: target });
   }
 
   // ── Edges ───────────────────────────────────────────────────────────────

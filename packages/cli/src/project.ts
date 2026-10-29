@@ -13,7 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
 import { REPLICATE_CAPABILITIES } from "@kriya/adapters";
-import { libraryKind, loadDir, suggest, type Graph, type Problem } from "@kriya/engine";
+import { findGraph, libraryKind, loadDir, suggest, type Graph, type Problem } from "@kriya/engine";
 import { loadKb, type Kb } from "./kb.js";
 import { loadLibrary, type Library } from "./library.js";
 
@@ -96,9 +96,9 @@ export type Project = {
 export function releaseOf(graphs: Graph[], graphId: string): string {
   const used = new Map<string, Graph>();
   const visit = (id: string) => {
-    const g = graphs.find((x) => x.graph === id);
-    if (!g || used.has(id)) return;
-    used.set(id, g);
+    const g = findGraph(graphs, id);
+    if (!g || used.has(g.graph)) return;
+    used.set(g.graph, g);
     for (const n of g.nodes) if (n.kind === "map" || n.kind === "subgraph") visit(n.graph);
   };
   visit(graphId);
