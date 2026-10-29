@@ -23,7 +23,7 @@ nodes:
       rubric:
         - It's a caricature drawing, not a photo or a filtered photo.
         - Each subject is recognizable from the frame (clothes, hair, what they hold).
-        - The gag in the prompt is in the picture.
+        - The main gag of the prompt reads at a glance. A missing prop or detail is fine.
     out:
       image: image
 

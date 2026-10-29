@@ -163,6 +163,20 @@ nodes:
     expect(Object.values(rec.state.nodes.w!.versions).map((v) => v.output.t).sort()).toEqual(["take 1", "take 2", "take 3"]);
   });
 
+  it("several candidates are each told which take they are, so they don't all give the same answer", async () => {
+    const three = load(`graph: g
+level: part
+nodes:
+  - { id: w, kind: model, capability: llm.write, prompt: hi, options: 3, out: { t: text } }
+`);
+    const { client, requests } = fakeClient(() => message([{ type: "text", text: JSON.stringify({ t: "x" }) }]));
+    const { s, rec, jobs } = start(three, client, {});
+    await settle(s, jobs, describeError);
+    const last = (r: (typeof requests)[number]) => JSON.stringify(r.messages[0]!.content);
+    expect(requests.map(last).map((t) => /Take (\d) of 3/.exec(t)?.[1]).sort()).toEqual(["1", "2", "3"]);
+    expect(Object.values(rec.state.nodes.w!.versions).map((v) => /Take \d of 3/.test(String(v.prompt)))).toEqual([true, true, true]);
+  });
+
   it("llm.vision: stored frames go to Claude as images, a list's in order and labelled, so the prompt can give their times", async () => {
     const g = load(`graph: g
 level: clip

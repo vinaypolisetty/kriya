@@ -85,7 +85,7 @@ Unknown fields are **errors** (schemas are strict), so typos don't pass silently
 | `model` | project default | Pinned provider model, overrides the project default |
 | `prompt` | — | Template; `{{ref}}` placeholders are references |
 | `uses` | `[]` | References to resolve into the call (text, images, audio) |
-| `options` | 1 | Number of automatic candidates |
+| `options` | 1 | Number of automatic candidates. Claude steps tell each one which take it is, so they differ ([D-81](17-decisions.md)) |
 | `context` | `full` | See [06-context-and-assets.md](06-context-and-assets.md) |
 | `trust` | `ask_me` | Autonomy for downstream decisions |
 | `out` | `{}` | Typed output fields |

@@ -206,17 +206,19 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
             const found = await Promise.all(Array.from({ length: node.options }, () => research(c, model, content, schema, node.params ?? {})));
             return { outputs: found.map((f) => parseJson(f.m)), meta: found.map((f) => ({ model: f.m.model, cost_usd: f.cost, prompt, references: f.pages.map((url, i) => ({ label: `page ${i + 1}`, ref: url })) })) };
           }
+          // Each candidate is its own request, so without a word on which take it is, every one finds the same obvious answer.
+          const takes = Array.from({ length: node.options }, (_, i) => (node.options > 1 ? take(i + 1, node.options) : ""));
           const answers = await Promise.all(
-            Array.from({ length: node.options }, () =>
+            takes.map((t) =>
               request(c, {
                 model,
                 system: SYSTEM_STEP,
                 output_config: { effort, format: { type: "json_schema", schema } },
-                messages: [{ role: "user", content }],
+                messages: [{ role: "user", content: t ? [...content, { type: "text", text: t }] : content }],
               }),
             ),
           );
-          return { outputs: answers.map(parseJson), meta: answers.map((m) => ({ model: m.model, cost_usd: cost(m), prompt, references })) };
+          return { outputs: answers.map(parseJson), meta: answers.map((m, i) => ({ model: m.model, cost_usd: cost(m), prompt: takes[i] ? `${prompt}\n${takes[i]}` : prompt, references })) };
         },
       });
       return { ticket };
@@ -368,6 +370,10 @@ function stepContent(prompt: string, ctx: StepContext, vision: boolean, prevent:
   blocks.push({ type: "text", text: `${text.trim()}${inputs}${parent}${change}` });
   return blocks;
 }
+
+/** What a candidate is told when a step makes several: which one it is, and to differ from the rest. */
+export const take = (i: number, n: number) =>
+  `Take ${i} of ${n}. The other takes answer the same brief separately, so make this one a different answer, not the same one reworded. If the brief says what each take is, do take ${i}.`;
 
 const show = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
 

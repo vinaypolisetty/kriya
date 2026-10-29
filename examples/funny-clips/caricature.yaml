@@ -31,7 +31,7 @@ nodes:
     kind: model
     name: Write the joke
     capability: llm.vision
-    options: 3   # three different takes, which can pick different people
+    options: 3   # three takes from different sides (each is told which take it is)
     prompt: |
       You are a roast comic with a cartoonist's eye. Something just went wrong in this frame:
       {{item.what}}
@@ -46,6 +46,11 @@ nodes:
       bubble, a sign or a fake title card if it's funnier. Keep what makes each of them recognizable:
       clothes, hair, the thing in their hand. {{comedy.humour}}
 
+      Each take comes at it from a different side:
+        take 1  the impact itself, exaggerated: what physically happened, 10x
+        take 2  inside their head: what they were thinking a second before, or what they think now
+        take 3  the world reacts: a bystander, an object or an animal with opinions, a fake headline
+
       premise: the joke in one line.
       layout, whichever is funnier for this moment:
         group      one scene with everyone; best when they interact (the shove, the chase)
@@ -53,7 +58,9 @@ nodes:
         over_frame the real frame frozen, each caricature popped over where they stand; best when the real scene is already funny
       drawings: for group, one drawing with everyone; otherwise one per subject, in the order they appear.
         image_prompt: a caricature of them as they look in image 1, in this style: {{comedy.style}}.
-        Each one acting out their part in the gag, every detail of it, nothing generic.
+        Each one acting out their part in the gag. At most three things to draw beyond the people
+        (a crater, a thought bubble, a sign): an image model draws three well and drops the rest.
+        Any words in the picture: 4 at most, spelled out in quotes.
         For over_frame, a single character on a plain white background, nothing else.
       caption: at most 6 words, lands like a punchline.
     uses: [item.what, item.cast, comedy.humour, comedy.style, item.frame]
@@ -64,6 +71,7 @@ nodes:
         - The joke is about what happened in this clip, not a generic fall gag.
         - It punches at the situation, not at anyone's looks.
         - The caption is 6 words or fewer.
+        - Each image_prompt asks for at most three things beyond the people.
     out:
       premise: text
       layout: text
