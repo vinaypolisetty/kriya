@@ -244,6 +244,60 @@ describe("retry a failed step (Q-23)", () => {
     expect(rec.state.status).toBe("completed");
   });
 
+  it("tries again with a change: a note as the instruction and without the inputs left out, recorded (Q-24)", () => {
+    const { provider, db, rec, s } = refusedVoice();
+    const asked: StepContext[] = [];
+    const ex = executors(provider);
+    const watched = new Scheduler(part, rec, { ...ex, produce: (n, c) => (c.idempotencyKey?.includes("voices[L1].speak") && asked.push(c), ex.produce(n, c)) }, graphs, LIBRARY);
+    expect(watched.leavable("voices[L1].speak")).toEqual(["item.emotion", "item.speaker@voice", "item.speaker@speech"]);
+
+    watched.retry("voices[L1].speak", { note: "calm, quiet, amused", leaveOut: ["item.emotion"] });
+    drive(watched, rec, provider);
+    expect(rec.state.status).toBe("completed");
+    expect(asked[0]!.instruction).toBe("calm, quiet, amused");
+    expect(Object.keys(asked[0]!.uses)).not.toContain("item.emotion");
+    expect(Object.keys(asked[0]!.uses)).toContain("item.hinglish"); // the words to say stay
+    expect(rec.state.nodes["voices[L1].speak"]!.versions["2.1"]!.instruction).toBe("calm, quiet, amused");
+    expect(watched.leavable("voices[L1].speak")).toEqual(["item.speaker@voice", "item.speaker@speech"]);
+    expect(replay(readRun(db, "run1"))).toEqual(rec.state);
+  });
+
+  it("a refining step that's refused hands its target back done, so a restart doesn't make the target again", () => {
+    // genie-2 (Oct 28): the line ran 9.28 s, 'too_long' (refines 'speak') was refused, and every restart
+    // found 'speak' still marked running and asked Replicate for a new line nobody wanted.
+    const provider = new Provider();
+    const db = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(db, "run1");
+    const ex = executors(provider);
+    const long = (n: Parameters<Executors["produce"]>[0], c: StepContext) =>
+      n.id === "speak" ? (provider.submit(c.idempotencyKey!, () => [{ audio: "wav:L1", seconds: 9.28 }]), { ticket: c.idempotencyKey! }) : ex.produce(n, c);
+    const s = new Scheduler(part, rec, { ...ex, produce: long }, graphs, LIBRARY);
+    s.start(RELEASE, INPUTS, SERIES);
+    for (let i = 0; i < 100; i++) {
+      s.run();
+      const ticket = Object.values(rec.state.nodes).find((n) => n.status === "waiting_external")?.ticket;
+      if (!ticket) break;
+      if (ticket.includes("too_long")) s.failJob(ticket, "flagged as sensitive (E005)");
+      else s.deliver(ticket, provider.result(ticket));
+    }
+    expect(rec.state.nodes["voices[L1].too_long"]!.status).toBe("failed");
+    expect(rec.state.nodes["voices[L1].speak"]!.status).toBe("completed");
+
+    const before = provider.submissions;
+    const restarted = new Scheduler(part, Recorder.resume(db, "run1"), { ...ex, produce: long }, graphs, LIBRARY);
+    restarted.recover();
+    expect(provider.submissions).toBe(before);
+    expect(replay(readRun(db, "run1"))).toEqual(rec.state);
+  });
+
+  it("a change says what it can't do, in plain words", () => {
+    const { s } = refusedVoice();
+    expect(() => s.retry("voices[L1].speak", { leaveOut: ["item.hinglish"] })).toThrow(
+      "'voices[L1].speak' can't leave out 'item.hinglish': it can leave out item.emotion, item.speaker@voice, item.speaker@speech",
+    );
+    expect(() => s.retry("voices", { note: "calmer" })).toThrow("a change goes on the step that failed, not on 'voices'");
+  });
+
   it("a step that hasn't failed has nothing to retry", () => {
     const { s } = refusedVoice();
     expect(() => s.retry("shot_list")).toThrow("'shot_list' hasn't failed (it's locked), so there's nothing to retry");

@@ -9,7 +9,7 @@
  * are left out; everything a person would ask "why?" about stays in.
  */
 import type { StoredEvent } from "@kriya/store";
-import type { Graph } from "@kriya/engine";
+import { findGraph, type Graph } from "@kriya/engine";
 
 /** One thing that happened. `tone` says who or what did it, for colouring. */
 export type TraceLine = { seq: number; at: string; key: string; text: string; tone: "you" | "auto" | "model" | "check" | "fail" | "info" };
@@ -142,13 +142,13 @@ export function trace(events: StoredEvent[], graphs: Graph[] = [], opts: { key?:
 
 /** The recipe and key prefix for one for-each item of a run (`per_shot[P3-04]`), or the run's own recipe for "". */
 export function scopeOf(graphs: Graph[], top: string, at: string): { graph: Graph | undefined; prefix: string } {
-  let graph = graphs.find((g) => g.graph === top);
+  let graph = findGraph(graphs, top);
   let prefix = "";
   for (const [, mapId, item] of at.matchAll(/(\w+)\[([^\]]+)\]/g)) {
     const map = graph?.nodes.find((n) => n.id === mapId);
     if (!map || map.kind !== "map") return { graph: undefined, prefix };
     prefix += `${mapId}[${item}].`;
-    graph = graphs.find((g) => g.graph === map.graph);
+    graph = findGraph(graphs, map.graph);
   }
   return { graph, prefix };
 }
@@ -162,10 +162,83 @@ export function taken(followed: Record<string, number>, graph: Graph, prefix: st
 export type Answer = { action: string; by: "human" | "auto" };
 
 /**
+ * One button press with what it was made on: the versions on the table with
+ * their checks, what was picked and written, who pressed it, and what it led to
+ * (the lock it made, the step the run went on to).
+ */
+export type DecisionTrace = {
+  seq: number;
+  at: string;
+  key: string;
+  step: string;
+  /** The step whose versions it was made on: the one a screen shows, or the step itself. */
+  reviews: string;
+  action: string;
+  by: "human" | "auto";
+  selection: string[];
+  note?: string;
+  region?: string;
+  on: { version: string; model?: string; costUsd?: number; check?: { by: string; pass: boolean; issues: string[] } }[];
+  locked?: string;
+  next?: string;
+};
+
+/** Every decision in a run, oldest first; with `under`, only those inside that for-each item. */
+export function decisions(events: StoredEvent[], graphs: Graph[] = [], under = ""): DecisionTrace[] {
+  const names = new Map(graphs.flatMap((g) => g.nodes.map((n) => [n.id, n.name ?? n.id] as const)));
+  // What each screen reviews, from its recipe: `show: draw.image` reviews draw.
+  const shows = new Map(graphs.flatMap((g) => g.nodes.flatMap((n) => (n.kind === "screen" && n.show ? [[n.id, n.show.split(/[.[@]/)[0]!] as const] : []))));
+  const nameOf = (key: string) => (key === "END" ? "the end" : (names.get(key.slice(key.lastIndexOf(".") + 1)) ?? key));
+  // What each review screen showed: the versions of the step it reviews, made since its last answer.
+  const made = new Map<string, DecisionTrace["on"]>(); // by the reviewed step's key
+  const out: DecisionTrace[] = [];
+  let open: DecisionTrace | undefined;
+  for (const e of events) {
+    const p = e.payload as P & Record<string, unknown>;
+    const key = p.node ?? "";
+    if (e.type === "CandidateProduced") {
+      const list = made.get(key) ?? [];
+      list.push({ version: `${String(p.attempt)}.${String(p.candidate)}`, ...(p.model ? { model: String(p.model) } : {}), ...(typeof p.cost_usd === "number" ? { costUsd: p.cost_usd } : {}) });
+      made.set(key, list);
+    } else if (e.type === "VerdictRecorded") {
+      const v = made.get(key)?.find((x) => x.version === p.version);
+      const issues = ((p.issues as { type: string; what?: string }[] | undefined) ?? []).map((i) => i.what ?? i.type.replace(/_/g, " "));
+      if (v) v.check = { by: String(p.by ?? "llm"), pass: Boolean(p.pass), issues };
+    } else if (e.type === "HumanDecision") {
+      const prefix = key.slice(0, key.lastIndexOf(".") + 1);
+      // A screen reviews the step it shows; a step that asks you itself (a clip to approve) reviews its own versions.
+      const reviewed = shows.get(key.slice(prefix.length));
+      const target = reviewed ? `${prefix}${reviewed}` : key;
+      open = {
+        seq: e.seq,
+        at: e.at,
+        key,
+        step: nameOf(key),
+        reviews: target,
+        action: String(p.action),
+        by: p.by === "auto" ? "auto" : "human",
+        selection: (p.selection as string[] | undefined) ?? [],
+        ...(typeof p.note === "string" && p.note ? { note: p.note } : {}),
+        ...(typeof p.region === "string" ? { region: p.region } : {}),
+        on: target ? [...(made.get(target) ?? [])] : [],
+      };
+      if (key.startsWith(under)) out.push(open);
+      if (target) made.delete(target); // the next review of it starts from what's made after this one
+    } else if (open && e.type === "Locked" && e.seq - open.seq <= 3) {
+      open.locked = `${nameOf(key)} ${String(p.version)}`;
+    } else if (open && e.type === "EdgeFollowed" && p.from === open.key) {
+      open.next = nameOf(String(p.to));
+      open = undefined;
+    }
+  }
+  return out;
+}
+
+/**
  * For `kriya web`: one step's lines (with `key`), how many times each arrow in the
  * scope `at` was taken, and each screen's last answer, all read from the events.
  */
-export function traceView(events: StoredEvent[], graphs: Graph[], opts: { at?: string; key?: string } = {}): { lines: TraceLine[]; taken: number[]; answers: Record<string, Answer> } {
+export function traceView(events: StoredEvent[], graphs: Graph[], opts: { at?: string; key?: string; all?: boolean } = {}): { lines: TraceLine[]; taken: number[]; answers: Record<string, Answer>; decisions?: DecisionTrace[] } {
   const top = (events.find((e) => e.type === "RunStarted")?.payload as { graph?: string } | undefined)?.graph ?? "";
   const { graph, prefix } = scopeOf(graphs, top, opts.at ?? "");
   const followed: Record<string, number> = {};
@@ -175,5 +248,9 @@ export function traceView(events: StoredEvent[], graphs: Graph[], opts: { at?: s
     if (e.type === "EdgeFollowed" && p.edge) followed[p.edge] = (followed[p.edge] ?? 0) + 1;
     if (e.type === "HumanDecision" && p.node?.startsWith(prefix)) answers[p.node] = { action: p.action ?? "", by: p.by === "auto" ? "auto" : "human" };
   }
-  return { lines: opts.key ? trace(events, graphs, { key: opts.key }) : [], taken: graph ? taken(followed, graph, prefix) : [], answers };
+  // With `all`, the whole scope: every line and every decision in it (the run's overview in kriya web).
+  const lines = opts.key ? trace(events, graphs, { key: opts.key }) : opts.all ? trace(events, graphs, prefix ? { under: prefix } : {}) : [];
+  // A step's own decisions are the ones made on it or on its versions (a pick on a screen counts for the step it shows).
+  const made = opts.all ? decisions(events, graphs, prefix) : opts.key ? decisions(events, graphs).filter((d) => d.key === opts.key || d.reviews === opts.key) : undefined;
+  return { lines, taken: graph ? taken(followed, graph, prefix) : [], answers, ...(made ? { decisions: made } : {}) };
 }

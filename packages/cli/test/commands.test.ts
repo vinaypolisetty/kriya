@@ -698,6 +698,27 @@ describe("checks from the terminal (Day 20)", () => {
   });
 });
 
+describe("renaming a recipe (D-78)", () => {
+  it("keeps its runs: they open, list and carry on under the new id, and the old id still starts one", async () => {
+    const cwd = await project();
+    const item = JSON.stringify({ id: "P3-08", action: "Bheem leaps up screaming", characters: [], place: "", lines: [], animate: false });
+    expect((await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`, "--id", "before")).code).toBe(0);
+    // part.yaml's for-each still says shot_recipe; the old id finds the renamed recipe.
+    const file = join(cwd, "recipes", "shot.yaml");
+    writeFileSync(file, readFileSync(file, "utf8").replace("graph: shot_recipe\n", "graph: shot\nwas: [shot_recipe]\n"));
+
+    const status = await kriya(cwd, "status");
+    expect(status.code, status.err).toBe(0);
+    expect(status.out).toMatch(/^before\s+shot\s/m);
+    const one = await kriya(cwd, "status", "before");
+    expect(one.code, one.err).toBe(0);
+    expect(one.out).toMatch(/^before · shot · /);
+    const again = await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`);
+    expect(again.code, again.err).toBe(0);
+    expect(again.out).toContain("✓ Started shot-1 (shot)");
+  });
+});
+
 describe("plain errors", () => {
   it("outside a project", async () => {
     const r = await kriya(mkdtempSync(join(tmpdir(), "kriya-none-")), "status");

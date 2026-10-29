@@ -25,6 +25,7 @@ edges: [ ... ]
 | Field | Required | Notes |
 |---|---|---|
 | `graph` | yes | Id, `lower_snake_case`, unique in the bundle |
+| `was` | no | Ids this recipe had before it was renamed. Runs started under an old id still open, list and carry on under the new one, and a for-each naming an old id still finds it. Each must be free: no recipe's id now, no other recipe's old id ([D-78](17-decisions.md)) |
 | `level` | yes | Any id; levels are creator-defined |
 | `description` | no | Shown in the builder |
 | `inputs` | no | Map of field → type |
