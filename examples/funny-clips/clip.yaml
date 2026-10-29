@@ -9,13 +9,19 @@ inputs:
   video: video   # a file in the project, e.g. --input video=clips/fall.mp4
 
 types:
+  box:                   # a rectangle in the frame, as fractions of its width and height
+    fields:
+      x: number          # left edge, from the left
+      y: number          # top edge, from the top
+      w: number
+      h: number
   subject:
     fields:
       id: text           # e.g. man_red_shirt, dog
       kind: text         # person or animal
       looks: text        # what makes them recognizable: clothes, hair, what they're holding
       role: text         # fell, caused it, reacting, didn't notice
-      box: json          # where they are in the frame: { x, y, w, h }, fractions of the frame
+      box: box           # where they are in the frame
   moment:
     fields:
       id: text           # m1, m2…
