@@ -73,8 +73,8 @@ export type WebItem = {
   title: string;
   review: string;
   buttons: (Entry["buttons"][number] & { estimateUsd?: number })[];
-  /** What the recipe puts beside the candidates: the line to be said, its caption, the shot's action. */
-  beside: Entry["beside"];
+  /** What the recipe puts beside the candidates: the line to be said, its caption, the shot's action; files as media to show. */
+  beside: (Entry["beside"][number] & { media?: { url: string; type: string }[] })[];
   shows: { version: string; value: unknown; media?: { url: string; type: string }; verdict?: Entry["shows"][number]["verdict"] }[];
   suggested?: { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
   /** The branch of the step on show, when it's not main: the review shows only that branch's candidates (D-71). */
@@ -258,12 +258,28 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     }
     return t;
   };
+  /**
+   * A file of the project named beside a screen (a run's `video` input, `clips/fall.mp4`), as the stored copy the
+   * browser can play. Copied into the store once per version of the file; anything else is left as it is.
+   */
+  const copied = new Map<string, string>();
+  const projectFile = (project: Project, v: unknown): unknown => {
+    if (typeof v !== "string" || !MEDIA.test(v)) return v;
+    const path = resolve(project.root, v);
+    if (!path.startsWith(project.root + "/") || !existsSync(path)) return v;
+    const { mtimeMs, size } = statSync(path);
+    const key = `${path}:${mtimeMs}:${size}`;
+    let ref = copied.get(key);
+    if (!ref) copied.set(key, (ref = `blob:${store.blobs.put(readFileSync(path)).hash}`));
+    return ref;
+  };
   const inbox = async (): Promise<WebItem[]> => {
     const project = current();
     const entries = await allInbox(project, store, quiet, { readOnly: true });
     const states = new Map<string, RunState>();
     for (const e of entries) if (!states.has(e.run)) states.set(e.run, (await openRun(project, store, e.run, quiet, { readOnly: true })).rec.state);
     return entries.map((e) => {
+      e = { ...e, beside: e.beside.map((b) => ({ ...b, value: projectFile(project, b.value) })) };
       const item = web(e, busy.has(e.run), typeOf, estimates(project, states.get(e.run)!, e.key), project.kb.rules);
       const branch = shownBranch(project, states.get(e.run)!, e.key);
       return branch && branch !== "main" ? { ...item, branch } : item;
@@ -640,7 +656,10 @@ function web(e: Entry, working: boolean, typeOf: (hash: string) => string | unde
     title: e.title,
     review: e.review,
     buttons: e.buttons.map((b) => (cost[b.id] !== undefined ? { ...b, estimateUsd: cost[b.id] } : b)),
-    beside: e.beside,
+    beside: e.beside.map((b) => {
+      const media = besideMedia(b.value, typeOf);
+      return media.length ? { ...b, media } : b;
+    }),
     working,
     shows: e.shows.map((x) => {
       const media = mediaIn(x.value, typeOf);
@@ -665,6 +684,13 @@ export function mediaIn(value: unknown, typeOf: (hash: string) => string | undef
     if (hash && type) return { url: `/api/media/${hash}`, type };
   }
   return undefined;
+}
+
+/** The files in a value put beside a screen's candidates: a clip to play, or a list of frames to look through. */
+function besideMedia(value: unknown, typeOf: (hash: string) => string | undefined): { url: string; type: string }[] {
+  const list = Array.isArray(value) ? value : [value];
+  const media = list.map((v) => mediaIn(v, typeOf));
+  return media.every(Boolean) ? (media as { url: string; type: string }[]) : [];
 }
 
 const VERBS: Record<string, string> = {
