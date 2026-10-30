@@ -330,6 +330,8 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     }
     if (!g) throw new BadRequest(`this run's recipe '${rec.state.graph}' isn't in your recipes any more`);
     const waiting = new Set(s.inbox().map((i) => i.key));
+    // Whether a step ever needs a person: a review, or a for-each with a review inside it.
+    const asksYou = (n: { kind: string; graph?: string }) => n.kind === "screen" || (n.kind === "map" && !!findGraph(project.graphs, n.graph!)?.nodes.some((c) => c.kind === "screen"));
     const thumb = (output: Record<string, unknown>) => {
       for (const v of Object.values(output)) {
         const hash = typeof v === "string" ? /^blob:([0-9a-f]{64})$/.exec(v)?.[1] : undefined;
@@ -347,7 +349,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
         n.kind === "map" && st?.items
           ? st.items.keys.map((k) => {
               const at = `${key}[${k}].`;
-              const steps = (inner?.nodes ?? []).map((c) => ({ key: at + c.id, name: c.name ?? c.id, status: rec.state.nodes[at + c.id]?.status ?? "not_started", waitingOnYou: waiting.has(at + c.id) }));
+              const steps = (inner?.nodes ?? []).map((c) => ({ key: at + c.id, name: c.name ?? c.id, status: rec.state.nodes[at + c.id]?.status ?? "not_started", waitingOnYou: [...waiting].some((w) => w === at + c.id || w.startsWith(`${at}${c.id}[`)), asksYou: asksYou(c) }));
               const made = (inner?.nodes ?? []).flatMap((c) => {
                 const cs = rec.state.nodes[at + c.id];
                 const v = cs && (cs.locked ? cs.versions[cs.locked.version] : Object.values(cs.versions).at(-1));
@@ -369,6 +371,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
         key,
         kind: n.kind,
         name: n.name ?? n.id,
+        asksYou: asksYou(n),
         detail: describeNode(n),
         status: st?.status ?? "not_started",
         waitingOnYou: waiting.has(key),

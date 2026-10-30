@@ -153,7 +153,7 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       const shots = g.nodes.find((n) => n.id === "per_shot")!.items!;
       expect(shots.map((i) => [i.key, i.status])).toEqual([["per_shot[S1]", "awaiting_human"], ["per_shot[S2]", "awaiting_human"], ["per_shot[S3]", "awaiting_human"]]);
       // Each item carries its own steps, so the box can open them in place: the pick waits on you, the drawing is made.
-      expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].pick")).toEqual({ key: "per_shot[S1].pick", name: "Pick one panel", status: "awaiting_human", waitingOnYou: true });
+      expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].pick")).toEqual({ key: "per_shot[S1].pick", name: "Pick one panel", status: "awaiting_human", waitingOnYou: true, asksYou: true });
       expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].draw")!.waitingOnYou).toBe(false);
       const one = (await (await fetch(`${web.url}/api/runs/part/graph?at=${encodeURIComponent("per_shot[S2]")}`)).json()) as { recipe: string; trail: { label: string }[]; nodes: { key: string; status: string }[] };
       expect(one.recipe).toBe("shot_recipe");

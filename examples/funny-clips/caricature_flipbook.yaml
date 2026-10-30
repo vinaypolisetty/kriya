@@ -82,7 +82,7 @@ nodes:
 
   - id: pick_joke
     kind: screen
-    name: Pick the funniest take
+    name: Pick the joke
     review: pick_one
     show: joke.premise
     beside: [joke.caption, joke.layout, item.frame]
@@ -100,7 +100,7 @@ nodes:
 
   - id: draw
     kind: map
-    name: Draw each caricature
+    name: Pick the drawing
     over: with_frame.drawings
     graph: drawing
 
@@ -165,6 +165,15 @@ nodes:
     over: with_drawing.frames
     graph: flipbook
 
+  - id: check_flip
+    kind: screen
+    name: Check the flipbook
+    review: approve
+    beside: [feel.feeling, flip.image]
+    actions:
+      - { id: approve }               # the feeling was locked earlier; this only says the pages are good
+      - { id: redo, needs: [note] }   # e.g. "only the eyes move", "slower glance"
+
 edges:
   - { from: joke, to: pick_joke }
   - { from: pick_joke, to: joke, when: "action == 'redo'", max_loops: 4 }
@@ -176,4 +185,6 @@ edges:
   - { from: pick_feeling, to: lead, when: "action == 'lock'" }
   - { from: lead, to: with_drawing }
   - { from: with_drawing, to: flip }
-  - { from: flip, to: END }
+  - { from: flip, to: check_flip }
+  - { from: check_flip, to: feel, when: "action == 'redo'", max_loops: 3 }
+  - { from: check_flip, to: END, when: "action == 'approve'" }

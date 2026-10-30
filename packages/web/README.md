@@ -1,6 +1,6 @@
 # @kriya/web
 
-kriya in a browser: each run as a live graph of its steps, a step's versions and branches, the inbox, the review screen (phone first), and the Library. It talks only to the API that `kriya web` serves; it holds no run logic of its own.
+kriya in a browser: each run as a live graph where everything opens in place (a step's versions and branches, a review, a for-each item's own graph), the inbox, and the Library. It talks only to the API that `kriya web` serves; it holds no run logic of its own.
 
 React 19 and Vite. No router or state library: routes live in the URL hash, and live data comes from `useLive()`.
 
@@ -10,9 +10,10 @@ React 19 and Vite. No router or state library: routes live in the URL hash, and 
 |---|---|
 | [`main.tsx`](src/main.tsx) | Mounts `<App>` |
 | [`App.tsx`](src/App.tsx) | Header, routes (`#/run/…`, `#/inbox`, `#/review/…`, `#/library/…`), runs list, inbox |
-| [`Graph.tsx`](src/Graph.tsx) | A run's recipe as a graph (desktop) or a step list (phone, `useNarrow`) |
+| [`Graph.tsx`](src/Graph.tsx) | A run's recipe as a graph (desktop) or a step list (phone, `useNarrow`). Boxes open in place, and the Inputs box and video steps play their video |
+| [`simple.ts`](src/simple.ts) | The simple view: only the steps a person acts on, with every moment, drawing and page a node on one graph |
 | [`NodePanel.tsx`](src/NodePanel.tsx) | One step: state, why, version tree by branch, Branch off / Switch here, Try again |
-| [`Screen.tsx`](src/Screen.tsx) | The review: the big preview, candidates, checks, suggestion, note, marked area, buttons; batches |
+| [`Screen.tsx`](src/Screen.tsx) | The review: the big preview, candidates, checks, suggestion, note, marked area, buttons; batches. `embedded` is the one-tap version inside a box on the graph |
 | [`Region.tsx`](src/Region.tsx) | Drag on an image to mark an area (`x,y,w,h` fractions) |
 | [`Library.tsx`](src/Library.tsx) | The Library, read-only: entities by kind; one entity's facets and history |
 | [`api.ts`](src/api.ts) | API types, calls (`decide`, `retry`, `branchOff`, `switchBranch`), and `useLive(path)` |

@@ -15,7 +15,8 @@ export type GVersion = { id: string; costUsd: number; branch: string; parents: s
 export type GNode = {
   id: string;
   key: string;
-  kind: "model" | "agent" | "tool" | "screen" | "map" | "subgraph";
+  /** `item` is one for-each item drawn as its own box: the page makes these, the server never sends one. */
+  kind: "model" | "agent" | "tool" | "screen" | "map" | "subgraph" | "item";
   name: string;
   detail: string;
   status: string;
@@ -31,9 +32,22 @@ export type GNode = {
   leavable?: string[];
   staleReason?: string;
   blockedReason?: string;
+  /** Whether this step ever needs a person: a review, or a for-each with a review inside it. */
+  asksYou?: boolean;
   /** A for-each step's items, each with its own steps (keys like `per_shot[P3-04].pick`) and a picture of what it made. */
-  items?: { key: string; label: string; status: string; steps?: { key: string; name: string; status: string; waitingOnYou: boolean }[]; thumb?: Media }[];
+  items?: GItem[];
+  /** On an `item` box: the item it stands for. */
+  item?: GItem;
+  /** On a step unfolded from an item: the item's box, whose row it sits in. */
+  after?: string;
+  /** On an `item` box: one piece of work with no steps to unfold, like one drawing or one page. */
+  leaf?: boolean;
+  /** On an `item` box: its steps are on the graph after it. */
+  unfolded?: boolean;
+  /** On a review in the simple view: the step that made what's being reviewed, which folded into this box. */
+  source?: GNode;
 };
+export type GItem = { key: string; label: string; status: string; steps?: { key: string; name: string; status: string; waitingOnYou: boolean; asksYou?: boolean }[]; thumb?: Media };
 export type GEdge = { from: string; to: string; label?: string; back?: boolean; limit?: number };
 /** `inputs` are the types the recipe asks for; `given` is what this run (or item) was started with, absent before any run. */
 export type RunGraph = { run: string; recipe: string; at: string; trail: { label: string; at: string }[]; status: string; costUsd: number; inputs: Record<string, string>; given?: Record<string, unknown>; nodes: GNode[]; edges: GEdge[] };
@@ -125,6 +139,23 @@ export function useLiveFlag(): boolean {
     return () => void liveState.subs.delete(setOn);
   }, []);
   return on;
+}
+
+/** Several GETs that stay current, for a list that changes in length: what's come back so far, by path. */
+export function useLiveAll<T>(paths: string[]): Map<string, T> {
+  const [data, setData] = useState(() => new Map<string, T>());
+  const list = paths.join("\n");
+  useEffect(() => {
+    if (!list) return setData(new Map());
+    const wanted = list.split("\n");
+    const load = async () => {
+      const got = await Promise.all(wanted.map((p) => call<T>(p).then((v) => [p, v] as const, () => undefined)));
+      setData(new Map(got.filter((x) => x !== undefined)));
+    };
+    void load();
+    return subscribe(() => void load());
+  }, [list]);
+  return data;
 }
 
 /** A GET that stays current: fetched now, and again whenever any run changes. */
