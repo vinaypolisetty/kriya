@@ -124,7 +124,7 @@ Agents may only call the tools listed. Each turn is recorded. (Decision: explici
   out: { reel: video, seconds: number }
 ```
 
-A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`), and for cutting into a video you already have (D-80): `extract_frames` (`video`, `every` seconds, `width`; fills `frames: list<image>`, `times`, `seconds`), `stills` (`video`, `items` with a time `t` each; adds a full-size `frame` to each), `attach` (`items`, plus any values to copy onto each item, so a for-each item carries what it needs) and `insert_caricatures` (`video`, `moments`, `caricatures`, `layouts`, `subjects`, `captions`, `hold`).
+A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`), and for cutting into a video you already have (D-80): `extract_frames` (`video`, `every` seconds, `width`; fills `frames: list<image>`, `times`, `seconds`), `stills` (`video`, `items` with a time `t` each; adds a full-size `frame` to each), `attach` (`items`, plus any values to copy onto each item, so a for-each item carries what it needs), `first` (`list`; the list's first entry, D-82) and `insert_caricatures` (`video`, `moments`, `caricatures`, `layouts`, `subjects`, `captions`, `hold`, and optionally `flipbooks`, `beat`).
 
 ### `screen`: a UI action (human decision)
 

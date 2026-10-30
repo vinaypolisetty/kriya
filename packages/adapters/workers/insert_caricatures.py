@@ -9,6 +9,7 @@ Each cut has a layout:
                where its subject stands (white background keyed out), `hold` seconds
 
 The caption goes along the bottom of the cut (the last card for one_each).
+A cut with a flipbook then plays its drawings in order, full screen, `beat` seconds each, with no caption.
 The video's sound pauses during a cut, so the result is longer by every cut's length.
 
 Usage: python insert_caricatures.py manifest.json   (prints one JSON line: the result)
@@ -28,6 +29,7 @@ except ImportError:
 M = json.load(open(sys.argv[1]))
 S = M["build"]
 HOLD = float(M["hold"])
+BEAT = float(M.get("beat", 0.5))
 POP = 0.15         # gap between caricatures popping in over the frame
 PUSH = 0.08        # how far a full-screen caricature zooms in over its hold
 
@@ -165,13 +167,19 @@ def cut(i, c):
             for j, p in enumerate(images)]
 
 
+def flipbook(i, c):
+    """The clips for one cut's flipbook, after its caricature."""
+    frame = frame_at(c["t"])
+    return [clip_of_still(card(p, frame), BEAT, f"book{i}_{j}") for j, p in enumerate(c.get("flipbook", []))]
+
+
 cuts = sorted(M["cuts"], key=lambda c: c["t"])
 parts, at = [], 0.0
 for i, c in enumerate(cuts):
     t = min(max(c["t"], 0.0), LENGTH)
     if t - at > 1 / FPS:
         parts.append(piece(at, t, f"p{i}"))
-    parts += cut(i, c)
+    parts += cut(i, c) + flipbook(i, c)
     at = t
 if LENGTH - at > 1 / FPS:
     parts.append(piece(at, LENGTH, "p_end"))

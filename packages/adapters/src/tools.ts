@@ -20,9 +20,12 @@
  *   item as `frame` (the reference a caricature is drawn from).
  * - `attach`: copies values onto every item of a list (a for-each item sees
  *   only itself, so what it needs from outside rides along on it).
+ * - `first`: the first entry of a list, for a step that needs just one of a
+ *   for-each's results (a flipbook drawn from a moment's first caricature).
  * - `insert_caricatures`: cuts caricatures into a video at their moments
  *   (workers/insert_caricatures.py): full-screen one at a time, or popped over
- *   the frozen frame where each subject stands.
+ *   the frozen frame where each subject stands. With `flipbooks`, each cut
+ *   ends with that moment's drawings played in order, `beat` seconds each.
  *
  * A tool's args may name one of the step's `uses` to get its value
  * (`reel: assemble.reel`); anything else is passed as written.
@@ -38,7 +41,7 @@ import { EXT } from "./files.js";
 import type { Jobs } from "./jobs.js";
 import type { Media } from "./replicate.js";
 
-export const MEDIA_TOOLS = ["crop", "compress", "assemble_reel", "extract_frames", "stills", "attach", "insert_caricatures"] as const;
+export const MEDIA_TOOLS = ["crop", "compress", "assemble_reel", "extract_frames", "stills", "attach", "first", "insert_caricatures"] as const;
 
 const WORKER = fileURLToPath(new URL("../workers/assemble_reel.py", import.meta.url));
 const CUTAWAYS = fileURLToPath(new URL("../workers/insert_caricatures.py", import.meta.url));
@@ -223,6 +226,14 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
     return { [listField(node)]: (items as Record<string, unknown>[]).map((item) => ({ ...item, ...add })) };
   },
 
+  async first(node, ctx) {
+    const list = arg(node, ctx, "list");
+    const field = Object.keys(node.out)[0];
+    if (!Array.isArray(list) || field === undefined) throw new ToolError(`'${node.id}' needs args list and one out field, e.g. args: { list: draw.image }, out: { image: image }`);
+    if (list.length === 0) throw new ToolError(`'${node.id}' got an empty list, so there's no first one to take`);
+    return { [field]: list[0] };
+  },
+
   async insert_caricatures(node, ctx, o) {
     const field = outField(node, "video");
     const src = arg(node, ctx, "video");
@@ -235,7 +246,7 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       const v = arg(node, ctx, name);
       return Array.isArray(v) ? v : [];
     };
-    const [layouts, subjects, captions] = [column("layouts"), column("subjects"), column("captions")];
+    const [layouts, subjects, captions, flipbooks] = [column("layouts"), column("subjects"), column("captions"), column("flipbooks")];
     const cuts = (moments as { id?: string; t?: unknown; cast?: { id?: string; box?: unknown }[] }[]).map((m, i) => {
       const drawn = caricatures[i];
       const images = (Array.isArray(drawn) ? drawn : drawn == null ? [] : [drawn]).map((v, j) => file(o, v, `k${i}_${j}`));
@@ -246,10 +257,12 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
         const first = [who[j]].flat()[0];
         return (m.cast ?? []).find((c) => c.id === first)?.box ?? null;
       });
-      return { t: Number(m.t), layout: String(layouts[i] ?? "group"), images, boxes, caption: String(captions[i] ?? "") };
+      const pages = flipbooks[i];
+      const flipbook = (Array.isArray(pages) ? pages : pages == null ? [] : [pages]).map((v, j) => file(o, v, `f${i}_${j}`));
+      return { t: Number(m.t), layout: String(layouts[i] ?? "group"), images, boxes, caption: String(captions[i] ?? ""), flipbook };
     });
     if (cuts.some((c) => !Number.isFinite(c.t))) throw new ToolError("every moment needs a time t in seconds");
-    const manifest = { build: o.dir, video: file(o, src, "in"), font: o.font ?? null, hold: Number(arg(node, ctx, "hold") ?? 1.5), out: join(o.dir, "out.mp4"), cuts };
+    const manifest = { build: o.dir, video: file(o, src, "in"), font: o.font ?? null, hold: Number(arg(node, ctx, "hold") ?? 1.5), beat: Number(arg(node, ctx, "beat") ?? 0.5), out: join(o.dir, "out.mp4"), cuts };
     writeFileSync(join(o.dir, "manifest.json"), JSON.stringify(manifest, null, 2));
     const said = await run(o.python ?? "python3", [CUTAWAYS, join(o.dir, "manifest.json")]);
     const result = JSON.parse(said.trim().split("\n").at(-1)!) as { seconds: number; mb: number };

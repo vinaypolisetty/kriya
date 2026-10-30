@@ -293,4 +293,62 @@ edges:
     expect(probe(cut)).toEqual([expect.objectContaining({ codec_type: "video", width: 640, height: 360 }), expect.objectContaining({ codec_type: "audio" })]);
     expect(out.seconds).toBeCloseTo(4 + 1 + 2 + 1, 0); // group: one hold; one_each: one per drawing; over_frame: one hold
   }, 120_000);
+
+  it("plays a moment's flipbook after its caricature, and leaves a moment without one alone", async () => {
+    const g = recipe(`graph: c
+level: clip
+inputs: { video: video, moments: json, caricatures: json, flipbooks: json }
+nodes:
+  - id: cut
+    kind: tool
+    tool: insert_caricatures
+    uses: [inputs.video, inputs.moments, inputs.caricatures, inputs.flipbooks]
+    args: { video: inputs.video, moments: inputs.moments, caricatures: inputs.caricatures, flipbooks: inputs.flipbooks, hold: 1, beat: 0.5 }
+    out: { video: video, seconds: number }
+edges:
+  - { from: cut, to: END }
+`);
+    const media = memoryMedia();
+    const video = media.put(make("fv.mp4", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-f", "lavfi", "-i", "sine=frequency=440", "-t", "3", "-pix_fmt", "yuv420p", "-shortest"));
+    const toon = media.put(make("fk.png", "-f", "lavfi", "-i", "color=c=white:size=400x400", "-frames:v", "1"));
+    const { rec, done } = run(g, media, {}, () => undefined, {
+      video,
+      moments: [{ id: "m1", t: 1 }, { id: "m2", t: 2 }],
+      caricatures: [[toon], [toon]],
+      flipbooks: [[toon, toon, toon], []],
+    });
+    await done;
+    const c = rec.state.nodes.cut!;
+    expect(c.failure).toBeUndefined();
+    const out = Object.values(c.versions)[0]!.output as { seconds: number };
+    expect(out.seconds).toBeCloseTo(3 + 1 + 1 + 3 * 0.5, 0); // two holds, and three pages on the first moment only
+  }, 120_000);
+});
+
+describe("first", () => {
+  const g = () => recipe(`graph: c
+level: clip
+inputs: { list: json }
+nodes:
+  - id: lead
+    kind: tool
+    tool: first
+    uses: [inputs.list]
+    args: { list: inputs.list }
+    out: { image: image }
+edges:
+  - { from: lead, to: END }
+`);
+
+  it("takes the first entry of a list", async () => {
+    const { rec, done } = run(g(), memoryMedia(), {}, () => undefined, { list: ["blob:a", "blob:b"] });
+    await done;
+    expect(Object.values(rec.state.nodes.lead!.versions)[0]!.output).toEqual({ image: "blob:a" });
+  });
+
+  it("says so when the list is empty", async () => {
+    const { rec, done } = run(g(), memoryMedia(), {}, () => undefined, { list: [] });
+    await done;
+    expect(rec.state.nodes.lead!.failure).toMatch(/empty list/);
+  });
 });

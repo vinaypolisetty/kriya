@@ -32,4 +32,14 @@ kriya inbox          # or kriya web
 
 With `models: fake` and `tools: fake` (the defaults) the whole run goes through with made-up moments, at no cost.
 
+## With a flipbook
+
+`clip_flipbook` is the same recipe with one more beat. After each caricature's joke, three drawings play in order with no caption, half a second each, showing the feeling nobody says out loud: the slow glance to check if anyone saw.
+
+Claude writes the feeling and three small moves, and you pick one before anything is drawn. Each page is then made from the locked caricature, about $0.12 for the three on `google/nano-banana`. A moment's flipbook always uses its first caricature.
+
+```bash
+kriya run clip_flipbook --input video=clips/fall.mp4
+```
+
 The style and the sense of humour are in `kriya.yaml` (`comedy.style`, `comedy.humour`); every joke reads them.
