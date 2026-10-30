@@ -172,6 +172,8 @@ export const Edge = z
 export const Graph = z
   .object({
     graph: Id,
+    /** Ids this recipe had before it was renamed: runs started under one still open with it (D-78). */
+    was: z.array(Id).default([]),
     level: Id,
     description: z.string().optional(),
     /** Higher levels whose locked context this recipe reads, e.g. [series, story] → `series.style` (D-47). */
@@ -185,6 +187,11 @@ export const Graph = z
   .strict();
 
 export type Graph = z.infer<typeof Graph>;
+
+/** The recipe an id names: its id now, or one it had before (`was`), so a renamed recipe keeps its runs (D-78). */
+export function findGraph<G extends Pick<Graph, "graph" | "was">>(graphs: readonly G[], id: string): G | undefined {
+  return graphs.find((g) => g.graph === id) ?? graphs.find((g) => (g.was ?? []).includes(id));
+}
 export type Node = z.infer<typeof Node>;
 export type Edge = z.infer<typeof Edge>;
 export type ScreenNode = z.infer<typeof ScreenNode>;

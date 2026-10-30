@@ -86,6 +86,8 @@ export type NodeState = {
   mentions: { ref: string; note?: string }[];
   removed: string[];
   blockedReason?: string;
+  /** The note a failed step was tried again with, and the attempt it's for (Q-24). */
+  retry?: { attempt: number; note: string };
   /** For a map step: its items, in list order, and where they were read from. */
   items?: { keys: string[]; source: string; version: string; path: string[] };
 };
@@ -150,7 +152,8 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
 
   if (e.type === "NodeReady") {
     const prev = state.nodes[e.node];
-    return withNode(state, e.node, prev ? { ...prev, status: "ready" } : newNode());
+    const n = prev ? { ...prev, status: "ready" as const } : newNode();
+    return withNode(state, e.node, e.note ? { ...n, retry: { attempt: n.attempts + 1, note: e.note } } : n);
   }
 
   const n = state.nodes[e.node];

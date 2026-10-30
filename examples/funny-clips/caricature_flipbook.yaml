@@ -1,0 +1,179 @@
+# Caricature recipe with a flipbook: runs once per funny moment. Like caricature.yaml up to the drawing,
+# then Claude writes the feeling nobody says out loud, you pick it, and it's drawn as a few small moves.
+graph: caricature_flipbook
+level: moment
+inherits: [comedy]
+
+inputs:
+  item: json   # one moment: id, t, what, cast (everyone in the frame), frame (a still of it)
+
+types:
+  drawing:
+    fields:
+      id: text                # d1, d2…
+      subjects: list<text>    # the cast ids in this drawing
+      image_prompt: text
+  drawing_job:                # a drawing with the frame it's drawn from
+    fields:
+      id: text
+      subjects: list<text>
+      image_prompt: text
+      frame: image
+  flip_frame:                 # one page of the flipbook: one small change from the page before
+    fields:
+      id: text                # f1, f2, f3
+      image_prompt: text
+  flip_job:                   # a page with the drawing it's made from
+    fields:
+      id: text
+      image_prompt: text
+      drawing: image
+
+outputs:
+  layout: joke.layout
+  caption: joke.caption
+  caricatures: draw.image
+  subjects: draw.subjects
+  flipbook: flip.image
+
+nodes:
+  - id: joke
+    kind: model
+    name: Write the joke
+    capability: llm.vision
+    options: 3   # three takes from different sides (each is told which take it is)
+    prompt: |
+      You are a roast comic with a cartoonist's eye. Something just went wrong in this frame:
+      {{item.what}}
+      Everyone here, people and animals: {{item.cast}}
+
+      Decide who is in the joke. Often it's not just the one who fell: the friend who laughed instead
+      of helping, the dog that clearly planned this, the pigeon who saw everything. Pick 1 to 4 of them,
+      only the ones who make it funnier. Animals get personalities.
+
+      Find the ONE funniest truth about this exact moment and blow it up 10x. The fall becomes a crater,
+      the splash a tsunami, their dignity visibly leaving their body as a ghost. Give them a thought
+      bubble, a sign or a fake title card if it's funnier. Keep what makes each of them recognizable:
+      clothes, hair, the thing in their hand. {{comedy.humour}}
+
+      Each take comes at it from a different side:
+        take 1  the impact itself, exaggerated: what physically happened, 10x
+        take 2  inside their head: what they were thinking a second before, or what they think now
+        take 3  the world reacts: a bystander, an object or an animal with opinions, a fake headline
+
+      premise: the joke in one line.
+      layout, whichever is funnier for this moment:
+        group      one scene with everyone; best when they interact (the shove, the chase)
+        one_each   one caricature after another; best for a reveal (the fall... the friend laughing... the dog, smug)
+        over_frame the real frame frozen, each caricature popped over where they stand; best when the real scene is already funny
+      drawings: for group, one drawing with everyone; otherwise one per subject, in the order they appear.
+        image_prompt: a caricature of them as they look in image 1, in this style: {{comedy.style}}.
+        Each one acting out their part in the gag. At most three things to draw beyond the people
+        (a crater, a thought bubble, a sign): an image model draws three well and drops the rest.
+        Any words in the picture: 4 at most, spelled out in quotes.
+        For over_frame, a single character on a plain white background, nothing else.
+      caption: at most 6 words, lands like a punchline.
+    uses: [item.what, item.cast, comedy.humour, comedy.style, item.frame]
+    out:
+      premise: text
+      layout: text
+      drawings: list<drawing>
+      caption: text
+
+  - id: pick_joke
+    kind: screen
+    name: Pick the funniest take
+    review: pick_one
+    show: joke.premise
+    beside: [joke.caption, joke.layout, item.frame]
+    actions:
+      - { id: lock, needs: [selection], locks: true }
+      - { id: redo, needs: [note] }   # e.g. "meaner", "make it about the phone", "leave the friend out"
+
+  - id: with_frame
+    kind: tool
+    name: Bring the frame along
+    tool: attach
+    uses: [joke.drawings, item.frame]
+    args: { items: joke.drawings, frame: item.frame }
+    out: { drawings: list<drawing_job> }
+
+  - id: draw
+    kind: map
+    name: Draw each caricature
+    over: with_frame.drawings
+    graph: drawing
+
+  - id: feel
+    kind: model
+    name: Write the feeling
+    capability: llm.vision
+    options: 3
+    prompt: |
+      The joke has landed. This moment happened: {{item.what}}
+      The joke was: {{joke.premise}} ({{joke.caption}})
+      The images are the caricatures, in order. The first one is who the next beat is about.
+
+      Now find what comes a second after the laugh: the feeling they won't say out loud, the one
+      everyone watching has felt. Trying to look like it was on purpose. Hoping nobody saw. Knowing
+      somebody did. Keep it true to this moment. {{comedy.humour}}
+
+      Each take comes at it from a different side:
+        take 1  pride: they're pretending they're fine
+        take 2  fear: who saw this, and what happens now
+        take 3  acceptance: this is just who they are
+
+      feeling: the feeling, in one plain line. It's for the person reviewing; it never goes on screen.
+      frames: exactly 3 pages of a flipbook that plays right after the first caricature. Each
+      image_prompt says the one small change from the page before: the eyes move, a hand brushes a
+      sleeve, a slow glance sideways. The pose stays almost the same, so the pages read as one
+      movement. Show the feeling, never name it. No words, signs or thought bubbles.
+    uses: [item.what, joke.premise, joke.caption, comedy.humour, draw.image]
+    out:
+      feeling: text
+      frames: list<flip_frame>
+
+  - id: pick_feeling
+    kind: screen
+    name: Pick the feeling
+    review: pick_one
+    show: feel.feeling
+    beside: [feel.frames, draw.image]
+    actions:
+      - { id: lock, needs: [selection], locks: true }
+      - { id: redo, needs: [note] }   # e.g. "less sad", "he knows the dog saw"
+
+  - id: lead
+    kind: tool
+    name: Take the first caricature
+    tool: first
+    uses: [draw.image]
+    args: { list: draw.image }
+    out: { image: image }
+
+  - id: with_drawing
+    kind: tool
+    name: Bring the caricature along
+    tool: attach
+    uses: [feel.frames, lead.image]
+    args: { items: feel.frames, drawing: lead.image }
+    out: { frames: list<flip_job> }
+
+  - id: flip
+    kind: map
+    name: Draw the flipbook
+    over: with_drawing.frames
+    graph: flipbook
+
+edges:
+  - { from: joke, to: pick_joke }
+  - { from: pick_joke, to: joke, when: "action == 'redo'", max_loops: 4 }
+  - { from: pick_joke, to: with_frame, when: "action == 'lock'" }
+  - { from: with_frame, to: draw }
+  - { from: draw, to: feel }
+  - { from: feel, to: pick_feeling }
+  - { from: pick_feeling, to: feel, when: "action == 'redo'", max_loops: 4 }
+  - { from: pick_feeling, to: lead, when: "action == 'lock'" }
+  - { from: lead, to: with_drawing }
+  - { from: with_drawing, to: flip }
+  - { from: flip, to: END }

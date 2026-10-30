@@ -10,6 +10,22 @@
  * - `assemble_reel`: the Mohalla Mitra Reel assembler (workers/assemble_reel.py):
  *   shots timed to their voice lines, pan and zoom on stills, clips held on
  *   their last frame, captions, an end card, music ducked under the voices.
+ *   `fit: whole` shows each wide panel entire over a blurred copy, instead of
+ *   filling the tall frame and cropping the sides (`pan`, the default);
+ *   `background: black` puts it on black instead of the blurred copy;
+ *   `leave_out: [shot ids]` drops those shots and their lines from the cut.
+ * - `extract_frames`: small frames of a video every `every` seconds, with their
+ *   times, for a vision step to look through (Claude sees frames, not video).
+ * - `stills`: a full-size frame of the video at each item's `t`, added to the
+ *   item as `frame` (the reference a caricature is drawn from).
+ * - `attach`: copies values onto every item of a list (a for-each item sees
+ *   only itself, so what it needs from outside rides along on it).
+ * - `first`: the first entry of a list, for a step that needs just one of a
+ *   for-each's results (a flipbook drawn from a moment's first caricature).
+ * - `insert_caricatures`: cuts caricatures into a video at their moments
+ *   (workers/insert_caricatures.py): full-screen one at a time, or popped over
+ *   the frozen frame where each subject stands. With `flipbooks`, each cut
+ *   ends with that moment's drawings played in order, `beat` seconds each.
  *
  * A tool's args may name one of the step's `uses` to get its value
  * (`reel: assemble.reel`); anything else is passed as written.
@@ -25,16 +41,20 @@ import { EXT } from "./files.js";
 import type { Jobs } from "./jobs.js";
 import type { Media } from "./replicate.js";
 
-export const MEDIA_TOOLS = ["crop", "compress", "assemble_reel"] as const;
+export const MEDIA_TOOLS = ["crop", "compress", "assemble_reel", "extract_frames", "stills", "attach", "first", "insert_caricatures"] as const;
 
 const WORKER = fileURLToPath(new URL("../workers/assemble_reel.py", import.meta.url));
+const CUTAWAYS = fileURLToPath(new URL("../workers/insert_caricatures.py", import.meta.url));
+
+/** The most frames `extract_frames` hands a vision step: past this the clip is too long to look through. */
+const MAX_FRAMES = 120;
 
 export type ToolOptions = {
   jobs: Jobs;
   media: Media;
   /** Scratch space for the files ffmpeg works on, e.g. `.kriya/build`; each step gets its own folder. */
   build: string;
-  /** The Python that runs `assemble_reel` (it needs Pillow). Default: python3. */
+  /** The Python that runs `assemble_reel` and `insert_caricatures` (they need Pillow). Default: python3. */
   python?: string;
   /** A .ttf for captions and the end card; `assemble_reel` needs one. */
   font?: string;
@@ -119,7 +139,10 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       throw new ToolError(`'${node.id}' needs args shots and panels (and usually lines, voices, clips, hook, music), each naming one of its uses, e.g. shots: shot_list.shots`);
     }
     const lineList = Array.isArray(lines) ? (lines as { id?: string }[]) : [];
-    const segments = (shots as { id?: string; lines?: { id?: string }[]; music?: string }[]).map((shot, i) => {
+    const leaveOut = arg(node, ctx, "leave_out") ?? [];
+    if (!Array.isArray(leaveOut)) throw new ToolError(`'${node.id}' has leave_out: ${JSON.stringify(leaveOut)}; give a list of shot ids, e.g. leave_out: [P2-12]`);
+    const segments = (shots as { id?: string; lines?: { id?: string }[]; music?: string }[]).flatMap((shot, i) => {
+      if (shot.id != null && leaveOut.includes(shot.id)) return [];
       const clip = Array.isArray(clips) ? clips[i] : undefined;
       const panel = panels[i];
       if (panel == null && clip == null) throw new ToolError(`shot ${shot.id ?? i + 1} has no panel or clip to show`);
@@ -130,8 +153,12 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
         const full: Record<string, unknown> = { ...l, ...lineList[at] };
         return [{ audio: file(o, audio, `v${i}_${at}`), caption: String(full.caption_en ?? full.caption ?? "") }];
       });
-      return { ...(clip != null ? { clip: file(o, clip, `c${i}`) } : { image: file(o, panel, `p${i}`) }), lines: said, ...(shot.music ? { music: shot.music } : {}) };
+      return [{ ...(clip != null ? { clip: file(o, clip, `c${i}`) } : { image: file(o, panel, `p${i}`) }), lines: said, ...(shot.music ? { music: shot.music } : {}) }];
     });
+    const fit = arg(node, ctx, "fit") ?? "pan";
+    if (fit !== "pan" && fit !== "whole") throw new ToolError(`'${node.id}' has fit: ${JSON.stringify(fit)}; use pan (fill the frame, crop the sides) or whole (show the whole picture)`);
+    const background = arg(node, ctx, "background") ?? "blur";
+    if (background !== "blur" && background !== "black") throw new ToolError(`'${node.id}' has background: ${JSON.stringify(background)}; use blur (a blurred copy of the picture) or black`);
     const music = arg(node, ctx, "music");
     const manifest = {
       build: o.dir,
@@ -142,6 +169,9 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       hook: arg(node, ctx, "hook") ?? "",
       title: arg(node, ctx, "title") ?? "",
       max_mb: Number(arg(node, ctx, "max_mb") ?? 30),
+      fit,
+      background,
+      captions: arg(node, ctx, "captions") !== false,
       music: Object.fromEntries(Object.entries((music ?? {}) as Record<string, unknown>).map(([cue, v]) => [cue, file(o, v, `m_${cue.replace(/\W/g, "_")}`)])),
     };
     writeFileSync(join(o.dir, "manifest.json"), JSON.stringify(manifest, null, 2));
@@ -149,7 +179,103 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
     const result = JSON.parse(said.trim().split("\n").at(-1)!) as { seconds: number; mb: number };
     return { [field]: o.media.write(readFileSync(manifest.out_ig)), ...extras(node, result) };
   },
+
+  async extract_frames(node, ctx, o) {
+    const src = arg(node, ctx, "video");
+    if (src === undefined) throw new ToolError(`'${node.id}' needs the video to look through: args: { video: inputs.video }, with it in its uses`);
+    const every = Number(arg(node, ctx, "every") ?? 0.5);
+    const width = Number(arg(node, ctx, "width") ?? 512);
+    if (!(every > 0)) throw new ToolError(`every is how many seconds apart the frames are, e.g. every: 0.5, not '${String(arg(node, ctx, "every"))}'`);
+    const input = file(o, src, "in");
+    const seconds = durationOf(readFileSync(input));
+    if (!seconds) throw new ToolError(`'${node.id}' couldn't read how long the video is; it reads MP4`);
+    const count = Math.floor(seconds / every + 1e-9) + 1;
+    if (count > MAX_FRAMES) {
+      throw new ToolError(`this clip is ${Math.round(seconds)} s, which is ${count} frames at one every ${every} s; kriya looks at up to ${MAX_FRAMES}. Trim the clip, or set every: ${Math.ceil((seconds / (MAX_FRAMES - 1)) * 10) / 10}`);
+    }
+    const times = Array.from({ length: count }, (_, i) => round(i * every)).filter((t) => t < seconds);
+    const frames: string[] = [];
+    for (const [i, t] of times.entries()) {
+      const out = join(o.dir, `f${i}.jpg`);
+      await run("ffmpeg", ["-v", "error", "-y", "-ss", String(t), "-i", input, "-frames:v", "1", "-vf", `scale=${width}:-2`, "-q:v", "4", out]);
+      frames.push(o.media.write(readFileSync(out)));
+    }
+    return { [listField(node, "image")]: frames, ...(node.out.times ? { times } : {}), ...extras(node, { seconds: round(seconds) }) };
+  },
+
+  async stills(node, ctx, o) {
+    const src = arg(node, ctx, "video");
+    const items = arg(node, ctx, "items");
+    if (src === undefined || !Array.isArray(items)) throw new ToolError(`'${node.id}' needs args video and items (a list whose items each have a time t), each naming one of its uses`);
+    const input = file(o, src, "in");
+    const out: Record<string, unknown>[] = [];
+    for (const [i, item] of (items as Record<string, unknown>[]).entries()) {
+      const t = Number(item.t);
+      if (!Number.isFinite(t) || t < 0) throw new ToolError(`item ${String(item.id ?? i + 1)} has no time t in seconds to take a frame at`);
+      const still = join(o.dir, `s${i}.png`);
+      await run("ffmpeg", ["-v", "error", "-y", "-ss", String(t), "-i", input, "-frames:v", "1", still]);
+      out.push({ ...item, frame: o.media.write(readFileSync(still)) });
+    }
+    return { [listField(node)]: out };
+  },
+
+  async attach(node, ctx) {
+    const items = arg(node, ctx, "items");
+    if (!Array.isArray(items)) throw new ToolError(`'${node.id}' needs args items (the list) and the values to copy onto each, e.g. args: { items: joke.drawings, frame: item.frame }`);
+    const add = Object.fromEntries(Object.keys(node.args).filter((k) => k !== "items").map((k) => [k, arg(node, ctx, k)]));
+    return { [listField(node)]: (items as Record<string, unknown>[]).map((item) => ({ ...item, ...add })) };
+  },
+
+  async first(node, ctx) {
+    const list = arg(node, ctx, "list");
+    const field = Object.keys(node.out)[0];
+    if (!Array.isArray(list) || field === undefined) throw new ToolError(`'${node.id}' needs args list and one out field, e.g. args: { list: draw.image }, out: { image: image }`);
+    if (list.length === 0) throw new ToolError(`'${node.id}' got an empty list, so there's no first one to take`);
+    return { [field]: list[0] };
+  },
+
+  async insert_caricatures(node, ctx, o) {
+    const field = outField(node, "video");
+    const src = arg(node, ctx, "video");
+    const moments = arg(node, ctx, "moments");
+    const caricatures = arg(node, ctx, "caricatures");
+    if (src === undefined || !Array.isArray(moments) || !Array.isArray(caricatures)) {
+      throw new ToolError(`'${node.id}' needs args video, moments and caricatures (and usually layouts, subjects, captions), each naming one of its uses, e.g. caricatures: draw.caricatures`);
+    }
+    const column = (name: string) => {
+      const v = arg(node, ctx, name);
+      return Array.isArray(v) ? v : [];
+    };
+    const [layouts, subjects, captions, flipbooks] = [column("layouts"), column("subjects"), column("captions"), column("flipbooks")];
+    const cuts = (moments as { id?: string; t?: unknown; cast?: { id?: string; box?: unknown }[] }[]).map((m, i) => {
+      const drawn = caricatures[i];
+      const images = (Array.isArray(drawn) ? drawn : drawn == null ? [] : [drawn]).map((v, j) => file(o, v, `k${i}_${j}`));
+      if (images.length === 0) throw new ToolError(`moment ${m.id ?? i + 1} has no caricature to cut to`);
+      const who = Array.isArray(subjects[i]) ? (subjects[i] as unknown[]) : [];
+      // Where each drawing goes when popped over the frame: the box of the first subject in it.
+      const boxes = images.map((_, j) => {
+        const first = [who[j]].flat()[0];
+        return (m.cast ?? []).find((c) => c.id === first)?.box ?? null;
+      });
+      const pages = flipbooks[i];
+      const flipbook = (Array.isArray(pages) ? pages : pages == null ? [] : [pages]).map((v, j) => file(o, v, `f${i}_${j}`));
+      return { t: Number(m.t), layout: String(layouts[i] ?? "group"), images, boxes, caption: String(captions[i] ?? ""), flipbook };
+    });
+    if (cuts.some((c) => !Number.isFinite(c.t))) throw new ToolError("every moment needs a time t in seconds");
+    const manifest = { build: o.dir, video: file(o, src, "in"), font: o.font ?? null, hold: Number(arg(node, ctx, "hold") ?? 1.5), beat: Number(arg(node, ctx, "beat") ?? 0.5), out: join(o.dir, "out.mp4"), cuts };
+    writeFileSync(join(o.dir, "manifest.json"), JSON.stringify(manifest, null, 2));
+    const said = await run(o.python ?? "python3", [CUTAWAYS, join(o.dir, "manifest.json")]);
+    const result = JSON.parse(said.trim().split("\n").at(-1)!) as { seconds: number; mb: number };
+    return { [field]: o.media.write(readFileSync(manifest.out)), ...extras(node, result) };
+  },
 };
+
+/** The step's list output field, of `list<type>` if given: `out: { frames: list<image> }` → "frames". */
+function listField(node: ToolNode, type?: string): string {
+  const f = Object.entries(node.out).find(([, t]) => (type ? t === `list<${type}>` : t.startsWith("list<")))?.[0];
+  if (!f) throw new ToolError(`'${node.id}' makes a list, so its out needs a list field, e.g. out: { ${type ? `frames: list<${type}>` : "items: list<item>"} }`);
+  return f;
+}
 
 /** The step's output field of this type: `out: { reel: video }` → "reel". */
 function outField(node: ToolNode, type: string): string {

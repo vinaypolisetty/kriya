@@ -1,0 +1,38 @@
+# Drawing recipe: one caricature, drawn from the real frame so they still look like themselves.
+graph: drawing
+level: drawing
+
+inputs:
+  item: json   # one drawing: id, subjects, image_prompt, frame
+
+outputs:
+  image: pick.selected
+  subjects: item.subjects
+
+nodes:
+  - id: draw
+    kind: model
+    name: Draw the caricature
+    capability: image.edit
+    options: 3
+    prompt: |
+      Image 1 is a frame from a real video. {{item.image_prompt}}
+      Draw only {{item.subjects}}, as they look in image 1. A drawing, not a photo.
+    uses: [item.frame, item.image_prompt, item.subjects]
+    out:
+      image: image
+
+  - id: pick
+    kind: screen
+    name: Pick the caricature
+    review: pick_one
+    show: draw.image
+    beside: [item.image_prompt, item.frame]
+    actions:
+      - { id: lock, needs: [selection], locks: true }
+      - { id: retry, needs: [note] }   # e.g. "bigger head", "he's holding a phone, not a cup"
+
+edges:
+  - { from: draw, to: pick }
+  - { from: pick, to: draw, when: "action == 'retry'", max_loops: 4 }
+  - { from: pick, to: END, when: "action == 'lock'" }

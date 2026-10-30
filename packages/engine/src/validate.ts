@@ -3,7 +3,7 @@
  * buttons that edges rely on. Run before a recipe is published, so problems
  * show up in the builder, not halfway through a paid run.
  */
-import { contextMode, END, stepText, type Edge, type Graph, type Node } from "./spec.js";
+import { contextMode, END, findGraph, stepText, type Edge, type Graph, type Node } from "./spec.js";
 import { ConditionError, literalsComparedTo, parseCondition, pathsIn } from "./condition.js";
 
 export type Issue = {
@@ -28,13 +28,22 @@ export function validateBundle(graphs: Graph[]): Issue[] {
     }
     names.set(g.graph, i);
   });
-  for (const g of graphs) issues.push(...validateGraph(g, new Set(names.keys())));
+  // A recipe's old ids (`was`, D-78) still name it, so each must be free: not a recipe's id now, not another's old id.
+  const was = new Map<string, string>();
+  for (const g of graphs) {
+    g.was.forEach((id, i) => {
+      const taken = names.has(id) ? `the id of ${id === g.graph ? "this recipe now" : "another recipe"}` : was.has(id) ? `already an old id of '${was.get(id)}'` : undefined;
+      if (taken) issues.push({ graph: g.graph, path: ["was", i], severity: "error", message: `'${id}' is ${taken}. \`was\` lists the ids this recipe had before it was renamed; take '${id}' out of it` });
+      else was.set(id, g.graph);
+    });
+  }
+  for (const g of graphs) issues.push(...validateGraph(g, new Set([...names.keys(), ...was.keys()])));
   // A for-each gives the recipe it runs one input, `item`; any other input would be empty, silently
   // (a guide's recipe read {{inputs.topic}} inside a for-each, Oct 27: fake runs never showed it).
   for (const g of graphs) {
     g.nodes.forEach((n, i) => {
       if (n.kind !== "map") return;
-      const runs = graphs.find((x) => x.graph === n.graph);
+      const runs = findGraph(graphs, n.graph);
       for (const name of Object.keys(runs?.inputs ?? {}).filter((k) => k !== "item")) {
         issues.push({ graph: g.graph, path: ["nodes", i, "graph"], severity: "error", message: `'${n.graph}' runs once per item, so its one input is item, but it also asks for '${name}', which a for-each can't give it. In ${n.graph}, rename the input to item and read {{item}}` });
       }

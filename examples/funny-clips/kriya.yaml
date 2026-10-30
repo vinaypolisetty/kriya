@@ -1,0 +1,7 @@
+# Project settings `kriya init --example funny-clips` starts from (the name and models are added).
+# The comedy is the level above every clip: the caricature style and the sense of humour each joke reads.
+context:
+  comedy:
+    style: hand-drawn caricature, enormous expressive head on a tiny body, bold black ink lines, flat bright colours, Sunday-comics energy
+    humour: Deadpan beats wacky. Exaggerate what really happened, never invent a different gag. Punch at the situation, never at anyone's body, skin, age, or anything they can't change.
+kinds: {}

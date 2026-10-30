@@ -5,7 +5,7 @@
  * step across shots are a batch: after each decision the next one opens.
  */
 import { useState } from "react";
-import { decide, type Button, type Item } from "./api";
+import { decide, type Button, type Item, type Media as File } from "./api";
 import { Media } from "./App";
 import { parseRegion, Region } from "./Region";
 
@@ -95,12 +95,16 @@ export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; b
 
         {item.beside.length > 0 && (
           <dl className="beside">
-            {item.beside.map((b) => (
-              <div key={b.ref}>
-                <dt>{fieldName(b.ref)}</dt>
-                <dd>{typeof b.value === "string" ? b.value : Array.isArray(b.value) && b.value.every((x) => typeof x === "string") ? b.value.join(", ") : JSON.stringify(b.value)}</dd>
-              </div>
-            ))}
+            {besideGroups(item.beside).map((g) =>
+              g.length > 1 ? (
+                <Rows key={g[0]!.ref} lists={g} />
+              ) : (
+                <div key={g[0]!.ref}>
+                  <dt>{fieldName(g[0]!.ref)}</dt>
+                  <dd>{g[0]!.media ? <BesideMedia media={g[0]!.media} /> : show(g[0]!.value)}</dd>
+                </div>
+              ),
+            )}
           </dl>
         )}
 
@@ -179,6 +183,61 @@ export function Screen({ item, batch, onDone, onError, onBack }: { item: Item; b
           </div>
         )}
       </footer>
+    </div>
+  );
+}
+
+/** Files beside a screen's candidates: a clip or sound plays, pictures sit in a strip in order, numbered from 0. */
+function BesideMedia({ media }: { media: File[] }) {
+  if (media.length === 1 && media[0]!.type.startsWith("video/")) return <video className="beside-video" src={media[0]!.url} controls playsInline />;
+  if (media.length === 1 && media[0]!.type.startsWith("audio/")) return <audio src={media[0]!.url} controls />;
+  return (
+    <div className="beside-strip">
+      {media.map((m, i) => (
+        <figure key={i}>
+          {m.type.startsWith("image/") ? <img src={m.url} alt={`${i}`} loading="lazy" /> : <a href={m.url}>{i}</a>}
+          <figcaption>{i}</figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+type Beside = Item["beside"][number];
+const show = (v: unknown) => (typeof v === "string" ? v : Array.isArray(v) && v.every((x) => typeof x === "string") ? v.join(", ") : JSON.stringify(v));
+
+/** Lists of the same length next to each other belong together (frames, their times, what's in each): one group, shown as rows. */
+function besideGroups(beside: Beside[]): Beside[][] {
+  const groups: Beside[][] = [];
+  for (const b of beside) {
+    const last = groups.at(-1);
+    const n = Array.isArray(b.value) ? b.value.length : -1;
+    if (last && n > 1 && Array.isArray(last[0]!.value) && last[0]!.value.length === n) last.push(b);
+    else groups.push([b]);
+  }
+  return groups;
+}
+
+/** Lists side by side as a table: row N holds item N of each (a picture where the list is pictures). */
+function Rows({ lists }: { lists: Beside[] }) {
+  const n = (lists[0]!.value as unknown[]).length;
+  return (
+    <div className="beside-rows">
+      <table>
+        <thead>
+          <tr>{lists.map((l) => <th key={l.ref}>{fieldName(l.ref)}</th>)}</tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: n }, (_, i) => (
+            <tr key={i}>
+              {lists.map((l) => {
+                const m = l.media?.[i];
+                return <td key={l.ref}>{m?.type.startsWith("image/") ? <img src={m.url} alt={`${i}`} loading="lazy" /> : show((l.value as unknown[])[i])}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
 import { prevention, SEED_RULES, tips, type Applied, type Failure, type FixRule, type Tip } from "@kriya/adapters";
-import { suggest, type Graph, type Node } from "@kriya/engine";
+import { findGraph, suggest, type Graph, type Node } from "@kriya/engine";
 import type { Store } from "@kriya/store";
 
 const Id = z.string().regex(/^[a-z][a-z0-9_]*$/, "use lower_snake_case, e.g. kb_camera_moves");
@@ -89,8 +89,10 @@ export function stepOf(graphs: Graph[], graphId: string, key: string): string | 
   let rest = key;
   for (;;) {
     const m = /^([^[.]+)\[.*?\]\.(.+)$/.exec(rest);
-    if (!m) return graphs.find((g) => g.graph === graph)?.nodes.some((n) => n.id === rest) ? `${graph}.${rest}` : undefined;
-    const map = graphs.find((g) => g.graph === graph)?.nodes.find((n) => n.id === m[1]);
+    // Named by the recipe's id now, so a renamed recipe's tips count its old runs too (D-78).
+    const g = findGraph(graphs, graph);
+    if (!m) return g?.nodes.some((n) => n.id === rest) ? `${g.graph}.${rest}` : undefined;
+    const map = g?.nodes.find((n) => n.id === m[1]);
     if (map?.kind !== "map") return undefined;
     [graph, rest] = [map.graph, m[2]!];
   }
@@ -124,7 +126,7 @@ export function stageOf(graphs: Graph[]): (step: string) => string | undefined {
 
 function nodeOf(graphs: Graph[], step: string): Node | undefined {
   const dot = step.lastIndexOf(".");
-  return graphs.find((g) => g.graph === step.slice(0, dot))?.nodes.find((n) => n.id === step.slice(dot + 1));
+  return findGraph(graphs, step.slice(0, dot))?.nodes.find((n) => n.id === step.slice(dot + 1));
 }
 
 /** The tips to show now. */

@@ -1,6 +1,6 @@
 /** One step of a run, beside the graph: its state, why, what it made, and a way in if it's waiting on you. */
 import { useState } from "react";
-import { branchOff, retry, switchBranch, useLive, type GNode, type GVersion, type TraceView } from "./api";
+import { branchOff, retry, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunGraph, type TraceLine, type TraceView } from "./api";
 import { statusOf } from "./Graph";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
@@ -57,15 +57,179 @@ export function NodePanel({ n, run, onClose, onOpenItem }: { n: GNode; run: stri
   );
 }
 
-/** What happened at this step, newest first, from the run's event log: drafts, checks, who pressed what, locks (Day 36). */
+const when = (at: string) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+
+/**
+ * The run (or one for-each item) as a whole, on its Inputs box: what it was
+ * started with, every decision with what it was made on, and everything that
+ * happened. Before any run, only the inputs the recipe asks for.
+ */
+export function RunPanel({ graph, onClose }: { graph: RunGraph; onClose: () => void }) {
+  const at = graph.at ? `&at=${encodeURIComponent(graph.at)}` : "";
+  const t = useLive<TraceView>(graph.run ? `/api/runs/${encodeURIComponent(graph.run)}/trace?all=1${at}` : undefined).data;
+  const names = [...new Set([...Object.keys(graph.inputs), ...Object.keys(graph.given ?? {})])];
+  const decisions = [...(t?.decisions ?? [])].reverse();
+  const title = graph.at ? graph.trail.at(-1)!.label : graph.run || graph.recipe;
+  return (
+    <aside className="panel" aria-label={`${title}: inputs, decisions and what happened`}>
+      <div className="panel-head">
+        <div>
+          <span className="eyebrow">{graph.at ? "One item" : graph.run ? "This run" : "Inputs"}</span>
+          <h2>{title}</h2>
+        </div>
+        <button type="button" className="icon" onClick={onClose} aria-label="Close">×</button>
+      </div>
+      {graph.run && <p className="muted mono small">{graph.status} · spent {usd(graph.costUsd)}{decisions.length ? ` · ${decisions.length} decision${decisions.length === 1 ? "" : "s"}` : ""}</p>}
+
+      <section>
+        <h3>{graph.run ? "Started with" : "Asks for"}</h3>
+        {names.length === 0 ? (
+          <p className="muted small">No inputs.</p>
+        ) : (
+          <dl className="given">
+            {names.map((k) => (
+              <div key={k}>
+                <dt>
+                  {k} {graph.inputs[k] && <span className="muted mono small">{graph.inputs[k]}</span>}
+                </dt>
+                <dd>{graph.run ? <Value v={graph.given?.[k]} /> : <span className="muted small">Given when a run starts</span>}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </section>
+
+      {decisions.length > 0 && (
+        <section>
+          <h3>Decisions</h3>
+          <ol className="decisions">
+            {decisions.map((d) => (
+              <Decision key={d.seq} d={d} />
+            ))}
+          </ol>
+        </section>
+      )}
+
+      {t && t.lines.length > 0 && <Timeline lines={t.lines} />}
+    </aside>
+  );
+}
+
+/** An input's value as given: words as words, a record as its fields, a list as its entries. */
+function Value({ v }: { v: unknown }) {
+  if (v === undefined || v === null || v === "") return <span className="muted small">Not given</span>;
+  if (typeof v === "string") return v.length > 160 || v.includes("\n") ? <pre className="text">{v}</pre> : <span>{v}</span>;
+  if (typeof v !== "object") return <span className="mono">{String(v)}</span>;
+  if (!Array.isArray(v) && Object.values(v).every((x) => x === null || typeof x !== "object" || (Array.isArray(x) && x.every((y) => typeof y !== "object")))) {
+    return (
+      <dl className="fields">
+        {Object.entries(v).map(([k, x]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>{Array.isArray(x) ? (x.length ? x.join(", ") : <span className="muted">none</span>) : String(x)}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+  return <pre className="text">{JSON.stringify(v, null, 2)}</pre>;
+}
+
+/** One decision: who pressed what, on which versions and what their checks said, and where it went. */
+function Decision({ d }: { d: DecisionTrace }) {
+  const picked = new Set(d.selection);
+  return (
+    <li className={`decision tone-${d.by === "auto" ? "auto" : "you"}`}>
+      <span className="card-head">
+        <b>{d.step}</b>
+        <time className="muted small" dateTime={d.at}>{when(d.at)}</time>
+      </span>
+      <span>
+        {d.by === "auto" ? "Pressed automatically, following the checks: " : "You pressed "}
+        <b>{d.action}</b>
+        {d.selection.length > 0 && <> on {d.selection.join(", ")}</>}
+      </span>
+      {d.note && <q className="small">{d.note}</q>}
+      {d.on.length > 0 && (
+        <ul className="on">
+          {d.on.map((v) => (
+            <li key={v.version} className={picked.has(v.version) ? "picked" : ""}>
+              <span className="mono">{v.version}</span>
+              {v.check ? (
+                <span className={v.check.pass ? "tone-done" : "tone-fail"}>{v.check.pass ? "✓ passed" : `✗ ${v.check.issues.join("; ") || "failed"}`}</span>
+              ) : (
+                <span className="muted">not checked</span>
+              )}
+              {v.model && <span className="muted small">{v.model}{v.costUsd ? ` · ${usd(v.costUsd)}` : ""}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {(d.locked || d.next) && (
+        <span className="muted small">
+          → {[d.locked && `locked ${d.locked}`, d.next && `on to ${d.next}`].filter(Boolean).join(", ")}
+        </span>
+      )}
+    </li>
+  );
+}
+
+const KINDS = { all: "Everything", you: "Decisions", check: "Checks", model: "Made" } as const;
+
+/** Every line of the run, newest first, narrowed to one kind if you like. */
+function Timeline({ lines }: { lines: TraceLine[] }) {
+  const [kind, setKind] = useState<keyof typeof KINDS>("all");
+  const [all, setAll] = useState(false);
+  const keep = (l: TraceLine) => kind === "all" || (kind === "you" ? l.tone === "you" || l.tone === "auto" : kind === "check" ? l.tone === "check" || l.tone === "fail" : l.tone === kind);
+  const list = [...lines].reverse().filter(keep);
+  const shown = all ? list : list.slice(0, 30);
+  return (
+    <section>
+      <h3>What happened</h3>
+      <span className="tabs small-tabs" role="tablist">
+        {(Object.keys(KINDS) as (keyof typeof KINDS)[]).map((k) => (
+          <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? "on" : ""} onClick={() => setKind(k)}>
+            {KINDS[k]}
+          </button>
+        ))}
+      </span>
+      <ol className="happened">
+        {shown.map((l) => (
+          <li key={l.seq} className={`tone-${l.tone}`}>
+            <time dateTime={l.at}>{when(l.at)}</time>
+            <span>{l.text}</span>
+          </li>
+        ))}
+      </ol>
+      {list.length > shown.length && (
+        <button type="button" className="link" onClick={() => setAll(true)}>
+          Show all {list.length}
+        </button>
+      )}
+    </section>
+  );
+}
+
+/** What happened at this step, newest first, from the run's event log: its decisions with what they were made on, then drafts, checks, who pressed what, locks (Day 36). */
 function Happened({ run, n }: { run: string; n: GNode }) {
   const t = useLive<TraceView>(`/api/runs/${encodeURIComponent(run)}/trace?key=${encodeURIComponent(n.key)}`).data;
   const [all, setAll] = useState(false);
   if (!t || t.lines.length === 0) return null;
   const lines = [...t.lines].reverse();
   const shown = all ? lines : lines.slice(0, 12);
-  const when = (at: string) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+  const decisions = [...(t.decisions ?? [])].reverse();
   return (
+    <>
+    {decisions.length > 0 && (
+      <section>
+        <h3>Decisions</h3>
+        <ol className="decisions">
+          {decisions.map((d) => (
+            <Decision key={d.seq} d={d} />
+          ))}
+        </ol>
+      </section>
+    )}
     <section>
       <h3>What happened</h3>
       <ol className="happened">
@@ -82,33 +246,81 @@ function Happened({ run, n }: { run: string; n: GNode }) {
         </button>
       )}
     </section>
+    </>
   );
 }
 
-/** Try a failed step again; a for-each step tries again every item that failed. */
+/**
+ * Try a failed step again; a for-each step tries again every item that failed.
+ * A model or agent step can be told what to change first (Q-24): the note is
+ * its next instruction, and it can leave out inputs a provider keeps refusing.
+ */
 function RetryButton({ run, n }: { run: string; n: GNode }) {
   const [state, setState] = useState<"idle" | "sending" | "sent" | string>("idle");
+  const [note, setNote] = useState("");
+  const [leaveOut, setLeaveOut] = useState<string[]>([]);
   const failedItems = n.items?.filter((i) => i.status === "failed").length;
+  const canChange = n.leavable !== undefined;
+  const changed = note.trim() !== "" || leaveOut.length > 0;
+  const send = async () => {
+    setState("sending");
+    try {
+      await retry(run, n.key, changed ? { ...(note.trim() ? { note: note.trim() } : {}), ...(leaveOut.length ? { leaveOut } : {}) } : {});
+      setState("sent");
+    } catch (e) {
+      setState(e instanceof Error ? e.message : String(e));
+    }
+  };
   return (
-    <>
-      <button
-        type="button"
-        className="primary"
-        disabled={state === "sending" || state === "sent"}
-        onClick={async () => {
-          setState("sending");
-          try {
-            await retry(run, n.key);
-            setState("sent");
-          } catch (e) {
-            setState(e instanceof Error ? e.message : String(e));
-          }
-        }}
-      >
-        {state === "sent" ? "Trying again…" : failedItems ? `Try again: ${failedItems} failed item${failedItems === 1 ? "" : "s"}` : "Try again"}
+    <form
+      className="retry-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send();
+      }}
+    >
+      {canChange && (
+        <>
+          <label>
+            <span>Tell it what to change</span>
+            <span className="muted small">How to do it, not what to say: the words come from the step before and stay the same.</span>
+            <textarea
+              value={note}
+              rows={2}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="e.g. say it softly, no shouting"
+              disabled={state === "sent"}
+            />
+          </label>
+          {n.leavable!.length > 0 && (
+            <fieldset className="leave-out">
+              <legend className="muted small">Leave out</legend>
+              {n.leavable!.map((ref) => (
+                <label key={ref} className="small">
+                  <input
+                    type="checkbox"
+                    checked={leaveOut.includes(ref)}
+                    disabled={state === "sent"}
+                    onChange={(e) => setLeaveOut(e.target.checked ? [...leaveOut, ref] : leaveOut.filter((r) => r !== ref))}
+                  />
+                  <span className="mono">{ref}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+        </>
+      )}
+      <button type="submit" className="primary" disabled={state === "sending" || state === "sent"}>
+        {state === "sent" ? "Trying again…" : failedItems ? `Try again: ${failedItems} failed item${failedItems === 1 ? "" : "s"}` : changed ? "Try again with this change" : "Try again"}
       </button>
       {state !== "idle" && state !== "sending" && state !== "sent" && <p className="note fail">{state}</p>}
-    </>
+    </form>
   );
 }
 

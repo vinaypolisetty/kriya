@@ -72,6 +72,7 @@ packages/cli/src/
 bin/kriya          runs the CLI from this checkout in your current folder
 examples/mohalla-mitra/ reference recipes (part, shot, voice)
 examples/earnings-report/ text-only example (quarter, company); each example has its own kriya.yaml
+examples/funny-clips/   video in: frames → Claude spots the moments → a joke and caricatures per moment → cut in
 docs/                   design docs (numbered)
 ```
 

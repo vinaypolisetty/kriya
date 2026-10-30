@@ -31,7 +31,7 @@ From the terminal instead: `kriya inbox` shows what's waiting, `kriya decide 1 a
 | **The Library** | Characters, places and tracks with every version kept; a changed sheet makes the work that used it stale |
 | **Two ways in** | The `kriya` CLI, and `kriya web`: the run as a graph you can rearrange, each step's versions and what happened, a review inbox that works on your phone over wifi |
 
-Two examples ship with it: [`mohalla-mitra`](examples/mohalla-mitra) (story → shots → panels → clips → voices → Reel) and [`earnings-report`](examples/earnings-report/README.md), a text-only one that finds each company's release on the web, summarizes it under a judge that holds it to the source, and ranks the quarter.
+Three examples ship with it: [`mohalla-mitra`](examples/mohalla-mitra) (story → shots → panels → clips → voices → Reel), [`earnings-report`](examples/earnings-report/README.md), a text-only one that finds each company's release on the web, summarizes it under a judge that holds it to the source, and ranks the quarter, and [`funny-clips`](examples/funny-clips/README.md), which finds the funny moments in a video you give it, writes the joke and cuts a caricature in.
 
 **Status:** v0.1, finishing in November 2026. What's next: [docs/16-roadmap.md](docs/16-roadmap.md).
 
@@ -98,6 +98,7 @@ packages/
 examples/
   mohalla-mitra/     part, shot and voice recipes for the reference use case
   earnings-report/   a text-only example: find each company's earnings release on the web, summarize, score, rank
+  funny-clips/       a video in: Claude finds the funny moments, writes the joke, caricatures who's in it, cuts it in
 docs/                design (01–19), architecture, CLI, decisions, roadmap, write-ups
 scripts/             repo checks (conventions)
 bin/kriya            runs the CLI from this checkout

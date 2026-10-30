@@ -61,7 +61,7 @@ export type AnthropicOptions = {
   jobs: Jobs;
   /** Where the step's own tools are described (agents). */
   tools?: Tools;
-  /** Where the judge reads the images it checks (`blob:…`, project files). */
+  /** Where the judge reads the images it checks, and vision steps the images they look at (`blob:…`, project files). */
   media?: Media;
   /** The Library's names by kind, for fields typed `library.<kind>`. */
   names?: LibraryNames;
@@ -198,7 +198,7 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       opts.jobs.start(ticket, {
         kind: "outputs",
         run: async () => {
-          const content = stepContent(node.prompt ?? "", ctx, node.capability === "llm.vision", opts.prevent?.(node) ?? []);
+          const content = stepContent(node.prompt ?? "", ctx, node.capability === "llm.vision", opts.prevent?.(node) ?? [], opts.media);
           const prompt = content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
           const references = content.flatMap((b, i) => (b.type === "image" && b.source.type === "url" ? [{ label: `image ${i + 1}`, ref: b.source.url }] : []));
           const model = node.model ?? opts.model ?? DEFAULT_MODEL;
@@ -206,17 +206,19 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
             const found = await Promise.all(Array.from({ length: node.options }, () => research(c, model, content, schema, node.params ?? {})));
             return { outputs: found.map((f) => parseJson(f.m)), meta: found.map((f) => ({ model: f.m.model, cost_usd: f.cost, prompt, references: f.pages.map((url, i) => ({ label: `page ${i + 1}`, ref: url })) })) };
           }
+          // Each candidate is its own request, so without a word on which take it is, every one finds the same obvious answer.
+          const takes = Array.from({ length: node.options }, (_, i) => (node.options > 1 ? take(i + 1, node.options) : ""));
           const answers = await Promise.all(
-            Array.from({ length: node.options }, () =>
+            takes.map((t) =>
               request(c, {
                 model,
                 system: SYSTEM_STEP,
                 output_config: { effort, format: { type: "json_schema", schema } },
-                messages: [{ role: "user", content }],
+                messages: [{ role: "user", content: t ? [...content, { type: "text", text: t }] : content }],
               }),
             ),
           );
-          return { outputs: answers.map(parseJson), meta: answers.map((m) => ({ model: m.model, cost_usd: cost(m), prompt, references })) };
+          return { outputs: answers.map(parseJson), meta: answers.map((m, i) => ({ model: m.model, cost_usd: cost(m), prompt: takes[i] ? `${prompt}\n${takes[i]}` : prompt, references })) };
         },
       });
       return { ticket };
@@ -250,11 +252,8 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
               }
               const images = fields.flatMap((f): Anthropic.Beta.Messages.BetaImageBlockParam[] => {
                 const v = cand.output[f];
-                const img = typeof v === "string" ? media!.read(v) : undefined;
-                if (!img) return [];
-                if ("url" in img) return [{ type: "image", source: { type: "url", url: img.url } }];
-                if (!/^image\/(png|jpeg|webp|gif)$/.test(img.mime)) return [];
-                return [{ type: "image", source: { type: "base64", media_type: img.mime as "image/png", data: Buffer.from(img.bytes).toString("base64") } }];
+                const img = typeof v === "string" ? storedImage(media, v) : undefined;
+                return img ? [img] : [];
               });
               if (images.length === 0) throw new Error(`version ${cand.version} has no image the judge can read`);
               const m = await request(c, {
@@ -338,23 +337,54 @@ function judgeText(prompt: string, ctx: StepContext): string {
   return prompt.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, ref: string) => words(ctx.uses[ref])).trim();
 }
 
-/** The prompt with its `{{refs}}` filled in and the knowledge base's words after it, then any other inputs; images first for vision. */
-function stepContent(prompt: string, ctx: StepContext, vision: boolean, prevent: string[] = []): Anthropic.Beta.Messages.BetaContentBlockParam[] {
+/**
+ * The prompt with its `{{refs}}` filled in and the knowledge base's words after it, then any other inputs; images first for vision.
+ * A vision step sees `https://` images and, given `media`, stored ones (`blob:…`), alone or in a list; a list's images are
+ * labelled in order (`frames 0:`, `frames 1:`…) so the prompt can tie them to another list, like their times.
+ */
+function stepContent(prompt: string, ctx: StepContext, vision: boolean, prevent: string[] = [], media?: Media): Anthropic.Beta.Messages.BetaContentBlockParam[] {
   const { text: filled, used } = fill(prompt, ctx);
   const text = [filled.trim(), ...prevent].join("\n");
   const rest = Object.entries(ctx.uses).filter(([k]) => !used.has(k));
   const blocks: Anthropic.Beta.Messages.BetaContentBlockParam[] = [];
+  const shown = new Set<string>();
   if (vision) {
-    for (const [, v] of rest) if (typeof v === "string" && /^https:\/\/\S+$/.test(v)) blocks.push({ type: "image", source: { type: "url", url: v } });
+    for (const [k, v] of rest) {
+      if (typeof v === "string" && /^https:\/\/\S+$/.test(v)) {
+        blocks.push({ type: "image", source: { type: "url", url: v } });
+        continue;
+      }
+      const list = Array.isArray(v) ? v : [v];
+      const images = list.map((x) => (typeof x === "string" && x.startsWith("blob:") ? storedImage(media, x) : undefined));
+      if (list.length === 0 || images.some((i) => !i)) continue;
+      for (const [i, image] of images.entries()) {
+        if (Array.isArray(v)) blocks.push({ type: "text", text: `${k} ${i}:` });
+        blocks.push(image!);
+      }
+      shown.add(k);
+    }
   }
-  const inputs = rest.length ? `\n\nInputs:\n${rest.map(([k, v]) => `- ${k}: ${show(v)}`).join("\n")}` : "";
+  const inputs = rest.length ? `\n\nInputs:\n${rest.map(([k, v]) => `- ${k}: ${shown.has(k) ? "(the images above)" : show(v)}`).join("\n")}` : "";
   const parent = ctx.parent ? `\n\nStart from this version:\n${show(ctx.parent.output)}` : "";
   const change = ctx.instruction ? `\n\nChange: ${ctx.instruction}` : "";
   blocks.push({ type: "text", text: `${text.trim()}${inputs}${parent}${change}` });
   return blocks;
 }
 
+/** What a candidate is told when a step makes several: which one it is, and to differ from the rest. */
+export const take = (i: number, n: number) =>
+  `Take ${i} of ${n}. The other takes answer the same brief separately, so make this one a different answer, not the same one reworded. If the brief says what each take is, do take ${i}.`;
+
 const show = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
+
+/** A stored image as an image block Claude reads, or undefined if it isn't one (a clip, a voice, a missing blob). */
+function storedImage(media: Media | undefined, ref: string): Anthropic.Beta.Messages.BetaImageBlockParam | undefined {
+  const img = media?.read(ref);
+  if (!img) return undefined;
+  if ("url" in img) return { type: "image", source: { type: "url", url: img.url } };
+  if (!/^image\/(png|jpeg|webp|gif)$/.test(img.mime)) return undefined;
+  return { type: "image", source: { type: "base64", media_type: img.mime as "image/png", data: Buffer.from(img.bytes).toString("base64") } };
+}
 
 function parseJson(m: Message): Record<string, unknown> {
   const text = m.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");

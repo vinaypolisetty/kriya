@@ -1,0 +1,132 @@
+# Clip recipe: a funny video in, the same video out with a caricature cut in at every funny moment.
+# Claude can't watch video, so it looks through frames and proposes the moments; you correct them.
+graph: clip
+level: clip
+inherits: [comedy]
+description: Find the funny moments in a video, caricature who's in them, and cut the caricatures in.
+
+inputs:
+  video: video   # a file in the project, e.g. --input video=clips/fall.mp4
+
+types:
+  box:                   # a rectangle in the frame, as fractions of its width and height
+    fields:
+      x: number          # left edge, from the left
+      y: number          # top edge, from the top
+      w: number
+      h: number
+  subject:
+    fields:
+      id: text           # e.g. man_red_shirt, dog
+      kind: text         # person or animal
+      looks: text        # what makes them recognizable: clothes, hair, what they're holding
+      role: text         # fell, caused it, reacting, didn't notice
+      box: box           # where they are in the frame
+  moment:
+    fields:
+      id: text           # m1, m2…
+      t: number          # seconds into the video, when the gag lands
+      what: text         # what happened, in one line
+      cast: list<subject>
+  moment_still:          # a moment with a still of it, to draw from
+    fields:
+      id: text
+      t: number
+      what: text
+      cast: list<subject>
+      frame: image
+
+outputs:
+  video: cut.video
+
+nodes:
+  - id: frames
+    kind: tool
+    name: Take frames from the video
+    tool: extract_frames
+    uses: [inputs.video]
+    args: { video: inputs.video, every: 0.5 }
+    out: { frames: list<image>, times: list<number>, seconds: number }
+
+  - id: watch
+    kind: model
+    name: Say what's in each frame
+    trust: always   # notes for finding the moments; you see them on the moments screen
+    capability: llm.vision
+    prompt: |
+      These are frames from a {{frames.seconds}}-second video, in order. Frame N was taken at
+      second N of this list: {{frames.times}}
+      For each frame, one short line on what you see: who is where and what they're doing, mid-air,
+      on the floor, mid-step. Plain facts, no jokes. seen has exactly one line per frame, in order.
+    uses: [frames.frames, frames.times, frames.seconds]
+    out:
+      seen: list<text>   # line N is frame N
+
+  - id: spot
+    kind: model
+    name: Find the funny moments
+    capability: llm.vision
+    prompt: |
+      These are frames from a {{frames.seconds}}-second funny video, in order. Frame N was taken at
+      second N of this list: {{frames.times}}
+      What's in each frame, line N for frame N: {{watch.seen}}
+      Find every moment where comedy happens: someone falls, slips, gets hit, gets splashed, a plan goes
+      wrong, an animal does something absurd. Skip ordinary movement.
+      For each moment give t, the second the gag lands (the impact, not the run-up), and what happened.
+      In cast list everyone in that frame, people and animals: the one it happened to, whoever caused it,
+      whoever is watching or laughing, the dog, the cat on the wall. For each, what they look like,
+      their role, and box, where they are in the frame as fractions (x, y from the top left, w, h).
+    uses: [frames.frames, frames.times, frames.seconds, watch.seen]
+    out:
+      moments: list<moment>
+
+  - id: check_moments
+    kind: screen
+    name: Check the moments
+    review: approve
+    show: spot.moments
+    beside: [inputs.video, frames.frames, frames.times, watch.seen]   # the clip, then a row per frame: picture, second, what Claude saw
+    actions:
+      - { id: approve, locks: true }
+      - { id: retry, needs: [note] }   # e.g. "drop m2; the fall is at 16.5; add the dog at 31"
+
+  - id: stills
+    kind: tool
+    name: Take a still of each moment
+    tool: stills
+    uses: [inputs.video, spot.moments]
+    args: { video: inputs.video, items: spot.moments }
+    out: { moments: list<moment_still> }
+
+  - id: draw
+    kind: map
+    name: Caricature each moment
+    over: stills.moments
+    graph: caricature
+
+  - id: cut
+    kind: tool
+    name: Cut the caricatures in
+    tool: insert_caricatures
+    uses: [inputs.video, stills.moments, draw.layout, draw.caricatures, draw.subjects, draw.caption]
+    args: { video: inputs.video, moments: stills.moments, layouts: draw.layout, caricatures: draw.caricatures, subjects: draw.subjects, captions: draw.caption, hold: 1.5 }
+    out: { video: video, seconds: number }
+
+  - id: final
+    kind: screen
+    name: Watch it
+    review: approve
+    show: cut.video
+    actions:
+      - { id: approve, locks: true }   # to change a caricature, redo it in its moment's steps; the cut goes stale and rebuilds
+
+edges:
+  - { from: frames, to: watch }
+  - { from: watch, to: spot }
+  - { from: spot, to: check_moments }
+  - { from: check_moments, to: spot, when: "action == 'retry'", max_loops: 3 }
+  - { from: check_moments, to: stills, when: "action == 'approve'" }
+  - { from: stills, to: draw }
+  - { from: draw, to: cut }
+  - { from: cut, to: final }
+  - { from: final, to: END, when: "action == 'approve'" }

@@ -163,6 +163,41 @@ nodes:
     expect(Object.values(rec.state.nodes.w!.versions).map((v) => v.output.t).sort()).toEqual(["take 1", "take 2", "take 3"]);
   });
 
+  it("several candidates are each told which take they are, so they don't all give the same answer", async () => {
+    const three = load(`graph: g
+level: part
+nodes:
+  - { id: w, kind: model, capability: llm.write, prompt: hi, options: 3, out: { t: text } }
+`);
+    const { client, requests } = fakeClient(() => message([{ type: "text", text: JSON.stringify({ t: "x" }) }]));
+    const { s, rec, jobs } = start(three, client, {});
+    await settle(s, jobs, describeError);
+    const last = (r: (typeof requests)[number]) => JSON.stringify(r.messages[0]!.content);
+    expect(requests.map(last).map((t) => /Take (\d) of 3/.exec(t)?.[1]).sort()).toEqual(["1", "2", "3"]);
+    expect(Object.values(rec.state.nodes.w!.versions).map((v) => /Take \d of 3/.test(String(v.prompt)))).toEqual([true, true, true]);
+  });
+
+  it("llm.vision: stored frames go to Claude as images, a list's in order and labelled, so the prompt can give their times", async () => {
+    const g = load(`graph: g
+level: clip
+inputs: { frames: list<image>, times: list<number> }
+nodes:
+  - { id: spot, kind: model, capability: llm.vision, prompt: "Frame N is at second N of {{inputs.times}}.", uses: [inputs.frames, inputs.times], trust: always, out: { t: number } }
+`);
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const media = { read: (v: string) => (v.startsWith("blob:") ? { bytes: png, mime: "image/png" } : undefined), write: () => "blob:x" };
+    const { client, requests } = fakeClient(() => message([{ type: "text", text: JSON.stringify({ t: 1 }) }]));
+    const jobs = new Jobs();
+    const exec = { ...anthropicExecutors({ graphs: [g], jobs, client, media }), decide: () => undefined };
+    const rec = Recorder.start(new SqliteEventLog(openDatabase(":memory:")), "run1");
+    const s = new Scheduler(g, rec, exec, [g], { blobs: memoryBlobs() });
+    s.start(RELEASE, { frames: ["blob:a", "blob:b"], times: [0, 0.5] });
+    await settle(s, jobs, describeError);
+    const content = (requests[0]!.messages[0]!.content as { type: string; text?: string; source?: { type: string } }[]);
+    expect(content.map((b) => b.text ?? b.source!.type)).toEqual(["inputs.frames 0:", "base64", "inputs.frames 1:", "base64", expect.stringContaining("- inputs.frames: (the images above)")]);
+    expect(content.at(-1)!.text).toContain("Frame N is at second N of [0,0.5].");
+  });
+
   it("a refusal fails the step plainly, with the category", async () => {
     const { client } = fakeClient(() => message([], "refusal", { stop_details: { type: "refusal", category: "cyber", explanation: null } }));
     const { s, rec, jobs } = start(shotList, client, { story_pages: "x", part_no: 3 });

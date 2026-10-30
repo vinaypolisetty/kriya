@@ -25,6 +25,7 @@ edges: [ ... ]
 | Field | Required | Notes |
 |---|---|---|
 | `graph` | yes | Id, `lower_snake_case`, unique in the bundle |
+| `was` | no | Ids this recipe had before it was renamed. Runs started under an old id still open, list and carry on under the new one, and a for-each naming an old id still finds it. Each must be free: no recipe's id now, no other recipe's old id ([D-78](17-decisions.md)) |
 | `level` | yes | Any id; levels are creator-defined |
 | `description` | no | Shown in the builder |
 | `inputs` | no | Map of field → type |
@@ -84,7 +85,7 @@ Unknown fields are **errors** (schemas are strict), so typos don't pass silently
 | `model` | project default | Pinned provider model, overrides the project default |
 | `prompt` | — | Template; `{{ref}}` placeholders are references |
 | `uses` | `[]` | References to resolve into the call (text, images, audio) |
-| `options` | 1 | Number of automatic candidates |
+| `options` | 1 | Number of automatic candidates. Claude steps tell each one which take it is, so they differ ([D-81](17-decisions.md)) |
 | `context` | `full` | See [06-context-and-assets.md](06-context-and-assets.md) |
 | `trust` | `ask_me` | Autonomy for downstream decisions |
 | `out` | `{}` | Typed output fields |
@@ -123,7 +124,7 @@ Agents may only call the tools listed. Each turn is recorded. (Decision: explici
   out: { reel: video, seconds: number }
 ```
 
-A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) and `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`).
+A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`), and for cutting into a video you already have (D-80): `extract_frames` (`video`, `every` seconds, `width`; fills `frames: list<image>`, `times`, `seconds`), `stills` (`video`, `items` with a time `t` each; adds a full-size `frame` to each), `attach` (`items`, plus any values to copy onto each item, so a for-each item carries what it needs), `first` (`list`; the list's first entry, D-82) and `insert_caricatures` (`video`, `moments`, `caricatures`, `layouts`, `subjects`, `captions`, `hold`, and optionally `flipbooks`, `beat`).
 
 ### `screen`: a UI action (human decision)
 

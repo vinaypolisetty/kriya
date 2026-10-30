@@ -193,4 +193,162 @@ edges:
     expect(durationOf(reel)).toBeCloseTo(out.seconds, 0);
     expect(reel.length).toBeLessThan(5e6);
   }, 120_000);
+
+  it("extract_frames: a frame every half second, with its time; a clip too long to look through fails plainly", async () => {
+    const g = recipe(`graph: f
+level: clip
+inputs: { video: video }
+nodes:
+  - id: frames
+    kind: tool
+    tool: extract_frames
+    uses: [inputs.video]
+    args: { video: inputs.video, every: 0.5, width: 160 }
+    out: { frames: list<image>, times: list<number>, seconds: number }
+edges:
+  - { from: frames, to: END }
+`);
+    const media = memoryMedia();
+    const video = media.put(make("v.mp4", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-t", "3", "-pix_fmt", "yuv420p"));
+    const { rec, done } = run(g, media, {}, () => undefined, { video });
+    await done;
+    const out = Object.values(rec.state.nodes.frames!.versions)[0]!.output as { frames: string[]; times: number[]; seconds: number };
+    expect(out.times).toEqual([0, 0.5, 1, 1.5, 2, 2.5]);
+    expect(out.frames).toHaveLength(6);
+    expect(sniff(media.get(out.frames[0]!))).toBe("image/jpeg");
+    expect(out.seconds).toBeCloseTo(3, 1);
+
+    const long = recipe(JSON.stringify({ ...g, nodes: [{ ...g.nodes[0], args: { video: "inputs.video", every: 0.01 } }] }));
+    const again = run(long, media, {}, () => undefined, { video });
+    await again.done;
+    expect(again.rec.state.nodes.frames!.failure).toMatch(/^this clip is 3 s, which is 301 frames at one every 0.01 s; kriya looks at up to 120\. Trim the clip, or set every: /);
+  });
+
+  it("stills and attach: each moment gets a full-size frame, and each drawing carries its moment's frame", async () => {
+    const g = recipe(`graph: s
+level: clip
+inputs: { video: video, moments: json, drawings: json }
+nodes:
+  - id: stills
+    kind: tool
+    tool: stills
+    uses: [inputs.video, inputs.moments]
+    args: { video: inputs.video, items: inputs.moments }
+    out: { moments: list<json> }
+  - id: with_frame
+    kind: tool
+    tool: attach
+    uses: [inputs.drawings, stills.moments]
+    args: { items: inputs.drawings, frame: stills.moments, hold: 2 }
+    out: { drawings: list<json> }
+edges:
+  - { from: stills, to: with_frame }
+  - { from: with_frame, to: END }
+`);
+    const media = memoryMedia();
+    const video = media.put(make("v.mp4", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-t", "2", "-pix_fmt", "yuv420p"));
+    const { rec, done } = run(g, media, {}, () => undefined, { video, moments: [{ id: "m1", t: 0.4 }, { id: "m2", t: 1.6 }], drawings: [{ id: "d1" }, { id: "d2" }] });
+    await done;
+    expect(rec.state.nodes.stills!.failure).toBeUndefined();
+    const moments = Object.values(rec.state.nodes.stills!.versions)[0]!.output.moments as { id: string; frame: string }[];
+    expect(moments.map((m) => m.id)).toEqual(["m1", "m2"]);
+    expect(pngSize(media.get(moments[0]!.frame))).toEqual([320, 180]);
+    const drawings = Object.values(rec.state.nodes.with_frame!.versions)[0]!.output.drawings as Record<string, unknown>[];
+    expect(drawings).toEqual([{ id: "d1", frame: moments, hold: 2 }, { id: "d2", frame: moments, hold: 2 }]);
+  });
+});
+
+describe.skipIf(!hasFfmpeg || !hasPillow)("insert_caricatures (workers/insert_caricatures.py)", () => {
+  it("cuts away at each moment in its layout, sound paused, the video longer by every cut", async () => {
+    const g = recipe(`graph: c
+level: clip
+inputs: { video: video, moments: json, layouts: json, caricatures: json, subjects: json, captions: json }
+nodes:
+  - id: cut
+    kind: tool
+    tool: insert_caricatures
+    uses: [inputs.video, inputs.moments, inputs.layouts, inputs.caricatures, inputs.subjects, inputs.captions]
+    args: { video: inputs.video, moments: inputs.moments, layouts: inputs.layouts, caricatures: inputs.caricatures, subjects: inputs.subjects, captions: inputs.captions, hold: 1 }
+    out: { video: video, seconds: number }
+edges:
+  - { from: cut, to: END }
+`);
+    const media = memoryMedia();
+    const video = media.put(make("v.mp4", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-f", "lavfi", "-i", "sine=frequency=440", "-t", "4", "-pix_fmt", "yuv420p", "-shortest"));
+    const toon = media.put(make("k.png", "-f", "lavfi", "-i", "color=c=white:size=400x400,drawbox=x=100:y=100:w=200:h=200:color=red:t=fill", "-frames:v", "1"));
+    const box = { x: 0.1, y: 0.2, w: 0.3, h: 0.6 };
+    const { rec, done } = run(g, media, {}, () => undefined, {
+      video,
+      moments: [{ id: "m1", t: 1, cast: [{ id: "man", box }] }, { id: "m2", t: 2, cast: [] }, { id: "m3", t: 3, cast: [{ id: "man", box }, { id: "dog", box }] }],
+      layouts: ["group", "one_each", "over_frame"],
+      caricatures: [[toon], [toon, toon], [toon, toon]],
+      subjects: [[["man"]], [["man"], ["dog"]], [["man"], ["dog"]]],
+      captions: ["Gravity: 1, Ravi: 0", "", "The dog planned this"],
+    });
+    await done;
+    const c = rec.state.nodes.cut!;
+    expect(c.failure).toBeUndefined();
+    const out = Object.values(c.versions)[0]!.output as { video: string; seconds: number };
+    const cut = media.get(out.video);
+    expect(probe(cut)).toEqual([expect.objectContaining({ codec_type: "video", width: 640, height: 360 }), expect.objectContaining({ codec_type: "audio" })]);
+    expect(out.seconds).toBeCloseTo(4 + 1 + 2 + 1, 0); // group: one hold; one_each: one per drawing; over_frame: one hold
+  }, 120_000);
+
+  it("plays a moment's flipbook after its caricature, and leaves a moment without one alone", async () => {
+    const g = recipe(`graph: c
+level: clip
+inputs: { video: video, moments: json, caricatures: json, flipbooks: json }
+nodes:
+  - id: cut
+    kind: tool
+    tool: insert_caricatures
+    uses: [inputs.video, inputs.moments, inputs.caricatures, inputs.flipbooks]
+    args: { video: inputs.video, moments: inputs.moments, caricatures: inputs.caricatures, flipbooks: inputs.flipbooks, hold: 1, beat: 0.5 }
+    out: { video: video, seconds: number }
+edges:
+  - { from: cut, to: END }
+`);
+    const media = memoryMedia();
+    const video = media.put(make("fv.mp4", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-f", "lavfi", "-i", "sine=frequency=440", "-t", "3", "-pix_fmt", "yuv420p", "-shortest"));
+    const toon = media.put(make("fk.png", "-f", "lavfi", "-i", "color=c=white:size=400x400", "-frames:v", "1"));
+    const { rec, done } = run(g, media, {}, () => undefined, {
+      video,
+      moments: [{ id: "m1", t: 1 }, { id: "m2", t: 2 }],
+      caricatures: [[toon], [toon]],
+      flipbooks: [[toon, toon, toon], []],
+    });
+    await done;
+    const c = rec.state.nodes.cut!;
+    expect(c.failure).toBeUndefined();
+    const out = Object.values(c.versions)[0]!.output as { seconds: number };
+    expect(out.seconds).toBeCloseTo(3 + 1 + 1 + 3 * 0.5, 0); // two holds, and three pages on the first moment only
+  }, 120_000);
+});
+
+describe("first", () => {
+  const g = () => recipe(`graph: c
+level: clip
+inputs: { list: json }
+nodes:
+  - id: lead
+    kind: tool
+    tool: first
+    uses: [inputs.list]
+    args: { list: inputs.list }
+    out: { image: image }
+edges:
+  - { from: lead, to: END }
+`);
+
+  it("takes the first entry of a list", async () => {
+    const { rec, done } = run(g(), memoryMedia(), {}, () => undefined, { list: ["blob:a", "blob:b"] });
+    await done;
+    expect(Object.values(rec.state.nodes.lead!.versions)[0]!.output).toEqual({ image: "blob:a" });
+  });
+
+  it("says so when the list is empty", async () => {
+    const { rec, done } = run(g(), memoryMedia(), {}, () => undefined, { list: [] });
+    await done;
+    expect(rec.state.nodes.lead!.failure).toMatch(/empty list/);
+  });
 });
