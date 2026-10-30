@@ -106,7 +106,17 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 .key { font-size: 12px; padding: 0 24px 16px; margin: 0; }
 
 /* the graph */
-.graph-scroll { flex: 1; overflow: auto; }
+.graph-scroll { position: absolute; inset: 0; overflow: auto; scrollbar-width: none; overscroll-behavior: contain; cursor: grab; user-select: none; }
+.graph-scroll.panning { cursor: grabbing; }
+.run-body:has(> .graph-scroll) { min-height: max(320px, calc(100vh - 225px)); }
+.graph-room { position: relative; }
+.graph-zoom { position: absolute; transform-origin: 0 0; }
+.graph-tools { position: absolute; left: 16px; bottom: 16px; z-index: 3; display: flex; gap: 8px; align-items: center; }
+.zoom { display: flex; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.zoom button { min-height: 40px; min-width: 40px; padding: 0 10px; border: 0; border-radius: 0; background: none; font-size: 13px; }
+.zoom button:hover:not(:disabled) { background: var(--teal-soft); }
+.zoom .zoom-level { min-width: 56px; font-variant-numeric: tabular-nums; }
+.graph-tools .layout-reset { position: static; float: none; margin: 0; }
 .graph { position: relative; }
 .edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 .edge path { fill: none; stroke: var(--edge); stroke-width: 1.6; opacity: 0.55; }
@@ -358,7 +368,6 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--teal); c
 .graph .box { cursor: grab; user-select: none; }
 .graph .box.dragging { cursor: grabbing; z-index: 2; box-shadow: 0 8px 24px rgba(28, 27, 25, 0.18); transition: none; }
 .graph .box img { -webkit-user-drag: none; }
-.graph-scroll { position: relative; }
 .layout-reset { position: sticky; top: 12px; left: calc(100% - 140px); z-index: 3; float: right; margin: 12px 12px 0 0; min-height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
 
 /* A run's overview on its Inputs box: what it was started with, each decision with what it was made on. */
@@ -450,7 +459,7 @@ dl.readable > div { display: grid; grid-template-columns: 72px 1fr; gap: 8px; }
 dl.readable dt { color: var(--muted); font-size: 13px; }
 dl.readable dd { margin: 0; }
 .flipbook { display: block; max-width: 100%; max-height: 360px; border-radius: 6px; }
-.show-all { position: absolute; right: 16px; top: 6px; z-index: 3; display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+.show-all { position: absolute; right: 16px; top: 6px; z-index: 3; display: flex; gap: 6px; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 13px; color: var(--muted); cursor: pointer; }
 .box.open .box-hit, .box.open .box-main, .box.open .box-text { align-items: flex-start; justify-content: flex-start; text-align: left; }
 .box.open .box-hit { height: auto; }
 .box-open { display: grid; gap: 10px; padding: 10px; border-top: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: auto; user-select: text; }

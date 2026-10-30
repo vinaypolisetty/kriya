@@ -9,6 +9,10 @@
  * the arrows follow. Where you put them is kept per recipe in this browser
  * only: a layout is a viewer's convenience, not part of the recipe.
  *
+ * It's a canvas: pinch or ⌘-scroll zooms around the pointer, scrolling or
+ * dragging the empty canvas moves around, and the buttons in the corner zoom
+ * and fit the whole graph.
+ *
  * Everything opens in place: the graph is the whole page, with no popups and
  * no side panel. Click a step and its box grows to hold its details, or its
  * review if it's waiting on you. Every moment's steps are on this same graph,
@@ -23,7 +27,8 @@
  * By default it's the simple view (simple.ts): only the steps a person acts on,
  * with a run's moments as boxes of their own. "Show all steps" shows the recipe.
  */
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type PointerEvent } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type PointerEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { graphUrl, fileUrl } from "./App";
 import { useLive, useLiveAll, type GEdge, type GItem, type GNode, type Item, type RunGraph, type TraceView } from "./api";
 import { NodePanel, RunPanel } from "./NodePanel";
@@ -351,7 +356,7 @@ const SLOP = 4;
 function useDrag(recipe: string, auto: Map<string, Placed>) {
   const [moved, setMoved] = useState<Moved>(() => loadMoved(recipe));
   useEffect(() => setMoved(loadMoved(recipe)), [recipe]);
-  const drag = useRef<{ id: string; px: number; py: number; x: number; y: number; on: boolean } | null>(null);
+  const drag = useRef<{ id: string; px: number; py: number; x: number; y: number; scale: number; on: boolean } | null>(null);
   const justDragged = useRef(false);
   const boxes = new Map([...auto].map(([id, b]) => [id, moved[id] ? { ...b, ...moved[id] } : b]));
 
@@ -359,7 +364,9 @@ function useDrag(recipe: string, auto: Map<string, Placed>) {
     onPointerDown: (e: PointerEvent<HTMLDivElement>) => {
       if (e.button !== 0) return;
       const b = boxes.get(id)!;
-      drag.current = { id, px: e.clientX, py: e.clientY, x: b.x, y: b.y, on: false };
+      // Read off the box, so it follows the pointer at any zoom, even in a graph inside a zoomed one.
+      const scale = e.currentTarget.getBoundingClientRect().width / e.currentTarget.offsetWidth;
+      drag.current = { id, px: e.clientX, py: e.clientY, x: b.x, y: b.y, scale, on: false };
     },
     onPointerMove: (e: PointerEvent<HTMLDivElement>) => {
       const d = drag.current;
@@ -373,7 +380,7 @@ function useDrag(recipe: string, auto: Map<string, Placed>) {
         e.currentTarget.setPointerCapture(e.pointerId);
       }
       const snap = (v: number) => Math.max(0, Math.round(v / GRID) * GRID);
-      setMoved((m) => ({ ...m, [id]: { x: snap(d.x + dx), y: snap(d.y + dy) } }));
+      setMoved((m) => ({ ...m, [id]: { x: snap(d.x + dx / d.scale), y: snap(d.y + dy / d.scale) } }));
     },
     onPointerUp: () => {
       const d = drag.current;
@@ -394,6 +401,127 @@ function useDrag(recipe: string, auto: Map<string, Placed>) {
   return { boxes, handlers, reset, dragging: (id: string) => drag.current?.on === true && drag.current.id === id, anyMoved: Object.keys(moved).length > 0 };
 }
 
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 2;
+/** One press of + or −. */
+const ZOOM_STEP = 1.25;
+/** Empty canvas on every side, so the spot under the pointer can stay put when zooming and you can move past the graph's edges. */
+const ROOM = 4000;
+
+/**
+ * The window onto the graph. It's a native scroller with the graph scaled
+ * inside, not a transform that stands in for scrolling: trackpad momentum,
+ * scrollers inside a box and a box scrolling itself into view all keep working.
+ * `children` come in from Canvas, so a zoom doesn't redraw 200 boxes.
+ */
+function Zoomable({ width, height, tools, children }: { width: number; height: number; tools?: ReactNode; children: ReactNode }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState(1);
+  const latest = useRef(1);
+  const pan = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const [panning, setPanning] = useState(false);
+
+  /** Zooms to `next`, keeping the spot at (x, y) in the window where it is. */
+  const zoomAt = (next: number, x: number, y: number) => {
+    const el = scroller.current!;
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
+    const spotX = (el.scrollLeft + x - ROOM) / latest.current;
+    const spotY = (el.scrollTop + y - ROOM) / latest.current;
+    latest.current = z;
+    // Drawn now, so the scroll below lands on the new size and nothing jumps.
+    flushSync(() => setZoom(z));
+    el.scrollLeft = spotX * z + ROOM - x;
+    el.scrollTop = spotY * z + ROOM - y;
+  };
+  const zoomMiddle = (next: number) => zoomAt(next, scroller.current!.clientWidth / 2, scroller.current!.clientHeight / 2);
+  /** The whole graph, centred. It never blows a small graph up past 100%. */
+  const fit = () => {
+    const el = scroller.current!;
+    zoomAt(Math.min(1, el.clientWidth / width, el.clientHeight / height), 0, 0);
+    el.scrollLeft = ROOM + (width * latest.current - el.clientWidth) / 2;
+    el.scrollTop = ROOM + (height * latest.current - el.clientHeight) / 2;
+  };
+
+  useLayoutEffect(() => {
+    scroller.current!.scrollTo(ROOM, ROOM);
+  }, []);
+  useEffect(() => {
+    const el = scroller.current!;
+    // Not React's onWheel, which can't stop the browser zooming the whole page. A pinch arrives as a ctrl-scroll.
+    const wheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      // Limited, so one notch of a mouse wheel is a step while a pinch's many small ones stay smooth.
+      const delta = Math.max(-30, Math.min(30, e.deltaMode ? e.deltaY * 16 : e.deltaY));
+      zoomAt(latest.current * Math.exp(-delta / 100), e.clientX - r.left, e.clientY - r.top);
+    };
+    // Only over the canvas: everywhere else ⌘+ still zooms the page.
+    const key = (e: KeyboardEvent) => {
+      if ((!e.metaKey && !e.ctrlKey) || !el.matches(":hover")) return;
+      const next = e.key === "=" || e.key === "+" ? latest.current * ZOOM_STEP : e.key === "-" ? latest.current / ZOOM_STEP : e.key === "0" ? 1 : undefined;
+      if (next === undefined) return;
+      e.preventDefault();
+      zoomMiddle(next);
+    };
+    el.addEventListener("wheel", wheel, { passive: false });
+    addEventListener("keydown", key);
+    return () => {
+      el.removeEventListener("wheel", wheel);
+      removeEventListener("keydown", key);
+    };
+  }, []);
+
+  // The left button moves the canvas from empty space, since on a box it moves the box; the middle one works anywhere.
+  const press = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 1 && (e.button !== 0 || (e.target as Element).closest(".box"))) return;
+    const el = e.currentTarget;
+    pan.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    el.setPointerCapture(e.pointerId);
+    setPanning(true);
+  };
+  const move = (e: PointerEvent<HTMLDivElement>) => {
+    const p = pan.current;
+    if (!p) return;
+    e.currentTarget.scrollLeft = p.left - (e.clientX - p.x);
+    e.currentTarget.scrollTop = p.top - (e.clientY - p.y);
+  };
+  const release = () => {
+    pan.current = null;
+    setPanning(false);
+  };
+
+  const percent = Math.round(zoom * 100);
+  return (
+    <>
+      <div className="graph-tools">
+        <div className="zoom" role="group" aria-label="Zoom">
+          <button type="button" title="Zoom out (⌘−)" aria-label="Zoom out" onClick={() => zoomMiddle(latest.current / ZOOM_STEP)} disabled={zoom <= MIN_ZOOM}>
+            −
+          </button>
+          <button type="button" className="zoom-level" title="Back to 100% (⌘0)" aria-label={`Zoomed to ${percent}%. Back to 100%`} onClick={() => zoomMiddle(1)}>
+            {percent}%
+          </button>
+          <button type="button" title="Zoom in (⌘+)" aria-label="Zoom in" onClick={() => zoomMiddle(latest.current * ZOOM_STEP)} disabled={zoom >= MAX_ZOOM}>
+            +
+          </button>
+          <button type="button" title="Show the whole graph" onClick={fit}>
+            Fit
+          </button>
+        </div>
+        {tools}
+      </div>
+      <div ref={scroller} className={`graph-scroll${panning ? " panning" : ""}`} onPointerDown={press} onPointerMove={move} onPointerUp={release} onPointerCancel={release} onMouseDown={(e) => e.button === 1 && e.preventDefault()}>
+        <div className="graph-room" style={{ width: width * zoom + ROOM * 2, height: height * zoom + ROOM * 2 }}>
+          <div className="graph-zoom" style={{ left: ROOM, top: ROOM, transform: `scale(${zoom})` }}>
+            {children}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function Canvas({ graph, happened, opened, bare, all }: Drawn) {
   const [sizes, setSizes] = useState(() => new Map<string, Size>());
   const measure = (id: string) => (size?: Size) =>
@@ -410,41 +538,50 @@ function Canvas({ graph, happened, opened, bare, all }: Drawn) {
   const placed = [...boxes.values()];
   const width = Math.max(auto.width, ...placed.map((b) => b.x + b.w + PAD));
   const height = Math.max(auto.height, ...placed.map((b) => b.y + b.h + (bare ? 16 : PAD + 60)));
-  return (
-    <div className={graph.at ? "graph-inner" : "graph-scroll"}>
-      {anyMoved && (
-        <button type="button" className="layout-reset" onClick={reset}>
-          Reset layout
-        </button>
+  const resetLayout = anyMoved && (
+    <button type="button" className="layout-reset" onClick={reset}>
+      Reset layout
+    </button>
+  );
+  const drawn = (
+    <div className="graph" style={{ width, height }}>
+      <svg width={width} height={height} className="edges" aria-hidden="true">
+        <defs>
+          <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L8 4 L0 8 Z" className="arrowhead" />
+          </marker>
+        </defs>
+        {startEdges(graph).map((e, i) => (
+          <Edge key={`s${i}`} e={e} boxes={boxes} graph={graph} />
+        ))}
+        {graph.edges.map((e, i) => (
+          <Edge key={i} e={e} boxes={boxes} graph={graph} {...(happened.taken ? { taken: happened.taken[i] ?? 0 } : {})} />
+        ))}
+      </svg>
+      {[...boxes.values()].map((b) =>
+        b.kind === "start" ? (
+          <StartBox key="START" graph={graph} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} open={opened.steps.has(START)} onToggle={() => opened.toggle(START)} drag={handlers("START")} dragging={dragging("START")} measure={measure("START")} />
+        ) : b.kind === "end" ? (
+          <div key="END" className={`box end${dragging("END") ? " dragging" : ""}`} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} {...handlers("END")}>
+            <b>Done</b>
+            <span className="detail">{graph.status === "completed" ? "finished" : graph.status}</span>
+          </div>
+        ) : (
+          <Box key={b.id} n={b.node!} graph={graph} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} {...(all ? { answer: answered(b.node!, happened) } : {})} drag={handlers(b.id)} dragging={dragging(b.id)} opened={opened} measure={measure(b.id)} />
+        ),
       )}
-      <div className="graph" style={{ width, height }}>
-        <svg width={width} height={height} className="edges" aria-hidden="true">
-          <defs>
-            <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0 0 L8 4 L0 8 Z" className="arrowhead" />
-            </marker>
-          </defs>
-          {startEdges(graph).map((e, i) => (
-            <Edge key={`s${i}`} e={e} boxes={boxes} graph={graph} />
-          ))}
-          {graph.edges.map((e, i) => (
-            <Edge key={i} e={e} boxes={boxes} graph={graph} {...(happened.taken ? { taken: happened.taken[i] ?? 0 } : {})} />
-          ))}
-        </svg>
-        {[...boxes.values()].map((b) =>
-          b.kind === "start" ? (
-            <StartBox key="START" graph={graph} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} open={opened.steps.has(START)} onToggle={() => opened.toggle(START)} drag={handlers("START")} dragging={dragging("START")} measure={measure("START")} />
-          ) : b.kind === "end" ? (
-            <div key="END" className={`box end${dragging("END") ? " dragging" : ""}`} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} {...handlers("END")}>
-              <b>Done</b>
-              <span className="detail">{graph.status === "completed" ? "finished" : graph.status}</span>
-            </div>
-          ) : (
-            <Box key={b.id} n={b.node!} graph={graph} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} {...(all ? { answer: answered(b.node!, happened) } : {})} drag={handlers(b.id)} dragging={dragging(b.id)} opened={opened} measure={measure(b.id)} />
-          ),
-        )}
-      </div>
     </div>
+  );
+  // An item's graph sits inside a box, so it zooms with the graph around it.
+  return graph.at ? (
+    <div className="graph-inner">
+      {resetLayout}
+      {drawn}
+    </div>
+  ) : (
+    <Zoomable width={width} height={height} tools={resetLayout}>
+      {drawn}
+    </Zoomable>
   );
 }
 
