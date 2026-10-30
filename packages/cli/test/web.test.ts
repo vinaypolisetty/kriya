@@ -496,7 +496,7 @@ describe("a new run from the browser", () => {
       expect(files.files).toContainEqual(expect.objectContaining({ path: "clips/fall.mp4", type: "video" }));
 
       const bytes = readFileSync(join(cwd, "clips", "fall.mp4"));
-      const send = (name: string, body: Uint8Array) => fetch(`${web.url}/api/files?name=${encodeURIComponent(name)}`, { method: "POST", body }).then(async (r) => ({ status: r.status, body: (await r.json()) as { path?: string; error?: string } }));
+      const send = (name: string, body: BodyInit) => fetch(`${web.url}/api/files?name=${encodeURIComponent(name)}`, { method: "POST", body }).then(async (r) => ({ status: r.status, body: (await r.json()) as { path?: string; error?: string } }));
       expect((await send("my fall.mp4", bytes)).body.path).toBe("uploads/my_fall.mp4");
       expect((await send("my fall.mp4", bytes)).body.path).toBe("uploads/my_fall.mp4"); // the same file again: saved once
       expect((await send("my fall.mp4", new Uint8Array([1, 2, 3]))).body.path).toBe("uploads/my_fall-2.mp4");
