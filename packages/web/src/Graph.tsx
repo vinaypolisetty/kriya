@@ -9,27 +9,47 @@
  * the arrows follow. Where you put them is kept per recipe in this browser
  * only: a layout is a viewer's convenience, not part of the recipe.
  *
- * A for-each box opens in place: a row per item with its picture and its
- * steps, each step a button that opens that step's panel, so an item's work
- * is two clicks from the run instead of a page away. Clicking the row (or ⤢)
- * opens the item's own graph when you want its arrows.
+ * Everything opens in place: the graph is the whole page, with no popups and
+ * no side panel. Click a step and its box grows to hold its details, or its
+ * review if it's waiting on you. Every moment's steps are on this same graph,
+ * each on its own row, with each drawing or page a box of its own. A box measures what it holds
+ * and the layout makes room, so the boxes after it move along and the arrows
+ * follow. A big run is a big graph, and that's fine. (With "Show all steps",
+ * an item opens in its row.)
+ * The next thing waiting on you opens by itself, and closes when it's decided.
+ *
+ * The Inputs box and any step that made a video play it right in the box.
+ *
+ * By default it's the simple view (simple.ts): only the steps a person acts on,
+ * with a run's moments as boxes of their own. "Show all steps" shows the recipe.
  */
-import { useEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type PointerEvent } from "react";
-import { useLive, type GEdge, type GNode, type RunGraph, type TraceView } from "./api";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type PointerEvent } from "react";
+import { graphUrl, fileUrl } from "./App";
+import { useLive, useLiveAll, type GEdge, type GItem, type GNode, type Item, type RunGraph, type TraceView } from "./api";
+import { NodePanel, RunPanel } from "./NodePanel";
+import { Screen } from "./Screen";
+import { simplify, unfold, waitsOnYou } from "./simple";
 
 const W = 216;
 const H = 84;
 const COL = 290;
 const ROW = 150;
 const PAD = 40;
-/** An open for-each box: wide enough for an item's picture and its steps, one row each. */
-const OPEN_W = 620;
-const ITEM_H = 44;
+/** An item's box: wide enough for its line of decisions. */
+const ITEM_W = 380;
+/** Between one moment's row and the next, with room for a redo loop under it. */
+const ROW_GAP = 76;
+/** Between pieces of work stacked in one column of a moment's row. */
+const WORK_GAP = 16;
+/** Between steps inside an item, where there's no room to waste. */
+const BARE_COL = 250;
 
 type Placed = { id: string; x: number; y: number; w: number; h: number; node?: GNode; kind: "start" | "end" | GNode["kind"] };
+/** What an open box measured its contents at. */
+type Size = { w: number; h: number };
 
-/** Columns by longest path from the start, over forward arrows only; loops go back and don't count. Open for-each boxes widen their column and push the boxes below them down. */
-function layout(g: RunGraph, open: Set<string> = new Set()): { boxes: Map<string, Placed>; width: number; height: number } {
+/** Columns by longest path from the start, over forward arrows only; loops go back and don't count. An open box widens its column and pushes the boxes below it down. */
+function layout(g: RunGraph, sizes: Map<string, Size> = new Map(), bare = false): { boxes: Map<string, Placed>; width: number; height: number } {
   const forward = g.edges.filter((e) => !e.back);
   const incoming = new Map<string, number>();
   for (const e of forward) if (e.to !== "END") incoming.set(e.to, (incoming.get(e.to) ?? 0) + 1);
@@ -48,31 +68,61 @@ function layout(g: RunGraph, open: Set<string> = new Set()): { boxes: Map<string
 
   const columns = new Map<number, string[]>();
   const add = (id: string) => columns.set(rank.get(id)!, [...(columns.get(rank.get(id)!) ?? []), id]);
-  add("START");
+  if (!bare) add("START");
   for (const n of g.nodes) add(n.id);
-  if (g.edges.some((e) => e.to === "END")) add("END");
+  if (!bare && g.edges.some((e) => e.to === "END")) add("END");
+  const COLUMN = bare ? BARE_COL : COL;
+  const widthOf = (id: string) => {
+    const node = g.nodes.find((n) => n.id === id);
+    return sizes.get(id)?.w ?? (node?.kind === "item" && !node.leaf && !node.unfolded ? ITEM_W : W);
+  };
 
-  const isOpen = (node?: GNode) => !!node?.items?.length && open.has(node.id);
   // Each column moves right by however much the open boxes before it are wider than a box.
   const extra = new Map<number, number>();
-  for (const [c, ids] of columns) extra.set(c, Math.max(0, ...ids.map((id) => (isOpen(g.nodes.find((n) => n.id === id)) ? OPEN_W - W : 0))));
+  for (const [c, ids] of columns) extra.set(c, Math.max(0, ...ids.map((id) => widthOf(id) - W)));
   const shift = (c: number) => [...extra].filter(([k]) => k < c).reduce((a, [, v]) => a + v, 0);
   const boxes = new Map<string, Placed>();
   let height = 0;
+  // Each moment gets a row: its steps are placed within it here, and the rows are stacked once they're all known.
+  const inRow = new Map<string, number>();
   for (const [c, ids] of columns) {
     let below = 0;
     ids.forEach((id, row) => {
       const node = g.nodes.find((n) => n.id === id);
-      const opened = isOpen(node);
-      const h = opened ? H + 34 + node!.items!.length * ITEM_H : node?.kind === "map" ? H + 54 : H;
-      const y = Math.max(PAD + row * ROW, below);
-      boxes.set(id, { id, x: PAD + c * COL + shift(c), y, w: opened ? OPEN_W : W, h, ...(node ? { node } : {}), kind: id === "START" ? "start" : id === "END" ? "end" : node!.kind });
+      const size = sizes.get(id);
+      const h = size?.h ?? (node?.items ? H + 54 : H);
+      if (node?.after) {
+        const slot = `${c}:${node.after}`;
+        const top = inRow.get(slot) ?? 0;
+        inRow.set(slot, top + h + WORK_GAP);
+        boxes.set(id, { id, x: PAD + (bare ? c - 1 : c) * COLUMN + shift(c), y: top, w: widthOf(id), h, node, kind: node.kind });
+        return;
+      }
+      if (node?.kind === "item" && !node.leaf) {
+        boxes.set(id, { id, x: PAD + (bare ? c - 1 : c) * COLUMN + shift(c), y: 0, w: widthOf(id), h, node, kind: node.kind });
+        return;
+      }
+      const y = Math.max((bare ? 16 : PAD) + row * ROW, below);
+      boxes.set(id, { id, x: PAD + (bare ? c - 1 : c) * COLUMN + shift(c), y, w: widthOf(id), h, ...(node ? { node } : {}), kind: id === "START" ? "start" : id === "END" ? "end" : node!.kind });
       below = y + h + 60;
       height = Math.max(height, y + h);
     });
   }
-  const width = PAD * 2 + (last + 1) * COL + W + shift(last + 2);
-  return { boxes, width, height: height + PAD + 60 };
+  let top = bare ? 16 : PAD;
+  for (const m of g.nodes.filter((n) => n.kind === "item" && !n.after)) {
+    const me = boxes.get(m.id)!;
+    me.y = top;
+    let bottom = top + me.h;
+    for (const b of boxes.values()) {
+      if (b.node?.after !== m.id) continue;
+      b.y += top;
+      bottom = Math.max(bottom, b.y + b.h);
+    }
+    top = bottom + ROW_GAP;
+  }
+  height = Math.max(height, top);
+  const width = bare ? 0 : PAD * 2 + (last + 1) * COL + W + shift(last + 2);
+  return { boxes, width, height: height + (bare ? 16 : PAD + 60) };
 }
 
 const STATUS: Record<string, { label: string; tone: string }> = {
@@ -104,22 +154,131 @@ export function useNarrow(): boolean {
   return narrow;
 }
 
-/** `selected` is a step id here, or an item's step key (`per_shot[P3-04].pick`) chosen in an open for-each box. */
-type GraphProps = { graph: RunGraph; selected?: string; onSelect: (id: string) => void; onOpenItem: (at: string) => void };
+/** `focus` is a step's full key (`per_shot[P3-04].pick`) to start open: the step you clicked on an item's row. */
+type GraphProps = { graph: RunGraph; focus?: string | undefined };
+/** A graph as drawn; `bare` drops the Inputs and Done boxes, inside an item where they'd only be noise. */
+type Drawn = { graph: RunGraph; happened: Happened; opened: Opened; bare: boolean; all: boolean };
 /** What the event log says happened here: how often each arrow was taken (by index in `graph.edges`), each review's last answer. */
 type Happened = { taken?: number[]; answers: TraceView["answers"] };
-/** Which for-each boxes are open, and how to open or close one. */
-type Opened = { open: Set<string>; toggle: (id: string) => void };
+/** What's open in this graph: steps by id, for-each items by key with the step to start on. */
+type Opened = { steps: Set<string>; folded: Set<string>; items: Map<string, string | undefined>; toggle: (id: string) => void; toggleFold: (id: string) => void; toggleItem: (key: string, step?: string) => void; sync: (g: RunGraph) => void };
+
+const wants = (n: GNode) => n.waitingOnYou || !!n.items?.some(waitsOnYou);
+/** A moment still has a decision to come: it stays open, so you finish one before the next. */
+const unfinished = (n: GNode) => !!n.item?.steps?.some((s) => s.asksYou && statusOf(s.status).tone !== "done");
+
+/**
+ * What's open. Every moment is laid out on the graph unless you fold it. The
+ * next decision opens by itself and closes once it's made, one moment at a
+ * time, so you finish one before the next. One you closed stays closed.
+ */
+function useOpened(graph: RunGraph, focus?: string): Opened {
+  const [steps, setSteps] = useState(() => new Set(graph.nodes.filter((n) => n.key === focus).map((n) => n.id)));
+  const [folded, setFolded] = useState(() => new Set<string>());
+  const [items, setItems] = useState(() => new Map<string, string | undefined>());
+  const shut = useRef(new Set<string>());
+  const auto = useRef(new Set<string>());
+  const sync = (g: RunGraph) => {
+    const moment = (n: GNode) => n.kind === "item" && !n.leaf;
+    const work = g.nodes.filter((n) => !moment(n));
+    const going = new Set(work.filter(wants).map((n) => n.id));
+    const finished = [...auto.current].filter((id) => !going.has(id));
+    finished.forEach((id) => auto.current.delete(id));
+    const now = g.nodes.find((n) => moment(n) && unfinished(n))?.id;
+    const first = work.find((n) => wants(n) && !shut.current.has(n.id) && (!n.after || n.after === now));
+    setSteps((open) => {
+      const next = new Set([...open].filter((id) => !finished.includes(id)));
+      if (first && ![...next].some((id) => going.has(id))) {
+        next.add(first.id);
+        auto.current.add(first.id);
+      }
+      return next.size === open.size && [...next].every((id) => open.has(id)) ? open : next;
+    });
+  };
+  const toggle = (id: string) =>
+    setSteps((o) => {
+      if (!o.has(id)) return new Set([...o, id]);
+      shut.current.add(id);
+      return new Set([...o].filter((x) => x !== id));
+    });
+  const toggleFold = (id: string) => setFolded((o) => (o.has(id) ? new Set([...o].filter((x) => x !== id)) : new Set([...o, id])));
+  const toggleItem = (key: string, step?: string) =>
+    setItems((o) => {
+      if (o.has(key) && !step) return new Map([...o].filter(([k]) => k !== key));
+      return new Map([...o, [key, step]]);
+    });
+  return { steps, folded, items, toggle, toggleFold, toggleItem, sync };
+}
+
+/** "Show all steps", remembered in this browser; items inside a run follow it. */
+const AllSteps = createContext(false);
+const ALL_KEY = "kriya.allSteps";
+function useAllSteps(): [boolean, (on: boolean) => void] {
+  const [all, setAll] = useState(() => {
+    try {
+      return localStorage.getItem(ALL_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const set = (on: boolean) => {
+    setAll(on);
+    try {
+      if (on) localStorage.setItem(ALL_KEY, "1");
+      else localStorage.removeItem(ALL_KEY);
+    } catch {
+      // Storage off (a private window): it lasts until the page closes.
+    }
+  };
+  return [all, set];
+}
 
 export function Graph(props: GraphProps) {
-  const { graph } = props;
+  const { graph, focus } = props;
   const t = useLive<TraceView>(graph.run ? `/api/runs/${encodeURIComponent(graph.run)}/trace?at=${encodeURIComponent(graph.at)}` : undefined).data;
-  const happened: Happened = { ...(t ? { taken: t.taken } : {}), answers: t?.answers ?? {} };
-  // A for-each with an item waiting on you starts open: that's where you're going anyway.
-  const [open, setOpen] = useState(() => new Set(graph.nodes.filter((n) => n.items?.some((i) => i.steps?.some((s) => s.waitingOnYou))).map((n) => n.id)));
-  const toggle = (id: string) => setOpen((o) => (o.has(id) ? new Set([...o].filter((x) => x !== id)) : new Set([...o, id])));
-  const opened: Opened = { open, toggle };
-  return useNarrow() ? <StepList {...props} happened={happened} opened={opened} /> : <Canvas {...props} happened={happened} opened={opened} />;
+  const inRun = useContext(AllSteps);
+  const [mine, setMine] = useAllSteps();
+  const all = graph.at ? inRun : mine;
+  const view = useMemo(() => (all ? { graph, taken: t?.taken } : simplify(graph, t?.taken)), [graph, t?.taken, all]);
+  const opened = useOpened(view.graph, focus);
+  // Every moment's own steps, to unfold into this graph.
+  const moments = all || graph.at || !graph.run ? [] : view.graph.nodes.filter((n) => n.kind === "item" && !n.leaf && !opened.folded.has(n.id)).map((n) => n.key);
+  const inside = useLiveAll<RunGraph>(moments.map((key) => graphUrl(graph.run, key)));
+  const whole = useMemo(() => unfold(view, (n) => (opened.folded.has(n.id) ? undefined : inside.get(graphUrl(graph.run, n.key)))), [view, opened.folded, inside, graph.run]);
+  useEffect(() => opened.sync(whole.graph), [whole.graph]);
+  const happened: Happened = { ...(whole.taken ? { taken: whole.taken } : {}), answers: t?.answers ?? {} };
+  const shown = { graph: whole.graph, happened, opened, bare: !all && !!graph.at, all };
+  return (
+    <AllSteps.Provider value={all}>
+      {!graph.at && (
+        <label className="show-all">
+          <input type="checkbox" checked={all} onChange={(e) => setMine(e.target.checked)} /> Show all steps
+        </label>
+      )}
+      {useNarrow() ? <StepList {...shown} /> : <Canvas {...shown} />}
+    </AllSteps.Provider>
+  );
+}
+
+/** Keeps what an open box holds out of the box's own drag, so picking text or a video's slider doesn't move it. */
+const stay = (e: PointerEvent) => e.stopPropagation();
+
+/** Reports the size of what's in a box while `on`, for the layout to make room for it. */
+function useMeasure(on: boolean, report?: (size?: Size) => void, open?: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!report) return;
+    if (!on || !el) return report();
+    const send = () => report({ w: el.offsetWidth + 3, h: el.offsetHeight + 3 });
+    send();
+    // After the layout has made room: what you just opened comes into view, heading first.
+    if (open) requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" }));
+    const seen = new ResizeObserver(send);
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, [on, open]);
+  return ref;
 }
 
 /** A loop's words: its limit before it's used ("redo · up to 3×"), how much is used after ("redo · 1 of 3"). */
@@ -132,17 +291,22 @@ function answered(n: GNode, happened: Happened): string | undefined {
 }
 
 /** The steps top to bottom in the graph's order (column, then row), each with the arrows leaving it in words. */
-function StepList({ graph, selected, onSelect, onOpenItem, happened, opened }: GraphProps & { happened: Happened; opened: Opened }) {
-  const { boxes } = layout(graph);
+function StepList({ graph, happened, opened, bare, all }: Drawn) {
+  const { boxes } = layout(graph, undefined, bare);
   const order = [...boxes.values()].filter((b) => b.node).sort((a, b) => a.x - b.x || a.y - b.y);
   const name = (id: string) => (id === "END" ? "done" : (graph.nodes.find((n) => n.id === id)?.name ?? id));
   return (
     <ol className="step-list">
+      {!bare && (
+        <li>
+          <StartBox graph={graph} open={opened.steps.has(START)} onToggle={() => opened.toggle(START)} />
+        </li>
+      )}
       {order.map((b) => {
         const out = graph.edges.map((e, i) => ({ ...e, taken: happened.taken?.[i] })).filter((e) => e.from === b.id);
         return (
           <li key={b.id}>
-            <Box n={b.node!} selected={selected} onSelect={onSelect} onOpenItem={onOpenItem} answer={answered(b.node!, happened)} open={opened.open.has(b.id)} onToggle={() => opened.toggle(b.id)} />
+            <Box n={b.node!} graph={graph} opened={opened} {...(all ? { answer: answered(b.node!, happened) } : {})} />
             {out.length > 0 && (
               <p className="next">
                 {out.map((e, i) => (
@@ -230,15 +394,24 @@ function useDrag(recipe: string, auto: Map<string, Placed>) {
   return { boxes, handlers, reset, dragging: (id: string) => drag.current?.on === true && drag.current.id === id, anyMoved: Object.keys(moved).length > 0 };
 }
 
-function Canvas({ graph, selected, onSelect, onOpenItem, happened, opened }: GraphProps & { happened: Happened; opened: Opened }) {
-  const auto = layout(graph, opened.open);
+function Canvas({ graph, happened, opened, bare, all }: Drawn) {
+  const [sizes, setSizes] = useState(() => new Map<string, Size>());
+  const measure = (id: string) => (size?: Size) =>
+    setSizes((m) => {
+      const was = m.get(id);
+      if (was?.w === size?.w && was?.h === size?.h) return m;
+      const next = new Map(m);
+      if (size) next.set(id, size);
+      else next.delete(id);
+      return next;
+    });
+  const auto = layout(graph, sizes, bare);
   const { boxes, handlers, reset, dragging, anyMoved } = useDrag(graph.recipe, auto.boxes);
   const placed = [...boxes.values()];
   const width = Math.max(auto.width, ...placed.map((b) => b.x + b.w + PAD));
-  const height = Math.max(auto.height, ...placed.map((b) => b.y + b.h + PAD + 60));
-  const startInputs = Object.keys(graph.inputs);
+  const height = Math.max(auto.height, ...placed.map((b) => b.y + b.h + (bare ? 16 : PAD + 60)));
   return (
-    <div className="graph-scroll">
+    <div className={graph.at ? "graph-inner" : "graph-scroll"}>
       {anyMoved && (
         <button type="button" className="layout-reset" onClick={reset}>
           Reset layout
@@ -260,19 +433,14 @@ function Canvas({ graph, selected, onSelect, onOpenItem, happened, opened }: Gra
         </svg>
         {[...boxes.values()].map((b) =>
           b.kind === "start" ? (
-            <div key="START" className={`box start${selected === START ? " selected" : ""}${dragging("START") ? " dragging" : ""}`} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} {...handlers("START")}>
-              <button type="button" className="box-hit" onClick={() => onSelect(START)} aria-label={`${graph.at ? "This item" : "Inputs"}: see what it was given`} aria-pressed={selected === START}>
-                <b>{graph.at ? "This item" : "Inputs"}</b>
-                <span className="detail">{startInputs.join(", ") || "none"}</span>
-              </button>
-            </div>
+            <StartBox key="START" graph={graph} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} open={opened.steps.has(START)} onToggle={() => opened.toggle(START)} drag={handlers("START")} dragging={dragging("START")} measure={measure("START")} />
           ) : b.kind === "end" ? (
             <div key="END" className={`box end${dragging("END") ? " dragging" : ""}`} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} {...handlers("END")}>
               <b>Done</b>
               <span className="detail">{graph.status === "completed" ? "finished" : graph.status}</span>
             </div>
           ) : (
-            <Box key={b.id} n={b.node!} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} selected={selected} onSelect={onSelect} onOpenItem={onOpenItem} answer={answered(b.node!, happened)} drag={handlers(b.id)} dragging={dragging(b.id)} open={opened.open.has(b.id)} onToggle={() => opened.toggle(b.id)} />
+            <Box key={b.id} n={b.node!} graph={graph} style={{ left: b.x, top: b.y, width: b.w, height: b.h }} {...(all ? { answer: answered(b.node!, happened) } : {})} drag={handlers(b.id)} dragging={dragging(b.id)} opened={opened} measure={measure(b.id)} />
           ),
         )}
       </div>
@@ -280,8 +448,57 @@ function Canvas({ graph, selected, onSelect, onOpenItem, happened, opened }: Gra
   );
 }
 
-/** What `onSelect` gets for the Inputs box: no step is called this (ids are lower_snake_case). */
+/** The Inputs box's place in what's open: no step is called this (ids are lower_snake_case). */
 export const START = "START";
+
+/** A run's video or picture, given as a file of the project; the box plays it. */
+function inputFile(graph: RunGraph): { type: string; url: string } | undefined {
+  const name = Object.keys(graph.inputs).find((k) => (graph.inputs[k] === "video" || graph.inputs[k] === "image") && typeof graph.given?.[k] === "string");
+  return name ? { type: graph.inputs[name]!, url: fileUrl(graph.given![name] as string) } : undefined;
+}
+
+/** The Inputs box: the video it was given, and opened, what it started with and everything that happened. */
+function StartBox({ graph, style, open, onToggle, drag, dragging, measure }: { graph: RunGraph; style?: CSSProperties; open: boolean; onToggle: () => void; drag?: HTMLAttributes<HTMLDivElement>; dragging?: boolean; measure?: (size?: Size) => void }) {
+  const file = inputFile(graph);
+  const fits = open || !!file;
+  const inner = useMeasure(fits, measure, open);
+  return (
+    <div className={`box start${open ? " open selected" : ""}${fits ? " fits" : ""}${dragging ? " dragging" : ""}`} {...(style ? { style } : {})} {...drag}>
+      <div className="box-inner" ref={inner}>
+        <button type="button" className="box-hit" onClick={onToggle} aria-label={`${graph.at ? "This item" : "Inputs"}: see what it was given`} aria-expanded={open}>
+          <b>{graph.at ? "This item" : "Inputs"}</b>
+          <span className="detail">{Object.keys(graph.inputs).join(", ") || "none"}</span>
+        </button>
+        {file && (
+          <div className="box-video" onPointerDown={stay}>
+            {file.type === "video" ? <video src={file.url} controls playsInline preload="metadata" /> : <img src={file.url} alt="" />}
+          </div>
+        )}
+        {open && (
+          <div className="box-open" onPointerDown={stay}>
+            <RunPanel graph={graph} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A review inside its box, or a for-each's next one: decided right on the graph, then the box closes and the run moves on. */
+function BoxReview({ n, run }: { n: GNode; run: string }) {
+  const inbox = useLive<{ items: Item[] }>("/api/inbox");
+  const item = inbox.data?.items.find((i) => i.id === `${run}:${n.key}` || i.id.startsWith(`${run}:${n.key}[`) || i.id.startsWith(`${run}:${n.key}.`));
+  if (!item) return <p className="muted small">{inbox.error ?? "Loading the review…"}</p>;
+  return <Screen key={item.id + item.shows.map((s) => s.version).join()} item={item} batch={[item]} embedded onBack={() => {}} onError={() => {}} onDone={() => {}} />;
+}
+
+/** One for-each item's own graph, inside its row. */
+function ItemGraph({ run, at, focus }: { run: string; at: string; focus?: string | undefined }) {
+  const g = useLive<RunGraph>(graphUrl(run, at));
+  if (g.error) return <p className="error">{g.error}</p>;
+  if (!g.data) return <p className="muted small">Loading…</p>;
+  return <Graph graph={g.data} focus={focus} />;
+}
 
 /** The start box points at every step nothing else leads to. */
 function startEdges(g: RunGraph): GEdge[] {
@@ -309,10 +526,11 @@ function Edge({ e, boxes, graph, taken }: { e: GEdge; boxes: Map<string, Placed>
     lx = (x1 + x2) / 2;
     ly = dip - 8;
   } else {
+    // Arrows stay on a box's heading, so opening it doesn't swing them down to its middle.
     const x1 = a.x + a.w;
-    const y1 = a.y + a.h / 2;
+    const y1 = a.y + Math.min(a.h, H) / 2;
     const x2 = b.x - 2;
-    const y2 = b.y + b.h / 2;
+    const y2 = b.y + Math.min(b.h, H) / 2;
     const mid = (x1 + x2) / 2;
     d = `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
     // The label sits near where the arrow arrives: arrows fanning out of one box keep their words apart.
@@ -337,60 +555,136 @@ function Edge({ e, boxes, graph, taken }: { e: GEdge; boxes: Map<string, Placed>
 /** The mark after an item's step: what state it's in at a glance. */
 const MARK: Record<string, string> = { done: "✓", you: "⏳", fail: "✗", work: "…", stale: "~" };
 
-function Box({ n, style, selected, onSelect, onOpenItem, answer, drag, dragging, open, onToggle }: { n: GNode; style?: CSSProperties; selected?: string | undefined; onSelect: (id: string) => void; onOpenItem: (at: string) => void; answer?: string | undefined; drag?: HTMLAttributes<HTMLDivElement>; dragging?: boolean; open?: boolean; onToggle?: () => void }) {
+function Box({ n, graph, style, answer, drag, dragging, opened, measure }: { n: GNode; graph: RunGraph; style?: CSSProperties; answer?: string | undefined; drag?: HTMLAttributes<HTMLDivElement>; dragging?: boolean; opened: Opened; measure?: (size?: Size) => void }) {
   const st = statusOf(n.status);
-  const shown = n.versions.find((v) => v.id === n.locked?.version) ?? n.versions.at(-1);
-  const isSelected = selected === n.id;
-  const waitingItems = n.items?.filter((i) => i.steps?.some((s) => s.waitingOnYou)).length ?? 0;
+  const made = n.source ?? n;
+  const shown = made.versions.find((v) => v.id === made.locked?.version) ?? made.versions.at(-1);
+  // A moment doesn't open inside itself: its steps are on the graph after it, and clicking folds them away.
+  const moment = !!n.item && !n.leaf;
+  const unfolded = !!n.unfolded;
+  const open = !moment && opened.steps.has(n.id);
+  const waitingItems = n.items?.filter(waitsOnYou).length ?? 0;
+  const clip = shown?.thumb?.type.startsWith("video/") ? shown.thumb : undefined;
+  const picture = n.item?.thumb ?? (shown?.thumb?.type.startsWith("image/") ? shown.thumb : undefined);
+  const fits = open || !!clip;
+  const inner = useMeasure(fits, measure, open);
+  const toggle = () => (moment ? opened.toggleFold(n.id) : opened.toggle(n.id));
+  const asking = n.waitingOnYou || waitingItems > 0;
   return (
-    <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, n.waitingOnYou || waitingItems ? "you" : "", isSelected ? "selected" : "", dragging ? "dragging" : "", open ? "open" : ""].join(" ")} {...(style ? { style } : {})} {...drag}>
-      <button type="button" className="box-hit" onClick={() => onSelect(n.id)} aria-label={`${n.name}: ${n.waitingOnYou ? "waiting for you" : st.label}`} aria-pressed={isSelected}>
-        <span className="box-main">
-          {shown?.thumb?.type.startsWith("image/") && <img src={shown.thumb.url} alt="" className="box-thumb" />}
-          <span className="box-text">
-            <b>{n.name}</b>
-            <span className="detail">{n.detail}</span>
+    <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, asking ? "you" : "", dragging ? "dragging" : "", open ? "open" : "", unfolded ? "unfolded" : "", fits ? "fits" : ""].join(" ")} {...(style ? { style } : {})} {...drag}>
+      <div className="box-inner" ref={inner}>
+        <button type="button" className="box-hit" onClick={toggle} aria-label={`${n.name}: ${asking ? "waiting for you" : st.label}`} aria-expanded={open || unfolded}>
+          <span className="box-main">
+            {picture && <img src={picture.url} alt="" className="box-thumb" />}
+            <span className="box-text">
+              <b>{n.name}</b>
+              {n.detail && <span className="detail">{n.detail}</span>}
+            </span>
           </span>
-        </span>
-        <span className={`status tone-${st.tone}`}>{n.waitingOnYou ? "waiting for you" : (answer ?? st.label)}</span>
-      </button>
-      {n.items && onToggle && (
-        <button type="button" className="items-toggle" onClick={onToggle} aria-expanded={!!open}>
-          {open ? "▴ Hide" : "▾ Show"} {n.items.length} item{n.items.length === 1 ? "" : "s"}
-          {waitingItems > 0 && <span className="tone-you"> · {waitingItems} waiting for you</span>}
+          {moment ? !unfolded && <Decisions item={n.item!} /> : <span className={`status tone-${st.tone}`}>{asking ? "waiting for you" : (answer ?? st.label)}</span>}
         </button>
-      )}
-      {n.items && !open && (
-        <span className="strip" role="group" aria-label={`${n.items.length} items`}>
-          {n.items.map((i) => (
-            <button key={i.key} type="button" title={`${i.label}: ${statusOf(i.status).label}`} aria-label={`Open ${i.label}: ${statusOf(i.status).label}`} className={`cell tone-${statusOf(i.status).tone}`} onClick={() => onOpenItem(i.key)} />
-          ))}
-        </span>
-      )}
-      {n.items && open && (
-        <ul className="item-rows">
-          {n.items.map((i) => (
-            // The whole row opens the item, like ⤢; its step buttons still open their own panels.
-            <li key={i.key} className="item-row" onClick={(e) => (e.target as HTMLElement).closest("button") || onOpenItem(i.key)}>
-              <span className="item-label mono">{i.label}</span>
-              {i.thumb ? <img src={i.thumb.url} alt="" className="item-thumb" loading="lazy" /> : <span className="item-thumb none" />}
-              <span className="item-steps">
-                {i.steps?.map((s) => {
-                  const tone = s.waitingOnYou ? "you" : statusOf(s.status).tone;
-                  return (
-                    <button key={s.key} type="button" className={`step-tag tone-${tone}${selected === s.key ? " selected" : ""}`} title={`${s.name}: ${s.waitingOnYou ? "waiting for you" : statusOf(s.status).label}`} aria-pressed={selected === s.key} onClick={() => onSelect(s.key)}>
-                      {s.name.split(" ")[0]} {MARK[tone] ?? ""}
-                    </button>
-                  );
-                })}
-              </span>
-              <button type="button" className="icon item-open" title={`Open ${i.label}'s own graph`} aria-label={`Open ${i.label}'s own graph`} onClick={() => onOpenItem(i.key)}>
-                ⤢
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+        {clip && (
+          <div className="box-video" onPointerDown={stay}>
+            <video src={clip.url} controls playsInline preload="metadata" />
+          </div>
+        )}
+        {n.items && !(open && waitingItems > 0) && (
+          <button type="button" className="items-toggle" onClick={toggle} aria-expanded={open}>
+            {open ? "▴ Hide" : "▾ Show"} {n.items.length} item{n.items.length === 1 ? "" : "s"}
+            {waitingItems > 0 && <span className="tone-you"> · {waitingItems} waiting for you</span>}
+          </button>
+        )}
+        {n.items && !open && (
+          <span className="strip" role="group" aria-label={`${n.items.length} items`}>
+            {n.items.map((i) => (
+              <button
+                key={i.key}
+                type="button"
+                title={`${i.label}: ${statusOf(i.status).label}`}
+                aria-label={`Open ${i.label}: ${statusOf(i.status).label}`}
+                className={`cell tone-${statusOf(i.status).tone}`}
+                onClick={() => {
+                  toggle();
+                  opened.toggleItem(i.key);
+                }}
+              />
+            ))}
+          </span>
+        )}
+        {open && (
+          <div className="box-open" onPointerDown={stay}>
+            {n.items && waitingItems === 0 && (
+              <ul className="item-rows">
+                {n.items.map((i) => (
+                  <ItemRow key={i.key} i={i} run={graph.run} opened={opened} />
+                ))}
+              </ul>
+            )}
+            {asking && graph.run && <BoxReview n={n} run={graph.run} />}
+            {n.leaf ? (
+              !asking && picture && <img className="box-picture" src={picture.url} alt="" />
+            ) : !graph.run ? (
+              <p className="muted small">Not run yet. Its versions, checks and lock show up here once a run reaches it.</p>
+            ) : n.items || asking ? (
+              <details className="box-more">
+                <summary>Step details</summary>
+                <NodePanel n={made} run={graph.run} />
+              </details>
+            ) : (
+              <NodePanel n={made} run={graph.run} />
+            )}
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+/** A moment's decisions as one line, in order: what's done, what's waiting on you, what's to come. */
+function Decisions({ item }: { item: GItem }) {
+  const asked = item.steps?.filter((s) => s.asksYou) ?? [];
+  return (
+    <span className="decisions-line">
+      {asked.map((s) => {
+        const tone = s.waitingOnYou ? "you" : statusOf(s.status).tone;
+        const word = s.name.split(" ").at(-1)!;
+        return (
+          <span key={s.key} className={`tone-${tone}`}>
+            {word[0]!.toUpperCase() + word.slice(1)} {MARK[tone] ?? ""}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** One item of a for-each: click it and its own graph opens right below; a step's button opens the item at that step. */
+function ItemRow({ i, run, opened }: { i: GItem; run: string; opened: Opened }) {
+  const open = opened.items.has(i.key);
+  return (
+    <>
+      <li className={`item-row${open ? " open" : ""}`} onClick={(e) => (e.target as HTMLElement).closest("button") || opened.toggleItem(i.key)}>
+        <span className="item-label mono">{i.label}</span>
+        {i.thumb ? <img src={i.thumb.url} alt="" className="item-thumb" loading="lazy" /> : <span className="item-thumb none" />}
+        <span className="item-steps">
+          {i.steps?.map((s) => {
+            const tone = s.waitingOnYou ? "you" : statusOf(s.status).tone;
+            return (
+              <button key={s.key} type="button" className={`step-tag tone-${tone}`} title={`${s.name}: ${s.waitingOnYou ? "waiting for you" : statusOf(s.status).label}`} onClick={() => opened.toggleItem(i.key, s.key)}>
+                {s.name.split(" ")[0]} {MARK[tone] ?? ""}
+              </button>
+            );
+          })}
+        </span>
+        <button type="button" className="icon item-open" aria-expanded={open} aria-label={`${open ? "Close" : "Open"} ${i.label}`} onClick={() => opened.toggleItem(i.key)}>
+          {open ? "▴" : "▾"}
+        </button>
+      </li>
+      {open && (
+        <li className="item-graph">
+          <ItemGraph key={opened.items.get(i.key) ?? ""} run={run} at={i.key} focus={opened.items.get(i.key)} />
+        </li>
+      )}
+    </>
   );
 }

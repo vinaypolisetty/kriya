@@ -1,5 +1,6 @@
 # Flipbook recipe: one page. Every page is made from the locked caricature, never from the page before,
-# so small changes can't add up to a different character.
+# so small changes can't add up to a different character. Pages aren't reviewed one by one: the moment's
+# recipe plays them all together for one decision.
 graph: flipbook
 level: page
 
@@ -7,7 +8,7 @@ inputs:
   item: json   # one page: id, image_prompt, drawing
 
 outputs:
-  image: pick.selected
+  image: draw.image
 
 nodes:
   - id: draw
@@ -15,6 +16,7 @@ nodes:
     name: Draw the page
     capability: image.edit
     model: google/nano-banana
+    trust: always
     prompt: |
       Image 1 is a caricature. Redraw it with one small change: {{item.image_prompt}}
       Everything else stays the same: the same character, drawing style, colours, framing and background.
@@ -23,17 +25,5 @@ nodes:
     out:
       image: image
 
-  - id: pick
-    kind: screen
-    name: Check the page
-    review: pick_one
-    show: draw.image
-    beside: [item.image_prompt, item.drawing]
-    actions:
-      - { id: lock, needs: [selection], locks: true }
-      - { id: retry, needs: [note] }   # e.g. "only the eyes move", "keep the same shirt"
-
 edges:
-  - { from: draw, to: pick }
-  - { from: pick, to: draw, when: "action == 'retry'", max_loops: 4 }
-  - { from: pick, to: END, when: "action == 'lock'" }
+  - { from: draw, to: END }

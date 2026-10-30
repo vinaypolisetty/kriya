@@ -1,26 +1,16 @@
-/** One step of a run, beside the graph: its state, why, what it made, and a way in if it's waiting on you. */
+/** One step of a run, inside its box on the graph: its state, why, and what it made. */
 import { useState } from "react";
 import { branchOff, retry, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunGraph, type TraceLine, type TraceView } from "./api";
 import { statusOf } from "./Graph";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 
-export function NodePanel({ n, run, onClose, onOpenItem }: { n: GNode; run: string; onClose: () => void; onOpenItem: (at: string) => void }) {
+export function NodePanel({ n, run }: { n: GNode; run: string }) {
   const st = statusOf(n.status);
   const latest = Math.max(0, ...n.versions.map((v) => Number(v.id.split(".")[0])));
   return (
     <aside className="panel" aria-label={`Step ${n.name}`}>
-      <div className="panel-head">
-        <div>
-          <span className="eyebrow">{n.detail}</span>
-          <h2>{n.name}</h2>
-        </div>
-        <button type="button" className="icon" onClick={onClose} aria-label="Close">×</button>
-      </div>
       <p className={`pill tone-${st.tone}`}>{n.waitingOnYou ? "Waiting for you" : st.label}</p>
-      {n.waitingOnYou && (
-        <a className="button primary" href={`#/review/${encodeURIComponent(`${run}:${n.key}`)}`}>Review now</a>
-      )}
       {n.status === "failed" && n.failure && <p className="note fail">{n.failure}</p>}
       {n.status === "failed" && <RetryButton run={run} n={n} />}
       {n.blockedReason && <p className="note fail">{n.blockedReason}</p>}
@@ -33,23 +23,6 @@ export function NodePanel({ n, run, onClose, onOpenItem }: { n: GNode; run: stri
         </p>
       )}
       {n.costUsd > 0 && <p className="muted mono">Spent {usd(n.costUsd)}</p>}
-
-      {n.items && (
-        <section>
-          <h3>Items</h3>
-          <ul className="items">
-            {n.items.map((i) => (
-              <li key={i.key}>
-                <button type="button" className="row" onClick={() => onOpenItem(i.key)}>
-                  <span className={`dot tone-${statusOf(i.status).tone}`} aria-hidden="true" />
-                  <span>{i.label}</span>
-                  <span className="muted">{statusOf(i.status).label}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
 
       {n.versions.length > 0 && <VersionTree n={n} run={run} latest={latest} />}
       {run && <Happened run={run} n={n} />}
@@ -64,7 +37,7 @@ const when = (at: string) => new Date(at).toLocaleString(undefined, { month: "sh
  * started with, every decision with what it was made on, and everything that
  * happened. Before any run, only the inputs the recipe asks for.
  */
-export function RunPanel({ graph, onClose }: { graph: RunGraph; onClose: () => void }) {
+export function RunPanel({ graph }: { graph: RunGraph }) {
   const at = graph.at ? `&at=${encodeURIComponent(graph.at)}` : "";
   const t = useLive<TraceView>(graph.run ? `/api/runs/${encodeURIComponent(graph.run)}/trace?all=1${at}` : undefined).data;
   const names = [...new Set([...Object.keys(graph.inputs), ...Object.keys(graph.given ?? {})])];
@@ -72,13 +45,6 @@ export function RunPanel({ graph, onClose }: { graph: RunGraph; onClose: () => v
   const title = graph.at ? graph.trail.at(-1)!.label : graph.run || graph.recipe;
   return (
     <aside className="panel" aria-label={`${title}: inputs, decisions and what happened`}>
-      <div className="panel-head">
-        <div>
-          <span className="eyebrow">{graph.at ? "One item" : graph.run ? "This run" : "Inputs"}</span>
-          <h2>{title}</h2>
-        </div>
-        <button type="button" className="icon" onClick={onClose} aria-label="Close">×</button>
-      </div>
       {graph.run && <p className="muted mono small">{graph.status} · spent {usd(graph.costUsd)}{decisions.length ? ` · ${decisions.length} decision${decisions.length === 1 ? "" : "s"}` : ""}</p>}
 
       <section>

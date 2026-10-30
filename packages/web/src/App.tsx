@@ -2,11 +2,10 @@
  * kriya in the browser. Home is the project's recipes, one card each in the
  * order the files were made; recipes that only run inside another sit folded
  * underneath. A recipe opens on its runs, with its graph and YAML one tab
- * over. A run opens as a live graph of its steps (Day 24, D-67): the recipe's
- * other runs on the left, the graph in the middle, a step's details on the
- * right. A for-each step opens in place, its items' steps a click away; an
- * item's own graph opens over the run. "Waiting for you" opens the inbox; a
- * waiting step opens its review screen.
+ * over. A run opens as a live graph of its steps (Day 24, D-67), the recipe's
+ * other runs on the left. Everything opens in place on the graph: a step's
+ * details, a for-each's items, an item's own graph, a review.
+ * "Waiting for you" opens the inbox; each entry goes to its run.
  *
  * Routes live in the hash: #/, #/recipe/<file>, #/run/<id>[/<item>],
  * #/inbox, #/review/<run>:<step>, #/library[/<name>].
@@ -16,9 +15,8 @@
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { answerTip, BASE, startRun, uploadFile, useLive, useLiveFlag, type Item, type ProjectFile, type ProjectCard, type Run, type RunGraph, type Recipe, type Shown, type Tips } from "./api";
-import { Graph, START, statusOf } from "./Graph";
+import { Graph, statusOf } from "./Graph";
 import { LibraryPage } from "./Library";
-import { NodePanel, RunPanel } from "./NodePanel";
 import { Screen } from "./Screen";
 
 type Route = { page: "project" } | { page: "recipe"; file: string } | { page: "run"; run?: string; at: string } | { page: "inbox" } | { page: "review"; id: string } | { page: "library"; name?: string };
@@ -131,8 +129,7 @@ export function App() {
       ) : runId ? (
         <div className="home">
           <SiblingRuns recipe={recipe} graph={graphId} runs={runs.data?.runs} current={runId} />
-          <RunView run={runId} at="" />
-          {route.page === "run" && route.at && <ItemModal run={runId} at={route.at} />}
+          <RunView run={runId} at={route.page === "run" ? (route.at ?? "") : ""} />
         </div>
       ) : (
         <ProjectHome recipes={recipes.data?.recipes} runs={runs.data?.runs} />
@@ -289,13 +286,11 @@ function RecipeView({ file, recipes, runs }: { file: string; recipes?: Recipe[];
   const [picked, setTab] = useState<"runs" | "graph" | "yaml">();
   const x = recipes?.find((y) => y.file === file);
   const g = useLive<RunGraph>(x?.graph ? `/api/recipes/${encodeURIComponent(x.graph)}/graph` : undefined);
-  const [selected, setSelected] = useState<string>();
-  useEffect(() => (setSelected(undefined), setTab(undefined)), [file]);
+  useEffect(() => setTab(undefined), [file]);
   if (!recipes) return <p className="muted pad">Loading…</p>;
   if (!x) return <p className="muted pad">There's no recipe {file} any more. <a href="#/">See the project</a>.</p>;
   const mine = x.graph ? (runs ?? []).filter((r) => r.recipe === x.graph) : [];
   const tab = !x.graph ? "yaml" : (picked ?? (mine.length ? "runs" : "graph"));
-  const node = g.data?.nodes.find((n) => n.id === selected);
   const tabs = [["runs", `Runs${mine.length ? ` (${mine.length})` : ""}`], ["graph", "Graph"], ["yaml", "YAML"]] as const;
   return (
     <section className="run-view">
@@ -362,20 +357,7 @@ function RecipeView({ file, recipes, runs }: { file: string; recipes?: Recipe[];
       ) : (
         <>
           <div className="run-body">
-            <Graph graph={g.data} {...(selected ? { selected } : {})} onSelect={setSelected} onOpenItem={() => {}} />
-            {selected === START && <RunPanel graph={g.data} onClose={() => setSelected(undefined)} />}
-            {node && (
-              <aside className="panel" aria-label={`Step ${node.name}`}>
-                <div className="panel-head">
-                  <div>
-                    <span className="eyebrow">{node.detail}</span>
-                    <h2>{node.name}</h2>
-                  </div>
-                  <button type="button" className="icon" onClick={() => setSelected(undefined)} aria-label="Close">×</button>
-                </div>
-                <p className="muted small">Not run yet. Its versions, checks and lock show up here once a run reaches it.</p>
-              </aside>
-            )}
+            <Graph graph={g.data} />
           </div>
           <Key />
         </>
@@ -388,29 +370,17 @@ function RecipeView({ file, recipes, runs }: { file: string; recipes?: Recipe[];
 function Key() {
   return (
     <p className="key muted">
-      <span className="legend legend-done">Done</span> <span className="legend legend-now">Now</span> <span className="legend legend-next">To come</span> · White: AI step · Amber: you decide · Grey: tool · Dashed arrow: goes back, with a limit
+      <span className="legend legend-done">Done</span> <span className="legend legend-now">Now</span> <span className="legend legend-next">To come</span> · Amber: you decide · Dashed arrow: goes back, with a limit
     </p>
   );
 }
 
-const graphUrl = (run: string, at: string) => `/api/runs/${encodeURIComponent(run)}/graph${at ? `?at=${encodeURIComponent(at)}` : ""}`;
-
-/** An item's step picked in an open for-each box (`per_shot[P3-04].pick`): its for-each item, and the step. */
-const itemOf = (key?: string) => (key?.includes("]") ? key.slice(0, key.lastIndexOf("]") + 1) : undefined);
+export const graphUrl = (run: string, at: string) => `/api/runs/${encodeURIComponent(run)}/graph${at ? `?at=${encodeURIComponent(at)}` : ""}`;
 
 function RunView({ run, at }: { run: string; at: string }) {
   const g = useLive<RunGraph>(graphUrl(run, at));
-  const [selected, setSelected] = useState<string>();
-  useEffect(() => setSelected(undefined), [run, at]);
-  // A step inside an item comes from that item's graph, fetched only while it's picked.
-  const inItem = itemOf(selected);
-  const item = useLive<RunGraph>(inItem ? graphUrl(run, inItem) : undefined);
-  const openItem = (key: string) => go(`/run/${encodeURIComponent(run)}/${encodeURIComponent(key)}`);
   if (g.error) return <p className="error pad">{g.error}</p>;
   if (!g.data) return <p className="muted pad">Loading…</p>;
-  const inner = inItem ? item.data?.nodes.find((n) => n.key === selected) : undefined;
-  // Which item it's in heads the panel: "P1-01 · You decide · 4 buttons".
-  const node = inner ? { ...inner, detail: `${/\[([^\]]+)\]$/.exec(inItem!)?.[1] ?? inItem} · ${inner.detail}` } : g.data.nodes.find((n) => n.id === selected);
   return (
     <section className="run-view">
       <div className="run-head">
@@ -425,29 +395,10 @@ function RunView({ run, at }: { run: string; at: string }) {
         <span className="muted mono">{statusOf(g.data.status).label === "done" ? "finished" : g.data.status} · {usd(g.data.costUsd)}</span>
       </div>
       <div className="run-body">
-        <Graph graph={g.data} {...(selected ? { selected } : {})} onSelect={setSelected} onOpenItem={openItem} />
-        {selected === START ? <RunPanel graph={g.data} onClose={() => setSelected(undefined)} /> : node && <NodePanel key={node.key} n={node} run={run} onClose={() => setSelected(undefined)} onOpenItem={openItem} />}
+        <Graph key={`${run}:${at}`} graph={g.data} />
       </div>
       <Key />
     </section>
-  );
-}
-
-/** One for-each item's own graph, over the run it's in: Esc, ×, the backdrop or the browser's back closes it. */
-function ItemModal({ run, at }: { run: string; at: string }) {
-  const close = () => go(`/run/${encodeURIComponent(run)}`);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-  });
-  return (
-    <div className="modal-backdrop" onClick={close}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={`${at} in ${run}`} onClick={(e) => e.stopPropagation()}>
-        <button type="button" className="icon modal-close" onClick={close} aria-label="Close">×</button>
-        <RunView run={run} at={at} />
-      </div>
-    </div>
   );
 }
 
@@ -462,7 +413,7 @@ function InboxPage() {
     <ul className="inbox">
       {inbox.data.items.map((item) => (
         <li key={item.id}>
-          <a className="card" href={`#/review/${encodeURIComponent(item.id)}`}>
+          <a className="card" href={`#/run/${encodeURIComponent(item.run)}`}>
             <span className="card-head">
               <span className="run-name">{item.run}</span>
               <b>{item.item ? `${item.item} · ` : ""}{item.title}</b>
@@ -563,10 +514,41 @@ export function Media({ shown }: { shown: Shown }) {
   if (m?.type.startsWith("image/")) return <img src={m.url} alt={`version ${shown.version}`} loading="lazy" />;
   if (m?.type.startsWith("audio/")) return <audio src={m.url} controls preload="none" />;
   if (m?.type.startsWith("video/")) return <video src={m.url} controls preload="metadata" />;
-  return <pre className="text">{typeof shown.value === "string" ? shown.value : JSON.stringify(shown.value, null, 2)}</pre>;
+  return typeof shown.value === "string" ? <pre className="text">{shown.value}</pre> : <Readable v={shown.value} />;
 }
 
-const fileUrl = (path: string) => `${BASE}api/file?path=${encodeURIComponent(path)}`;
+/** Structured data in words: lists as lists, records as label and value. A block of bare numbers (a box in the frame) is left out. */
+function Readable({ v }: { v: unknown }) {
+  if (Array.isArray(v)) {
+    return (
+      <ul className="readable">
+        {v.map((x, i) => (
+          <li key={i}>
+            <Readable v={x} />
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  if (v && typeof v === "object") {
+    const fields = Object.entries(v).filter(([, x]) => !(x && typeof x === "object" && !Array.isArray(x) && Object.values(x).every((n) => typeof n === "number")));
+    return (
+      <dl className="readable">
+        {fields.map(([k, x]) => (
+          <div key={k}>
+            <dt>{k.replace(/_/g, " ")}</dt>
+            <dd>
+              <Readable v={x} />
+            </dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+  return <span>{String(v ?? "")}</span>;
+}
+
+export const fileUrl = (path: string) => `${BASE}api/file?path=${encodeURIComponent(path)}`;
 
 /** Kinds of input that name a file in the project: picked from what's there, or sent from this device. */
 const FILE_KINDS = new Set(["image", "video", "audio"]);

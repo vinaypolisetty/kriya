@@ -102,7 +102,7 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 .run-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 16px 24px 0; }
 .trail { font-size: 16px; }
 .trail a { text-decoration: none; }
-.run-body { flex: 1; display: flex; min-height: 0; }
+.run-body { position: relative; flex: 1; display: flex; min-height: 0; }
 .key { font-size: 12px; padding: 0 24px 16px; margin: 0; }
 
 /* the graph */
@@ -261,8 +261,6 @@ button.icon { min-height: 32px; width: 32px; padding: 0; border: 0; font-size: 2
   .run-head { padding: 12px 16px 0; }
   .run-body { flex-direction: column; }
   .key { display: none; }
-  .panel { position: fixed; inset: 0; z-index: 20; flex: none; border: 0; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 24px rgba(28, 27, 25, 0.2); }
-  .panel .icon { width: 44px; min-height: 44px; font-size: 26px; }
   .inbox { padding: 16px; }
 }
 
@@ -408,15 +406,8 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--teal); c
 .step-list .item-thumb { display: none; }
 .step-list .item-steps { flex-wrap: wrap; }
 
-.modal-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(28, 27, 25, 0.45); display: flex; align-items: center; justify-content: center; padding: 32px; }
-.modal { position: relative; width: min(1200px, 100%); height: min(760px, 100%); display: flex; background: var(--bg); border-radius: 14px; box-shadow: 0 12px 48px rgba(28, 27, 25, 0.35); overflow: hidden; }
-.modal > .run-view { min-height: 0; }
-.modal-close { position: absolute; top: 10px; right: 12px; z-index: 5; }
 @media (max-width: 760px) {
-  .modal-backdrop { padding: 0; }
-  .modal { width: 100%; height: 100%; border-radius: 0; }
-}
-.modal .run-head { padding-right: 56px; }
+    }
 .beside .beside-rows { display: block; max-height: 420px; overflow-y: auto; }
 .beside-rows table { border-collapse: collapse; width: 100%; font-size: 14px; }
 .beside-rows th { position: sticky; top: 0; background: var(--panel); text-align: left; font-size: 12px; color: var(--muted); font-weight: normal; text-transform: capitalize; padding: 4px 6px; }
@@ -430,3 +421,53 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--teal); c
 .new-run-preview { width: 100%; max-height: 280px; border-radius: 8px; background: #000; object-fit: contain; }
 .new-run input[type="checkbox"] { width: 22px; height: 22px; min-height: 0; }
 .pad-x > button.primary:first-child { margin-bottom: 12px; }
+
+/* Everything opens in place: a box grows to what it holds and the graph makes room. */
+.box-inner { scroll-margin: 16px; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.box.fits .box-inner { flex: none; width: max-content; min-width: 216px; }
+.box.fits .box-hit { flex: none; }
+.box.open { z-index: 1; cursor: default; }
+.box.kind-item .box-hit { gap: 8px; }
+.decisions-line { display: flex; flex-wrap: wrap; gap: 2px 6px; font-size: 13px; color: var(--muted); }
+.decisions-line > span + span::before { content: "→"; margin-right: 6px; color: var(--muted); font-weight: 400; }
+.decisions-line .tone-done { color: var(--teal); }
+.decisions-line .tone-you { color: var(--amber-ink); font-weight: 600; }
+.decisions-line .tone-fail { color: var(--fail); }
+.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.choice { display: grid; gap: 6px; align-content: start; padding: 8px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+button.choice:hover:not(:disabled) { border-color: var(--teal); box-shadow: 0 0 0 2px var(--teal-soft); }
+.choice.on { border-color: var(--teal); box-shadow: 0 0 0 2px var(--teal); }
+.choice img, .choice video { display: block; width: 100%; border-radius: 6px; }
+.choice pre { margin: 0; white-space: pre-wrap; font: inherit; }
+.chosen { display: flex; justify-content: space-between; align-items: center; margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--teal-soft); color: var(--teal); font-weight: 600; }
+.not-right { display: grid; gap: 10px; }
+.box-picture { display: block; width: 320px; max-width: 100%; border-radius: 6px; }
+.graph .box:not(.start):not(.end) .box-hit, .step-list .box:not(.start) .box-hit { align-items: flex-start; text-align: left; }
+.graph .box-main, .graph .box-text { justify-content: flex-start; text-align: left; }
+.readable { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+ul.readable > li { padding: 8px 10px; border-radius: 8px; background: var(--bg); }
+dl.readable > div { display: grid; grid-template-columns: 72px 1fr; gap: 8px; }
+dl.readable dt { color: var(--muted); font-size: 13px; }
+dl.readable dd { margin: 0; }
+.flipbook { display: block; max-width: 100%; max-height: 360px; border-radius: 6px; }
+.show-all { position: absolute; right: 16px; top: 6px; z-index: 3; display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+.box.open .box-hit, .box.open .box-main, .box.open .box-text { align-items: flex-start; justify-content: flex-start; text-align: left; }
+.box.open .box-hit { height: auto; }
+.box-open { display: grid; gap: 10px; padding: 10px; border-top: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: auto; user-select: text; }
+.box-video { padding: 0 8px 8px; cursor: auto; }
+.box-video video, .box-video img { display: block; width: 320px; max-height: 240px; border-radius: 6px; background: #000; }
+.box .panel { flex: none; width: 460px; max-width: 100%; border: 0; padding: 0; background: none; overflow: visible; }
+.box-more summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.box-more[open] summary { margin-bottom: 8px; }
+.box .review.embedded { width: 720px; max-width: 100%; min-height: 0; margin: 0; padding: 0; }
+.box .review.embedded { display: grid; gap: 10px; }
+.box-open .item-rows { width: max-content; min-width: 600px; padding: 0; overflow: visible; }
+.item-row.open { background: var(--teal-soft); }
+.item-graph { list-style: none; padding: 4px 0 8px; }
+.graph-inner { overflow: visible; }
+.graph-inner .graph { background: var(--bg); border-radius: 8px; }
+@media (max-width: 760px) {
+  .box.fits .box-inner { width: auto; min-width: 0; }
+  .box .review.embedded, .box .panel, .box-video video, .box-video img { width: 100%; }
+  .box-open .item-rows { width: auto; min-width: 0; }
+}

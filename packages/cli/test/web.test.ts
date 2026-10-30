@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "@kriya/store";
@@ -153,7 +153,7 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       const shots = g.nodes.find((n) => n.id === "per_shot")!.items!;
       expect(shots.map((i) => [i.key, i.status])).toEqual([["per_shot[S1]", "awaiting_human"], ["per_shot[S2]", "awaiting_human"], ["per_shot[S3]", "awaiting_human"]]);
       // Each item carries its own steps, so the box can open them in place: the pick waits on you, the drawing is made.
-      expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].pick")).toEqual({ key: "per_shot[S1].pick", name: "Pick one panel", status: "awaiting_human", waitingOnYou: true });
+      expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].pick")).toEqual({ key: "per_shot[S1].pick", name: "Pick one panel", status: "awaiting_human", waitingOnYou: true, asksYou: true });
       expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].draw")!.waitingOnYou).toBe(false);
       const one = (await (await fetch(`${web.url}/api/runs/part/graph?at=${encodeURIComponent("per_shot[S2]")}`)).json()) as { recipe: string; trail: { label: string }[]; nodes: { key: string; status: string }[] };
       expect(one.recipe).toBe("shot_recipe");
@@ -489,6 +489,7 @@ describe("a new run from the browser", () => {
     const dir = mkdtempSync(join(tmpdir(), "kriya-web-"));
     await kriya(dir, "init", "fc", "--example", "funny-clips");
     const cwd = join(dir, "fc");
+    mkdirSync(join(cwd, "clips"), { recursive: true });
     writeFileSync(join(cwd, "clips", "fall.mp4"), "a clip (fake tools never open it)");
     const web = await startWeb(loadProject(cwd), { port: 0, io: { out: () => {}, err: () => {}, cwd } });
     try {
@@ -496,7 +497,7 @@ describe("a new run from the browser", () => {
       expect(files.files).toContainEqual(expect.objectContaining({ path: "clips/fall.mp4", type: "video" }));
 
       const bytes = readFileSync(join(cwd, "clips", "fall.mp4"));
-      const send = (name: string, body: Uint8Array) => fetch(`${web.url}/api/files?name=${encodeURIComponent(name)}`, { method: "POST", body }).then(async (r) => ({ status: r.status, body: (await r.json()) as { path?: string; error?: string } }));
+      const send = (name: string, body: BodyInit) => fetch(`${web.url}/api/files?name=${encodeURIComponent(name)}`, { method: "POST", body }).then(async (r) => ({ status: r.status, body: (await r.json()) as { path?: string; error?: string } }));
       expect((await send("my fall.mp4", bytes)).body.path).toBe("uploads/my_fall.mp4");
       expect((await send("my fall.mp4", bytes)).body.path).toBe("uploads/my_fall.mp4"); // the same file again: saved once
       expect((await send("my fall.mp4", new Uint8Array([1, 2, 3]))).body.path).toBe("uploads/my_fall-2.mp4");
