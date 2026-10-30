@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "@kriya/store";
@@ -489,6 +489,7 @@ describe("a new run from the browser", () => {
     const dir = mkdtempSync(join(tmpdir(), "kriya-web-"));
     await kriya(dir, "init", "fc", "--example", "funny-clips");
     const cwd = join(dir, "fc");
+    mkdirSync(join(cwd, "clips"), { recursive: true });
     writeFileSync(join(cwd, "clips", "fall.mp4"), "a clip (fake tools never open it)");
     const web = await startWeb(loadProject(cwd), { port: 0, io: { out: () => {}, err: () => {}, cwd } });
     try {
