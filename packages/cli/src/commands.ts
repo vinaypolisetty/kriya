@@ -151,19 +151,18 @@ async function run(args: string[], io: IO): Promise<number> {
   const project = checkedProject(io);
   const recipe = positionals[0];
   if (!recipe) throw new UserError(`say which recipe to run: kriya run <recipe> (you have: ${project.graphs.map((g) => g.graph).join(", ")})`);
-  const graph = findGraph(project.graphs, recipe);
-  if (!graph) throw new UserError(`there's no recipe '${recipe}' (you have: ${project.graphs.map((g) => g.graph).join(", ")})`);
 
-  const inputs = parseInputs(values.input ?? [], graph.inputs, io.cwd, recipe);
+  const raw: Record<string, string> = {};
+  for (const pair of values.input ?? []) {
+    const eq = pair.indexOf("=");
+    if (eq < 1) throw new UserError(`--input needs name=value, got '${pair}'`);
+    const value = pair.slice(eq + 1);
+    raw[pair.slice(0, eq)] = value.startsWith("@") ? readFileSync(resolve(io.cwd, value.slice(1)), "utf8") : value;
+  }
   const store = openStore(join(project.root, ".kriya"));
   try {
-    const runs = store.events.runs();
-    const id = values.id ?? `${graph.graph}-${runs.filter((r) => r.startsWith(`${graph.graph}-`)).length + 1}`;
-    if (runs.includes(id)) throw new UserError(`there's already a run called '${id}'`);
-    const rec = Recorder.start(store.events, id);
-    const { s, jobs } = scheduler(project, graph.graph, rec, store);
-    s.start(releaseOf(project.graphs, graph.graph), inputs, project.settings.context);
-    io.out(`✓ Started ${id} (${graph.graph})`);
+    const { id, rec, s, jobs } = startRun(project, store, recipe, raw, values.id, (m) => `--input ${m}=…`);
+    io.out(`✓ Started ${id} (${rec.state.graph})`);
     await drive(s, jobs, io);
     report(io, rec.state, s.inbox());
     return 0;
@@ -172,26 +171,39 @@ async function run(args: string[], io: IO): Promise<number> {
   }
 }
 
-function parseInputs(pairs: string[], declared: Record<string, string>, cwd: string, recipe: string): Record<string, unknown> {
+/**
+ * Starts a run of a recipe with its inputs as typed (`kriya run`, and New run in the browser): each is read as
+ * the type the recipe declares, every one is needed, and the run is named `<recipe>-<n>` unless given a name.
+ * Nothing runs yet: the caller drives it. `ask` says how to give a missing input (`--input video=…`).
+ */
+export function startRun(project: Project, store: Store, recipe: string, raw: Record<string, string>, name?: string, ask: (input: string) => string = (m) => m) {
+  const graph = findGraph(project.graphs, recipe);
+  if (!graph) throw new UserError(`there's no recipe '${recipe}' (you have: ${project.graphs.map((g) => g.graph).join(", ")})`);
+  const inputs = readInputs(raw, graph.inputs, recipe, ask);
+  const runs = store.events.runs();
+  const id = name ?? `${graph.graph}-${runs.filter((r) => r.startsWith(`${graph.graph}-`)).length + 1}`;
+  if (runs.includes(id)) throw new UserError(`there's already a run called '${id}'`);
+  const rec = Recorder.start(store.events, id);
+  const { s, jobs } = scheduler(project, graph.graph, rec, store);
+  s.start(releaseOf(project.graphs, graph.graph), inputs, project.settings.context);
+  return { id, rec, s, jobs };
+}
+
+function readInputs(raw: Record<string, string>, declared: Record<string, string>, recipe: string, ask: (input: string) => string): Record<string, unknown> {
   const inputs: Record<string, unknown> = {};
-  for (const pair of pairs) {
-    const eq = pair.indexOf("=");
-    if (eq < 1) throw new UserError(`--input needs name=value, got '${pair}'`);
-    const name = pair.slice(0, eq);
-    let raw = pair.slice(eq + 1);
+  for (const [name, value] of Object.entries(raw)) {
     const type = declared[name];
     if (!type) throw new UserError(`'${recipe}' has no input '${name}' (it takes: ${Object.keys(declared).join(", ") || "none"})`);
-    if (raw.startsWith("@")) raw = readFileSync(resolve(cwd, raw.slice(1)), "utf8");
     if (type === "number") {
-      if (Number.isNaN(Number(raw))) throw new UserError(`input '${name}' is a number, got '${raw}'`);
-      inputs[name] = Number(raw);
-    } else if (type === "boolean") inputs[name] = raw === "true" || raw === "yes";
+      if (value.trim() === "" || Number.isNaN(Number(value))) throw new UserError(`input '${name}' is a number, got '${value}'`);
+      inputs[name] = Number(value);
+    } else if (type === "boolean") inputs[name] = value === "true" || value === "yes";
     else if (type === "json" || type.startsWith("list<")) {
-      try { inputs[name] = JSON.parse(raw); } catch { throw new UserError(`input '${name}' should be JSON, got '${raw}'`); }
-    } else inputs[name] = raw;
+      try { inputs[name] = JSON.parse(value); } catch { throw new UserError(`input '${name}' should be JSON, got '${value}'`); }
+    } else inputs[name] = value;
   }
   const missing = Object.keys(declared).filter((k) => !(k in inputs));
-  if (missing.length) throw new UserError(`'${recipe}' needs ${missing.map((m) => `--input ${m}=…`).join(" ")}`);
+  if (missing.length) throw new UserError(`'${recipe}' needs ${missing.map(ask).join(" ")}`);
   return inputs;
 }
 

@@ -13,6 +13,11 @@
  *                          `all` gives every line in the scope and each decision with what it was made on
  *   GET  /api/inbox        what's waiting on you, with each candidate's checks and the suggested fix
  *   GET  /api/media/<sha>  an image, clip or voice line from the blob store
+ *   POST /api/runs         start a run, like `kriya run`: { recipe, inputs: { name: "as typed" }, id? }; a file
+ *                          input must be in the project; answers { id } at once, the run carries on in the background
+ *   GET  /api/files        the project's pictures, clips and sounds, for an input to pick from
+ *   GET  /api/file?path=   one of those files, to preview before a run uses it
+ *   POST /api/files?name=  save the request's bytes in the project's uploads/ folder; answers { path }
  *   POST /api/decide       press a button: { run, key, action, selection?, note?, region? }
  *   POST /api/retry        try a failed step again: { run, key, note?, leaveOut? } (a for-each step retries its
  *                          failed items); a note or inputs left out try it with a change (Q-24)
@@ -55,11 +60,11 @@ import { fileURLToPath } from "node:url";
 import { describeError, sniff, suggestFix, type FixRule } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
 import { findGraph, type RunState } from "@kriya/engine";
-import { allInbox, drive, openRun, recipeId, type Entry, type IO } from "./commands.js";
+import { allInbox, drive, openRun, recipeId, startRun, type Entry, type IO } from "./commands.js";
 import { answerTip, projectTips } from "./kb.js";
 import { traceView } from "./trace.js";
 import { libraryAssets, MEDIA } from "./library.js";
-import { loadProject, type Project } from "./project.js";
+import { loadProject, UserError, type Project } from "./project.js";
 
 /** The built web app. */
 const APP = fileURLToPath(new URL("../../web/dist", import.meta.url));
@@ -146,7 +151,7 @@ export async function startWeb(target: Project | Projects, opts: WebOptions): Pr
 
   const server: Server = createServer((req, res) => {
     handle(req, res).catch((e: unknown) => {
-      const status = e instanceof BadRequest ? 400 : e instanceof Error && !(e instanceof TypeError) ? 409 : 500;
+      const status = e instanceof BadRequest || e instanceof UserError ? 400 : e instanceof Error && !(e instanceof TypeError) ? 409 : 500;
       json(res, status, { error: e instanceof Error ? e.message : String(e) });
       if (status === 500) opts.io.err(`! ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
     });
@@ -483,6 +488,69 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     }));
   };
 
+  /** Starts a run from the browser, like `kriya run`; it carries on in the background, and its name comes back at once. */
+  const newRun = async (body: { recipe?: unknown; inputs?: unknown; id?: unknown }) => {
+    const { recipe, inputs = {}, id } = body;
+    if (typeof recipe !== "string") throw new BadRequest('say which recipe to run: { recipe, inputs: { video: "clips/fall.mp4" } }');
+    if (!inputs || typeof inputs !== "object" || Array.isArray(inputs) || Object.values(inputs).some((v) => typeof v !== "string")) {
+      throw new BadRequest('give each input as words, the way you would type it after --input: { recipe, inputs: { video: "clips/fall.mp4" } }');
+    }
+    if (id !== undefined && (typeof id !== "string" || !/^[\w.-]+$/.test(id))) throw new BadRequest("a run's name is letters, numbers, dots and dashes, like fall-take-2");
+    const started = queue.then(() => {
+      const project = current();
+      const graph = findGraph(project.graphs, recipe);
+      for (const [name, value] of Object.entries(inputs as Record<string, string>)) {
+        if (graph && FILE_INPUT.has(graph.inputs[name] ?? "") && !inProject(project, value)) {
+          throw new BadRequest(`input '${name}' should be a file in the project, like clips/fall.mp4; there's no '${value}'`);
+        }
+      }
+      return startRun(project, store, recipe, inputs as Record<string, string>, id as string | undefined, (m) => `'${m}'`);
+    });
+    queue = started.then(
+      ({ id, s, jobs }) => {
+        busy.add(id);
+        return drive(s, jobs, quiet)
+          .catch((e) => opts.io.err(`! ${id}: ${describeError(e)}`))
+          .finally(() => busy.delete(id));
+      },
+      () => undefined,
+    );
+    return (await started).id;
+  };
+
+  /** The project's pictures, clips and sounds, for an input to pick from (folders starting with a dot left out). */
+  const projectFiles = () => {
+    const root = current().root;
+    const found: { path: string; type: string; bytes: number }[] = [];
+    const walk = (dir: string, depth: number) => {
+      for (const d of readdirSync(dir, { withFileTypes: true })) {
+        if (d.name.startsWith(".") || d.name === "node_modules") continue;
+        const full = join(dir, d.name);
+        if (d.isDirectory() && depth < 4) walk(full, depth + 1);
+        else if (d.isFile() && MEDIA.test(d.name) && found.length < 1000) found.push({ path: relative(root, full), type: kindOf(d.name), bytes: statSync(full).size });
+      }
+    };
+    walk(root, 0);
+    return found.sort((a, b) => a.path.localeCompare(b.path));
+  };
+
+  /** A file sent from the browser, saved in the project's uploads/ folder; the same file twice is saved once. */
+  const upload = async (req: IncomingMessage, name: string | null) => {
+    const base = (name ?? "").split(/[\\/]/).pop()!.replace(/[^\w.-]+/g, "_");
+    if (!MEDIA.test(base)) throw new BadRequest("send a picture, clip or sound (png, jpg, webp, gif, mp4, mov, wav, mp3, m4a, ogg, flac) with its name: POST /api/files?name=fall.mp4");
+    const bytes = await readBytes(req, MAX_UPLOAD);
+    const dir = join(current().root, "uploads");
+    mkdirSync(dir, { recursive: true });
+    const dot = base.lastIndexOf(".");
+    for (let n = 1; ; n++) {
+      const file = n === 1 ? base : `${base.slice(0, dot)}-${n}${base.slice(dot)}`;
+      const path = join(dir, file);
+      if (existsSync(path) && !readFileSync(path).equals(bytes)) continue;
+      if (!existsSync(path)) writeFileSync(path, bytes);
+      return { path: `uploads/${file}`, type: kindOf(file), bytes: bytes.length };
+    }
+  };
+
   const decide = async (body: { run?: unknown; key?: unknown; action?: unknown; selection?: unknown; note?: unknown; region?: unknown }) => {
     const { run, key, action } = body;
     if (typeof run !== "string" || typeof key !== "string" || typeof action !== "string") throw new BadRequest("say which run, step and button: { run, key, action }");
@@ -563,6 +631,18 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     const recipe = /^\/api\/recipes\/([^/]+)\/graph$/.exec(url.pathname);
     if (req.method === "GET" && recipe) return json(res, 200, recipeGraph(decodeURIComponent(recipe[1]!)));
     if (req.method === "GET" && url.pathname === "/api/library") return json(res, 200, { project: first.settings.name, kinds: first.settings.kinds, entities: library() });
+    if (req.method === "POST" && url.pathname === "/api/runs") return json(res, 200, { id: await newRun(JSON.parse((await readBody(req)) || "{}")) });
+    if (req.method === "GET" && url.pathname === "/api/files") return json(res, 200, { files: projectFiles() });
+    if (req.method === "GET" && url.pathname === "/api/file") {
+      const path = url.searchParams.get("path") ?? "";
+      const project = current();
+      if (!MEDIA.test(path) || !inProject(project, path)) throw new BadRequest(`there's no picture, clip or sound '${path}' in the project`);
+      const bytes = readFileSync(resolve(project.root, path));
+      res.writeHead(200, { "content-type": sniff(bytes), "cache-control": "no-cache" });
+      res.end(bytes);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/files") return json(res, 200, await upload(req, url.searchParams.get("name")));
     if (req.method === "POST" && url.pathname === "/api/decide") {
       await decide(JSON.parse((await readBody(req)) || "{}"));
       return json(res, 200, { items: await inbox() });
@@ -788,6 +868,34 @@ function readBody(req: IncomingMessage): Promise<string> {
     let s = "";
     req.on("data", (d) => (s += d));
     req.on("end", () => ok(s));
+    req.on("error", fail);
+  });
+}
+
+/** Inputs that name a file in the project: a run's video, a reference picture, a track. */
+const FILE_INPUT = new Set(["image", "video", "audio"]);
+/** The biggest file the browser can send: a few minutes of phone video. */
+const MAX_UPLOAD = 500 * 1024 * 1024;
+
+const kindOf = (file: string) => (/\.(mp4|mov)$/i.test(file) ? "video" : /\.(wav|mp3|m4a|ogg|flac)$/i.test(file) ? "audio" : "image");
+
+function inProject(project: Project, path: string): boolean {
+  const full = resolve(project.root, path);
+  return full.startsWith(project.root + "/") && existsSync(full);
+}
+
+function readBytes(req: IncomingMessage, max: number): Promise<Buffer> {
+  return new Promise((ok, fail) => {
+    const parts: Buffer[] = [];
+    let size = 0;
+    req.on("data", (d: Buffer) => {
+      size += d.length;
+      if (size > max) {
+        req.destroy();
+        fail(new BadRequest(`that file is over ${Math.round(max / 1024 / 1024)} MB; trim it or compress it first`));
+      } else parts.push(d);
+    });
+    req.on("end", () => ok(Buffer.concat(parts)));
     req.on("error", fail);
   });
 }

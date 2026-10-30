@@ -14,8 +14,8 @@
  * Started in a folder of projects, home is a card per project; each opens at
  * /p/<folder>/, and everything above happens inside it.
  */
-import { useEffect, useState } from "react";
-import { answerTip, BASE, useLive, useLiveFlag, type Item, type ProjectCard, type Run, type RunGraph, type Recipe, type Shown, type Tips } from "./api";
+import { useEffect, useState, type FormEvent } from "react";
+import { answerTip, BASE, startRun, uploadFile, useLive, useLiveFlag, type Item, type ProjectFile, type ProjectCard, type Run, type RunGraph, type Recipe, type Shown, type Tips } from "./api";
 import { Graph, START, statusOf } from "./Graph";
 import { LibraryPage } from "./Library";
 import { NodePanel, RunPanel } from "./NodePanel";
@@ -321,6 +321,7 @@ function RecipeView({ file, recipes, runs }: { file: string; recipes?: Recipe[];
       {x.description && <p className="muted pad-x">{x.description}</p>}
       {tab === "runs" ? (
         <div className="pad-x">
+          {g.data && <NewRun recipe={x.graph!} inputs={g.data.inputs} first={mine.length === 0} />}
           {mine.length > 0 ? (
             <ul className="run-list">
               {mine.map((r) => (
@@ -332,9 +333,6 @@ function RecipeView({ file, recipes, runs }: { file: string; recipes?: Recipe[];
           ) : (
             <p className="muted">No runs yet.</p>
           )}
-          <p className="muted small">
-            Start {mine.length ? "another" : "one"}: <code>kriya run {x.graph}</code>
-          </p>
         </div>
       ) : tab === "yaml" ? (
         <div className="pad-x">
@@ -566,4 +564,92 @@ export function Media({ shown }: { shown: Shown }) {
   if (m?.type.startsWith("audio/")) return <audio src={m.url} controls preload="none" />;
   if (m?.type.startsWith("video/")) return <video src={m.url} controls preload="metadata" />;
   return <pre className="text">{typeof shown.value === "string" ? shown.value : JSON.stringify(shown.value, null, 2)}</pre>;
+}
+
+const fileUrl = (path: string) => `${BASE}api/file?path=${encodeURIComponent(path)}`;
+
+/** Kinds of input that name a file in the project: picked from what's there, or sent from this device. */
+const FILE_KINDS = new Set(["image", "video", "audio"]);
+
+/** New run: a field for each of the recipe's inputs, then it starts and you're taken to it. */
+function NewRun({ recipe, inputs, first }: { recipe: string; inputs: Record<string, string>; first: boolean }) {
+  const [open, setOpen] = useState(first);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [state, setState] = useState<"idle" | "sending" | "uploading" | string>("idle");
+  const files = useLive<{ files: ProjectFile[] }>(open && Object.values(inputs).some((t) => FILE_KINDS.has(t)) ? "/api/files" : undefined);
+  const [sent, setSent] = useState<ProjectFile[]>([]);
+  const set = (name: string, v: string) => setValues((x) => ({ ...x, [name]: v }));
+  const names = Object.keys(inputs);
+  const ready = names.every((n) => (values[n] ?? "").trim() !== "" || inputs[n] === "boolean");
+
+  if (!open) return <button type="button" className="primary" onClick={() => setOpen(true)}>New run</button>;
+  const send = async (name: string, file: File | undefined) => {
+    if (!file) return;
+    setState("uploading");
+    try {
+      const f = await uploadFile(file);
+      setSent((x) => [...x.filter((y) => y.path !== f.path), f]);
+      set(name, f.path);
+      setState("idle");
+    } catch (e) {
+      setState(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const start = async (e: FormEvent) => {
+    e.preventDefault();
+    setState("sending");
+    try {
+      const given = Object.fromEntries(names.map((n) => [n, inputs[n] === "boolean" ? (values[n] === "true" ? "true" : "false") : values[n]!.trim()]));
+      const id = await startRun(recipe, given);
+      location.hash = `#/run/${encodeURIComponent(id)}`;
+    } catch (e) {
+      setState(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <form className="new-run" onSubmit={(e) => void start(e)}>
+      <h3>New run</h3>
+      {names.length === 0 && <p className="muted small">This recipe takes no inputs.</p>}
+      {names.map((n) => {
+        const type = inputs[n]!;
+        const v = values[n] ?? "";
+        if (FILE_KINDS.has(type)) {
+          const choices = [...(files.data?.files ?? []), ...sent.filter((f) => !files.data?.files.some((g) => g.path === f.path))].filter((f) => f.type === type);
+          return (
+            <div key={n} className="field">
+              <span>{n === type ? n : `${n} · ${type}`}</span>
+              <select value={v} onChange={(e) => set(n, e.target.value)}>
+                <option value="">{choices.length ? `Pick a ${type} from the project…` : `No ${type} in the project yet`}</option>
+                {choices.map((f) => (
+                  <option key={f.path} value={f.path}>{f.path} · {(f.bytes / 1024 / 1024).toFixed(1)} MB</option>
+                ))}
+              </select>
+              <label className="upload">
+                {state === "uploading" ? "Sending…" : `Or send one from this device`}
+                <input type="file" accept={`${type}/*`} disabled={state === "uploading"} onChange={(e) => void send(n, e.target.files?.[0])} />
+              </label>
+              {v && type === "video" && <video className="new-run-preview" src={fileUrl(v)} controls playsInline />}
+              {v && type === "image" && <img className="new-run-preview" src={fileUrl(v)} alt="" />}
+            </div>
+          );
+        }
+        return (
+          <label key={n} className="field">
+            <span>{n === type ? n : `${n} · ${type}`}</span>
+            {type === "boolean" ? (
+              <input type="checkbox" checked={v === "true"} onChange={(e) => set(n, e.target.checked ? "true" : "false")} />
+            ) : type === "json" || type.startsWith("list<") ? (
+              <textarea rows={4} value={v} onChange={(e) => set(n, e.target.value)} placeholder={type.startsWith("list<") ? '["first", "second"]' : '{ "key": "value" }'} />
+            ) : (
+              <input type={type === "number" ? "number" : "text"} value={v} onChange={(e) => set(n, e.target.value)} />
+            )}
+          </label>
+        );
+      })}
+      <button type="submit" className="primary" disabled={!ready || state === "sending" || state === "uploading"}>
+        {state === "sending" ? "Starting…" : "Start the run"}
+      </button>
+      {!["idle", "sending", "uploading"].includes(state) && <p className="note fail">{state}</p>}
+    </form>
+  );
 }

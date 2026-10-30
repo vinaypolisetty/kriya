@@ -94,6 +94,13 @@ export type DecisionTrace = {
 };
 export type TraceView = { lines: TraceLine[]; taken: number[]; answers: Record<string, { action: string; by: "human" | "auto" }>; decisions?: DecisionTrace[] };
 
+/** A picture, clip or sound in the project, for a run's input. */
+export type ProjectFile = { path: string; type: "image" | "video" | "audio"; bytes: number };
+/** Starts a run of a recipe; its name comes back at once and the run carries on in the background. */
+export const startRun = (recipe: string, inputs: Record<string, string>) => call<{ id: string }>("/api/runs", { method: "POST", body: JSON.stringify({ recipe, inputs }) }).then((r) => r.id);
+/** Saves a file from this device in the project's uploads/ folder. */
+export const uploadFile = (file: File) => call<ProjectFile>(`/api/files?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+
 export const decide = (d: Decision) => call<{ items: Item[] }>("/api/decide", { method: "POST", body: JSON.stringify(d) }).then((r) => r.items);
 
 /** Whether the server's event stream is connected; every live view refetches when it says something changed. */

@@ -483,3 +483,36 @@ describe("kriya web in a folder of projects", () => {
     }
   });
 });
+
+describe("a new run from the browser", () => {
+  it("lists the project's files, saves an upload once, starts a run on it, and refuses plainly", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-web-"));
+    await kriya(dir, "init", "fc", "--example", "funny-clips");
+    const cwd = join(dir, "fc");
+    writeFileSync(join(cwd, "clips", "fall.mp4"), "a clip (fake tools never open it)");
+    const web = await startWeb(loadProject(cwd), { port: 0, io: { out: () => {}, err: () => {}, cwd } });
+    try {
+      const files = (await (await fetch(`${web.url}/api/files`)).json()) as { files: { path: string; type: string }[] };
+      expect(files.files).toContainEqual(expect.objectContaining({ path: "clips/fall.mp4", type: "video" }));
+
+      const bytes = readFileSync(join(cwd, "clips", "fall.mp4"));
+      const send = (name: string, body: Uint8Array) => fetch(`${web.url}/api/files?name=${encodeURIComponent(name)}`, { method: "POST", body }).then(async (r) => ({ status: r.status, body: (await r.json()) as { path?: string; error?: string } }));
+      expect((await send("my fall.mp4", bytes)).body.path).toBe("uploads/my_fall.mp4");
+      expect((await send("my fall.mp4", bytes)).body.path).toBe("uploads/my_fall.mp4"); // the same file again: saved once
+      expect((await send("my fall.mp4", new Uint8Array([1, 2, 3]))).body.path).toBe("uploads/my_fall-2.mp4");
+      expect((await send("notes.txt", bytes)).status).toBe(400);
+
+      const start = (body: unknown) => fetch(`${web.url}/api/runs`, { method: "POST", body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: (await r.json()) as { id?: string; error?: string } }));
+      expect(await start({ recipe: "clip", inputs: { video: "uploads/my_fall.mp4" } })).toEqual({ status: 200, body: { id: "clip-1" } });
+      for (let i = 0; i < 50 && !(await get(web, "/api/inbox")).body.items.some((x) => x.id === "clip-1:check_moments"); i++) await new Promise((r) => setTimeout(r, 100));
+      expect((await get(web, "/api/inbox")).body.items.map((x) => x.id)).toContain("clip-1:check_moments");
+
+      expect((await start({ recipe: "clip", inputs: {} })).body.error).toMatch(/needs 'video'/);
+      expect((await start({ recipe: "clip", inputs: { video: "clips/nope.mp4" } })).body.error).toMatch(/there's no 'clips\/nope.mp4'/);
+      expect((await start({ recipe: "clp", inputs: {} })).body.error).toMatch(/no recipe 'clp'/);
+      expect((await start({ recipe: "clip", inputs: { video: "uploads/my_fall.mp4" }, id: "clip-1" })).body.error).toMatch(/already a run called 'clip-1'/);
+    } finally {
+      await web.close();
+    }
+  });
+});
