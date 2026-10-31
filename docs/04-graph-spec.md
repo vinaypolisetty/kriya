@@ -51,8 +51,10 @@ A reference names where a value comes from:
 | `series.style`, `story.pages`, `project.rules` | Locked context inherited from a higher level |
 | `inputs.part_no` | A graph input |
 | `pick.note`, `pick.selected` | What a human submitted on a screen |
+| `pick.prompt` | The prompt the provider got for the version that screen chose ([D-85](17-decisions.md)) |
+| `so_far.items`, `so_far.panel` | In a recipe run by a `one_at_a_time` for-each: the items up to and including this one, and each output of the recipe for them ([D-85](17-decisions.md)) |
 
-The validator checks that the root of a reference is a node in the graph or a known built-in scope (`item`, `inputs`, `series`, `story`, `part`, `project`, `assets`, `run`).
+The validator checks that the root of a reference is a node in the graph or a known built-in scope (`item`, `inputs`, `series`, `story`, `part`, `project`, `assets`, `run`, `so_far`).
 
 ## Nodes
 
@@ -84,6 +86,7 @@ Unknown fields are **errors** (schemas are strict), so typos don't pass silently
 | `capability` | — | `domain.action`, e.g. `image.generate`, `image.edit`, `video.from_image`, `audio.speech`, `audio.music`, `llm.write`, `llm.vision` |
 | `model` | project default | Pinned provider model, overrides the project default |
 | `prompt` | — | Template; `{{ref}}` placeholders are references |
+| `send` | — | Instead of a `prompt`: a reference whose text goes to the model word for word, e.g. `send: ok_picture.selected`, what a person just said ok to. Nothing is added but the line naming attached images. For a voice, its `Say:`, `How:` and `Voice:` lines are the words, the style and the voice. Not on `llm.*` steps ([D-85](17-decisions.md)) |
 | `uses` | `[]` | References to resolve into the call (text, images, audio) |
 | `options` | 1 | Number of automatic candidates. Claude steps tell each one which take it is, so they differ ([D-81](17-decisions.md)) |
 | `context` | `full` | See [06-context-and-assets.md](06-context-and-assets.md) |
@@ -124,7 +127,7 @@ Agents may only call the tools listed. Each turn is recorded. (Decision: explici
   out: { reel: video, seconds: number }
 ```
 
-A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`), and for cutting into a video you already have (D-80): `extract_frames` (`video`, `every` seconds, `width`; fills `frames: list<image>`, `times`, `seconds`), `stills` (`video`, `items` with a time `t` each; adds a full-size `frame` to each), `attach` (`items`, plus any values to copy onto each item, so a for-each item carries what it needs), `first` (`list`; the list's first entry, D-82) and `insert_caricatures` (`video`, `moments`, `caricatures`, `layouts`, `subjects`, `captions`, `hold`, and optionally `flipbooks`, `beat`).
+A tool step takes `uses` like a model step (D-62). Built-in tools: `crop` (refines an image step; the region marked on the screen), `compress` (`video`, `max_mb`; fills `mb` and `seconds` if declared) `assemble_reel` (`shots`, `lines`, `panels`, `clips`, `voices`, `hook`, `music`, `title`, `max_mb`), and for cutting into a video you already have (D-80): `extract_frames` (`video`, `every` seconds, `width`; fills `frames: list<image>`, `times`, `seconds`), `stills` (`video`, `items` with a time `t` each; adds a full-size `frame` to each), `attach` (`items`, plus any values to copy onto each item, so a for-each item carries what it needs), `first` (`list`; the list's first entry, D-82) and `insert_caricatures` (`video`, `moments`, `caricatures`, `layouts`, `subjects`, `captions`, `hold`, and optionally `flipbooks`, `beat`). For `assemble_reel`, `voices` is one flat list matched to `lines` by id, or one list per shot matched to each shot's own lines, and `draft: true` is for looking, not posting: a fast encode, no end card, no Instagram copy.
 
 ### `screen`: a UI action (human decision)
 
@@ -194,6 +197,8 @@ The new version records its parent (what the reviewing screen last selected, els
 
 The executor gets `parent` (the version it starts from) and `instruction`. The same two fields drive `replay_change`, which re-applies a version's instruction onto other items ("the same gamcha fix on every shot with Bheem").
 
+A refining `image.generate` step is a new drawing, not an edit: it lands as the next version, but the picture it replaces isn't sent to the model.
+
 ### `map`: run a graph once per item
 
 ```yaml
@@ -209,6 +214,20 @@ The executor gets `parent` (the version it starts from) and `instruction`. The s
 The child graph sees the item as `item`. Child instances are keyed by `item.<key>` so they survive list regeneration: the steps of shot P3-04 are `per_shot[P3-04].draw`, `per_shot[P3-04].pick`, …. Keys use letters, digits, `-` and `_`, and must be unique in the list.
 
 Each item moves on as soon as its own steps finish. The map step finishes when **every** item has; if any item didn't finish, the map fails and names the items, so nothing downstream runs on a partial set.
+
+**One at a time** ([D-85](17-decisions.md)): with `one_at_a_time: true` the next item starts only when this one ends, in list order, and the items to come haven't started.
+
+```yaml
+- id: per_shot
+  kind: map
+  over: shot_list.shots
+  graph: shot_by_shot
+  one_at_a_time: true
+```
+
+- The recipe it runs can read the items so far with `so_far.items` and `so_far.<output>`, this item included, in the same shape as the map's output below. A step that reads them doesn't go stale when an earlier item changes: it was a look at that moment.
+- A failed item stops the line. Trying it again carries on from there, and nothing already done asks again.
+- An arrow back into the for-each (one with `max_loops`) walks its items again: each item's last review, a screen with an arrow to END, asks again. Nothing is remade unless you ask.
 
 **What later steps see** ([D-41](17-decisions.md)): for each output the child graph declares, one list in the order of the source list, with `null` where an item produced nothing. With `shot_recipe`'s `outputs: { panel, clip }`:
 
@@ -284,13 +303,15 @@ Implemented in `validate.ts`. Errors block publishing; warnings don't.
 | Duplicate graph or node ids | error |
 | Edge endpoints must be nodes (with "did you mean") | error |
 | `map` / `subgraph` must point at an existing graph; a graph can't map over itself | error |
+| `so_far` needs a for-each with `one_at_a_time: true`, and reads `items` or one of the recipe's outputs | error |
+| `send` can't sit beside a `prompt`, or on an `llm.*` step | error |
 | A graph a `map` runs has one input, `item`; any other input it declares would always be empty | error |
 | References in `uses`, `show`, `beside`, `{{prompt}}`, `over` and `outputs` must start at a step, a built-in scope (`item`, `inputs`, `run`, `assets`) or an inherited level; a known level that isn't inherited gets "add inherits: [series]" | error |
 | Field types must be primitives or declared types | error |
 | Conditions must parse | error |
 | `action == 'x'` on an edge from a screen must name one of its buttons | error |
 | `result` only on an edge from one model, agent or tool step that makes a single candidate | error |
-| A screen that `show`s a step with no `locks: true` button | warning |
+| A screen that `show`s a step with no `locks: true` button, unless a step `send`s from it | warning |
 | Every cycle must pass through an edge with `max_loops` | error |
 | There must be at least one start node | error |
 | A screen button that no edge handles | warning |

@@ -1,0 +1,253 @@
+# One shot of episode_by_shot: picture, clip if marked, voices, then the whole movie so far.
+# Every redo is the same conversation: say what's wrong, Claude writes the exact prompt, you read
+# it, and nothing goes to a paid model until you press Send it. `send:` sends those words as they are.
+graph: shot_by_shot
+level: shot
+inherits: [series]   # reads the series' locked style, rules and cast
+
+inputs:
+  item: json
+
+outputs:
+  panel: pick.selected
+  clip: animate.clip
+  audio: voices.audio
+
+nodes:
+  # ── The picture ──────────────────────────────────────────────────────
+  - id: draw
+    kind: model
+    name: Draw the shot
+    capability: image.generate
+    options: 3
+    prompt: |
+      {{series.style}}
+      {{item.action}}
+      Characters: {{item.characters@look}}
+      Place: {{item.place@look}}
+      Only these characters. No other people. Exactly one of each.
+      No text, no speech bubbles, no sound-effect lettering.
+    uses: [item.action, item.characters@look, item.place@look, series.style]
+    params: { aspect_ratio: "16:9" }
+    check:                             # a judge looks at every panel before you do (the failure table)
+      rubric: &rubric
+        - Every listed character appears, and each looks like their description.
+        - Only the listed characters appear; no extra people.
+        - Exactly one of each character; no duplicates.
+        - No readable text, signs or speech bubbles.
+    out:
+      image: image
+
+  - id: pick
+    kind: screen
+    name: Pick the picture
+    review: pick_one
+    show: draw.image
+    beside: [item.action, item.lines, item.characters]
+    actions:
+      - { id: use, label: Use this, needs: [selection], locks: true }
+      - { id: change, label: Change this one, needs: [selection, note] }
+      - { id: redraw, label: Draw a new one, needs: [note] }
+
+  - id: word_picture
+    kind: model
+    name: Write the new picture prompt
+    capability: llm.vision
+    prompt: |
+      A creator is redoing one picture of a 2D cartoon Reel. You write the exact words the image
+      model will get. They read your words and say ok before anything is sent, so write only the
+      prompt: no greeting, no notes to them, no "Reference images" line (kriya adds that).
+
+      The shot: {{item.action}}
+      Who: {{item.characters@look}}
+      Where: {{item.place@look}}
+      Style: {{series.style}}
+
+      They pressed: {{pick.action}}. They said: {{pick.note}}
+      The prompt that made the attached picture:
+      {{pick.prompt}}
+      What you last proposed, if anything: {{ok_picture.selected}}
+
+      If they pressed change, write an edit of the attached picture: start with "Edit the first
+      image. Keep everything exactly the same. Exactly one of each character. Only change:" and
+      say only what changes, plainly and precisely.
+      If they pressed redraw, write a whole new drawing: the style, the shot, who is in it and
+      what each looks like, the place, then what they asked for. No word about the old picture.
+      Keep every rule the old prompt has: only the listed characters, exactly one of each, no
+      text, no speech bubbles, no sound-effect lettering.
+    uses: [pick.selected]
+    out:
+      prompt: text
+
+  - id: ok_picture
+    kind: screen
+    name: Send this picture prompt?
+    review: approve
+    show: word_picture.prompt
+    actions:
+      - { id: send, label: Send it }
+      - { id: change, label: Change the prompt, needs: [note] }
+
+  - id: edit_picture
+    kind: model
+    name: Edit the picture
+    capability: image.edit
+    refines: draw          # the edit becomes the next version of the panel, so 'pick' shows it
+    send: ok_picture.selected
+    check: { rubric: *rubric }
+    out:
+      image: image
+
+  - id: redraw_picture
+    kind: model
+    name: Draw it again
+    capability: image.generate
+    refines: draw
+    send: ok_picture.selected
+    options: 3
+    uses: [item.characters@look, item.place@look]   # the character sheets go along as reference images
+    params: { aspect_ratio: "16:9" }
+    check: { rubric: *rubric }
+    out:
+      image: image
+
+  # ── The clip, if the shot is marked animate ─────────────────────────
+  - id: animate
+    kind: model
+    name: Animate the shot
+    capability: video.from_image
+    prompt: |
+      {{item.action}}
+      Camera static. Keep the 2D cartoon style, flat colors, no 3D.
+      Ambient sound only, no music, no speech.
+    uses: [pick.selected, item.action]
+    out:
+      clip: video
+
+  - id: see_clip
+    kind: screen
+    name: Watch the clip
+    review: approve
+    show: animate.clip
+    beside: [item.action]
+    actions:
+      - { id: use, label: Use this, locks: true }
+      - { id: change, label: Change the clip, needs: [note] }
+
+  - id: word_clip
+    kind: model
+    name: Write the new clip prompt
+    capability: llm.vision
+    prompt: |
+      A creator is redoing one clip of a 2D cartoon Reel. The clip model animates the attached
+      picture into a few seconds of video. You write the exact words it will get. They read your
+      words and say ok before anything is sent, so write only the prompt: no greeting, no notes.
+
+      The shot: {{item.action}}
+      They said: {{see_clip.note}}
+      The prompt that made the clip they watched:
+      {{see_clip.prompt}}
+      What you last proposed, if anything: {{ok_clip.selected}}
+
+      Say what moves and how, one clear motion. Keep the 2D cartoon style, flat colors, no 3D,
+      and ambient sound only, no music, no speech, unless they asked otherwise.
+    uses: [pick.selected]
+    out:
+      prompt: text
+
+  - id: ok_clip
+    kind: screen
+    name: Send this clip prompt?
+    review: approve
+    show: word_clip.prompt
+    actions:
+      - { id: send, label: Send it }
+      - { id: change, label: Change the prompt, needs: [note] }
+
+  - id: remake_clip
+    kind: model
+    name: Make the clip again
+    capability: video.from_image
+    refines: animate
+    send: ok_clip.selected
+    uses: [pick.selected]   # the picture is the clip's first frame
+    out:
+      clip: video
+
+  # ── The voices, line by line ────────────────────────────────────────
+  - id: voices
+    kind: map
+    name: Voice each line
+    over: item.lines
+    graph: line_by_line
+    one_at_a_time: true
+
+  # ── The movie so far ────────────────────────────────────────────────
+  - id: cut
+    kind: tool
+    name: Put the movie together so far
+    tool: assemble_reel
+    uses: [so_far.items, so_far.panel, so_far.clip, so_far.audio, series.music]
+    args:
+      shots: so_far.items
+      panels: so_far.panel
+      clips: so_far.clip
+      voices: so_far.audio
+      music: series.music
+      fit: whole
+      captions: false
+      background: black
+      draft: true          # quick to make and only for looking: no end card, no Instagram copy
+    out:
+      reel: video
+      seconds: number
+
+  - id: watch
+    kind: screen
+    name: Watch the movie so far
+    review: approve
+    show: cut.reel
+    beside: [item.action]
+    actions:
+      - { id: next, label: Next shot, locks: true }
+      - { id: picture, label: Change the picture }
+      - { id: clip, label: Change the clip }
+      - { id: voice, label: Change a voice }
+
+edges:
+  - { from: draw, to: pick }
+
+  # Saying what's wrong with the picture: a prompt, your ok, then the model.
+  - { from: pick, to: word_picture, when: "action == 'change' or action == 'redraw'" }
+  - { from: word_picture, to: ok_picture }
+  - { from: ok_picture, to: word_picture, when: "action == 'change'", max_loops: 20 }
+  - { from: ok_picture, to: edit_picture, when: "action == 'send' and pick.action == 'change'" }
+  - { from: ok_picture, to: redraw_picture, when: "action == 'send' and pick.action == 'redraw'" }
+  - { from: edit_picture, to: pick, max_loops: 20 }
+  - { from: redraw_picture, to: pick, max_loops: 20 }
+
+  # The picture is settled: on to its clip, or straight to the voices, or back to the movie if they're done.
+  - { from: pick, to: animate, when: "action == 'use' and (item.animate == true or animate.clip)" }
+  - { from: pick, to: voices, when: "action == 'use' and item.animate != true and not animate.clip and not voices.audio" }
+  - { from: pick, to: cut, when: "action == 'use' and item.animate != true and not animate.clip and voices.audio" }
+
+  # The same conversation for the clip.
+  - { from: animate, to: see_clip }
+  - { from: see_clip, to: word_clip, when: "action == 'change'" }
+  - { from: word_clip, to: ok_clip }
+  - { from: ok_clip, to: word_clip, when: "action == 'change'", max_loops: 20 }
+  - { from: ok_clip, to: remake_clip, when: "action == 'send'" }
+  - { from: remake_clip, to: see_clip, max_loops: 20 }
+  - { from: see_clip, to: voices, when: "action == 'use' and not voices.audio" }
+  - { from: see_clip, to: cut, when: "action == 'use' and voices.audio" }
+
+  # After every shot, the movie.
+  - { from: voices, to: cut }
+  - { from: cut, to: watch }
+  - { from: watch, to: END, when: "action == 'next'" }
+
+  # Anything you don't like in the movie, go back to it. The voices ask again line by line.
+  - { from: watch, to: pick, when: "action == 'picture'", max_loops: 10 }
+  - { from: watch, to: see_clip, when: "action == 'clip' and animate.clip", max_loops: 10 }
+  - { from: watch, to: animate, when: "action == 'clip' and not animate.clip", max_loops: 10 }
+  - { from: watch, to: voices, when: "action == 'voice'", max_loops: 10 }

@@ -88,8 +88,10 @@ export type NodeState = {
   blockedReason?: string;
   /** The note a failed step was tried again with, and the attempt it's for (Q-24). */
   retry?: { attempt: number; note: string };
-  /** For a map step: its items, in list order, and where they were read from. */
-  items?: { keys: string[]; source: string; version: string; path: string[] };
+  /** An arrow just came back into this for-each: set until it reads its list again. */
+  walkBack?: boolean;
+  /** For a map step: its items, in list order, and where they were read from. In a one-at-a-time map, `started` is how far this pass got and `walking` that it's a pass over items already made. */
+  items?: { keys: string[]; source: string; version: string; path: string[]; started?: string[]; walking?: boolean };
 };
 
 export type RunState = {
@@ -153,6 +155,7 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
   if (e.type === "NodeReady") {
     const prev = state.nodes[e.node];
     const n = prev ? { ...prev, status: "ready" as const } : newNode();
+    if (e.back) return withNode(state, e.node, { ...n, walkBack: true });
     return withNode(state, e.node, e.note ? { ...n, retry: { attempt: n.attempts + 1, note: e.note } } : n);
   }
 
@@ -194,8 +197,13 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       const src = state.nodes[e.source];
       if (e.version !== "inputs" && !src?.versions[e.version]) fail(e, `source ${e.source} @ ${e.version} doesn't exist`);
       if (new Set(e.keys).size !== e.keys.length) fail(e, "two items share a key");
-      return next({ items: { keys: e.keys, source: e.source, version: e.version, path: e.path } });
+      return next({ items: { keys: e.keys, source: e.source, version: e.version, path: e.path, started: [], walking: !!n.walkBack }, walkBack: false });
     }
+
+    case "ItemStarted":
+      if (!n.items) fail(e, "the for-each hasn't read its list yet");
+      if (!n.items.keys.includes(e.item)) fail(e, `'${e.item}' isn't one of its items`);
+      return next({ items: { ...n.items, started: [...(n.items.started ?? []), e.item] } });
 
     case "BranchCreated":
       if (n.branches[e.branch]) fail(e, `there's already a branch called '${e.branch}'`);

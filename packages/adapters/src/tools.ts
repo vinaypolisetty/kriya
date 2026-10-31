@@ -146,12 +146,14 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       const clip = Array.isArray(clips) ? clips[i] : undefined;
       const panel = panels[i];
       if (panel == null && clip == null) throw new ToolError(`shot ${shot.id ?? i + 1} has no panel or clip to show`);
-      const said = (shot.lines ?? []).flatMap((l) => {
+      // Voices come as one flat list matched to `lines` by id, or, from a recipe that voices each shot's own lines, one list per shot.
+      const own = Array.isArray(voices) && Array.isArray(voices[i]) ? (voices[i] as unknown[]) : undefined;
+      const said = (shot.lines ?? []).flatMap((l, j) => {
         const at = lineList.findIndex((x) => x.id === l.id);
-        const audio = at >= 0 && Array.isArray(voices) ? voices[at] : undefined;
+        const audio = own ? own[j] : at >= 0 && Array.isArray(voices) ? voices[at] : undefined;
         if (audio == null) return [];
         const full: Record<string, unknown> = { ...l, ...lineList[at] };
-        return [{ audio: file(o, audio, `v${i}_${at}`), caption: String(full.caption_en ?? full.caption ?? "") }];
+        return [{ audio: file(o, audio, `v${i}_${own ? j : at}`), caption: String(full.caption_en ?? full.caption ?? "") }];
       });
       return [{ ...(clip != null ? { clip: file(o, clip, `c${i}`) } : { image: file(o, panel, `p${i}`) }), lines: said, ...(shot.music ? { music: shot.music } : {}) }];
     });
@@ -160,6 +162,7 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
     const background = arg(node, ctx, "background") ?? "blur";
     if (background !== "blur" && background !== "black") throw new ToolError(`'${node.id}' has background: ${JSON.stringify(background)}; use blur (a blurred copy of the picture) or black`);
     const music = arg(node, ctx, "music");
+    const draft = arg(node, ctx, "draft") === true;
     const manifest = {
       build: o.dir,
       font: o.font,
@@ -172,6 +175,7 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       fit,
       background,
       captions: arg(node, ctx, "captions") !== false,
+      draft,
       music: Object.fromEntries(Object.entries((music ?? {}) as Record<string, unknown>).map(([cue, v]) => [cue, file(o, v, `m_${cue.replace(/\W/g, "_")}`)])),
     };
     writeFileSync(join(o.dir, "manifest.json"), JSON.stringify(manifest, null, 2));

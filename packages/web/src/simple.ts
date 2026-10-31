@@ -18,6 +18,7 @@ export type View = { graph: RunGraph; taken?: number[] | undefined };
 
 const BUSY = new Set(["running", "waiting_external", "ready", "fixing"]);
 const TROUBLE = new Set(["failed", "blocked", "stale"]);
+const DONE = new Set(["completed", "done"]);
 
 export const waitsOnYou = (i: GItem) => !!i.steps?.some((s) => s.waitingOnYou);
 
@@ -72,6 +73,8 @@ export function simplify(g: RunGraph, taken?: number[]): View {
 /**
  * A for-each's items as boxes. At the top of a run the for-each stays as a box
  * the items branch from; inside an item the pieces of work just replace it.
+ * Items that go one at a time are a chain instead: each leads to the next, and
+ * only the last leads to what follows.
  */
 function fanOut({ graph: g, taken }: View): View {
   const fans = g.nodes.filter((n) => n.items && n.items.length > 0);
@@ -95,13 +98,20 @@ function fanOut({ graph: g, taken }: View): View {
   const counts: number[] = [];
   const push = (e: GEdge, count = 0) => (edges.push(e), counts.push(count));
   const keysOf = (id: string) => fans.find((n) => n.id === id)?.items!.map((i) => i.key);
+  const inTurn = (id: string) => !!fans.find((n) => n.id === id)?.inTurn;
   g.edges.forEach((e, i) => {
     const out = keysOf(e.from);
     const into = inner ? keysOf(e.to) : undefined;
     if (e.back) return push({ ...e, ...(inner && out ? { from: out[0]! } : {}), ...(into ? { to: into[0]! } : {}) }, taken?.[i]);
-    for (const from of out ?? [e.from]) for (const to of into ?? [e.to]) push({ ...e, from, to }, taken?.[i]);
+    const froms = out && inTurn(e.from) ? out.slice(-1) : out;
+    const tos = into && inTurn(e.to) ? into.slice(0, 1) : into;
+    for (const from of froms ?? [e.from]) for (const to of tos ?? [e.to]) push({ ...e, from, to }, taken?.[i]);
   });
-  if (!inner) for (const hub of fans) for (const it of hub.items!) push({ from: hub.id, to: it.key }, 1);
+  for (const hub of fans) {
+    const items = hub.items!;
+    if (hub.inTurn) items.slice(1).forEach((it, i) => push({ from: items[i]!.key, to: it.key }, DONE.has(items[i]!.status) ? 1 : 0));
+    if (!inner) for (const it of hub.inTurn ? items.slice(0, 1) : items) push({ from: hub.id, to: it.key }, 1);
+  }
   return { graph: { ...g, nodes, edges }, ...(taken ? { taken: counts } : {}) };
 }
 

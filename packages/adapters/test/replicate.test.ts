@@ -291,6 +291,75 @@ describe("image.edit: the panel being edited goes first", () => {
   });
 });
 
+describe("send: the words a person said ok to go out as they are", () => {
+  const talk = (redo: string) => recipe(`graph: shot
+level: shot
+inputs:
+  item: json
+nodes:
+  - id: draw
+    kind: model
+    capability: image.generate
+    prompt: "{{item.action}}. Characters: {{item.characters@look}}"
+    uses: [item.action, item.characters@look]
+    out: { image: image }
+  - id: pick
+    kind: screen
+    review: pick_one
+    show: draw.image
+    actions:
+      - { id: use, needs: [selection], locks: true }
+      - { id: change, needs: [selection, note] }
+  - id: word
+    kind: model
+    capability: image.edit
+    prompt: "fake writer"
+    trust: always
+    out: { image: image }
+  - id: ok
+    kind: screen
+    review: approve
+    show: inputs.proposal
+    actions:
+      - { id: send }
+  - id: redo
+    kind: model
+${redo}
+    refines: draw
+    send: inputs.proposal
+    out: { image: image }
+edges:
+  - { from: draw, to: pick }
+  - { from: pick, to: redo, when: "action == 'change'" }
+  - { from: redo, to: pick, max_loops: 2 }
+  - { from: pick, to: END, when: "action == 'use'" }
+`.replace(/  - id: word[\s\S]*?(?=  - id: redo)/, "").replace("inputs:\n  item: json", "inputs:\n  item: json\n  proposal: text"));
+  const words = "Edit the first image. Only change: Bheem looks scared.";
+  const inputs = { ...ITEM, proposal: words };
+  const press = () => {
+    let n = 0;
+    return () => (n++ === 0 ? { action: "change", selection: ["1.1"], note: "make him scared" } : undefined);
+  };
+
+  it("an edit gets exactly those words and the label for its image: no \"Change:\" line, no tips", async () => {
+    const { s, rec, jobs, replicate } = start({ graph: talk("    capability: image.edit"), inputs, decide: press() });
+    await settle(s, jobs, describeError);
+    const redo = replicate.creates()[1]!.body as { input: { prompt: string; image_input: string[] } };
+    expect(redo.input.prompt).toBe(`${words}\n\nReference images: 1 = the image to edit.`);
+    expect(redo.input.image_input).toHaveLength(1);
+    expect(rec.state.nodes.draw!.versions["2.1"]).toMatchObject({ prompt: redo.input.prompt, parents: ["1.1"], instruction: "make him scared" });
+  });
+
+  it("a new drawing that refines a step doesn't send the old picture along", async () => {
+    const { s, rec, jobs, replicate } = start({ graph: talk("    capability: image.generate"), inputs, decide: press() });
+    await settle(s, jobs, describeError);
+    const redo = replicate.creates()[1]!.body as { input: { prompt: string; image_input?: string[] } };
+    expect(redo.input.prompt).toBe(words);
+    expect(redo.input.image_input).toBeUndefined();
+    expect(rec.state.nodes.draw!.versions["2.1"]!.parents).toEqual(["1.1"]); // still the next version of that picture
+  });
+});
+
 describe("crashes and failures", () => {
   it("a restart polls the predictions it already started instead of paying again", async () => {
     const replicate = fakeReplicate();
@@ -470,6 +539,74 @@ const VOICES: Assets = {
 
 describe("audio.speech: one voice line (D-58)", () => {
   const speech = (replicate: ReturnType<typeof fakeReplicate>) => replicate.creates().map((c) => (c.body as { input: Record<string, unknown> }).input);
+
+  describe("a redo sent word for word", () => {
+    const talk = recipe(`graph: line
+level: line
+inputs:
+  item: json
+  proposal: text
+nodes:
+  - id: speak
+    kind: model
+    capability: audio.speech
+    prompt: "{{item.hinglish}}"
+    uses: [item.hinglish, item.emotion, item.speaker@voice, item.speaker@speech]
+    out: { audio: audio, seconds: number }
+  - id: listen
+    kind: screen
+    review: listen
+    show: speak.audio
+    actions:
+      - { id: use, locks: true }
+      - { id: change, needs: [note] }
+  - id: again
+    kind: model
+    capability: audio.speech
+    refines: speak
+    send: inputs.proposal
+    uses: [item.speaker@voice]
+    out: { audio: audio, seconds: number }
+edges:
+  - { from: speak, to: listen }
+  - { from: listen, to: again, when: "action == 'change'" }
+  - { from: again, to: listen, max_loops: 2 }
+  - { from: listen, to: END, when: "action == 'use'" }
+`);
+    const redo = async (proposal: string) => {
+      const replicate = fakeReplicate();
+      let n = 0;
+      const decide = () => (n++ === 0 ? { action: "change", note: "angrier" } : undefined);
+      const { s, rec, jobs } = start({ graph: talk, inputs: { ...LINE, proposal }, assets: VOICES, replicate, decide, models: { "audio.speech": { params: { language_code: "hi-IN" } } } });
+      await settle(s, jobs, describeError);
+      return { input: speech(replicate)[1]!, rec };
+    };
+
+    it("Say, How and Voice become the words, the style and the voice, and nothing else is added", async () => {
+      const { input, rec } = await redo("Say: Chai thandi ho gayi!\nHow: angry, then speak a little faster\nVoice: Puck");
+      expect(input).toEqual({ text: "Chai thandi ho gayi!", voice: "Puck", language_code: "hi-IN", prompt: "angry, then speak a little faster" });
+      expect(rec.state.nodes.speak!.versions["2.1"]!.prompt).toBe("Say: Chai thandi ho gayi!\nHow: angry, then speak a little faster\nVoice: Puck");
+    });
+
+    it("with no Voice line it keeps the speaker's own voice", async () => {
+      const { input } = await redo("Say: Chai thandi ho gayi!\nHow: angry");
+      expect(input).toMatchObject({ text: "Chai thandi ho gayi!", voice: "Charon", prompt: "angry" });
+    });
+
+    it("a How that runs over two lines stays whole, as kriya itself records it", async () => {
+      const { input } = await redo("Say: Chai.\nHow: angry\n     and hoarse\nVoice: Puck");
+      expect(input).toMatchObject({ text: "Chai.", voice: "Puck", prompt: "angry\nand hoarse" });
+    });
+
+    it("no Say line fails plainly instead of reading the direction aloud", async () => {
+      const replicate = fakeReplicate();
+      let n = 0;
+      const { s, rec, jobs } = start({ graph: talk, inputs: { ...LINE, proposal: "angrier please" }, assets: VOICES, replicate, decide: () => (n++ === 0 ? { action: "change", note: "x" } : undefined) });
+      await settle(s, jobs, describeError);
+      expect(rec.state.nodes.again!.failure).toContain('no "Say:" line');
+      expect(replicate.creates()).toHaveLength(1);
+    });
+  });
 
   it("the prompt is what's said; the voice comes from the speaker's @voice; the rest says how", async () => {
     const replicate = fakeReplicate({ metrics: { token_input_count: 21, token_output_count: 121 } });

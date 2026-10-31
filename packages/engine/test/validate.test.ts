@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadDir, loadText } from "../src/load.js";
 import { contextMode, findGraph } from "../src/spec.js";
+import { validateBundle } from "../src/validate.js";
 
 const EXAMPLES = resolve(__dirname, "../../../examples");
 
@@ -14,7 +15,7 @@ describe("example recipes", () => {
   it("all load with no errors", () => {
     const { graphs, problems } = loadDir(EXAMPLES);
     expect(problems.filter((p) => p.severity === "error")).toEqual([]);
-    expect(graphs.map((g) => g.graph).sort()).toEqual(["caricature", "caricature_flipbook", "clip", "clip_flipbook", "company_report", "drawing", "find_release", "flipbook", "part_recipe", "quarter_from_releases", "quarter_review", "shot_recipe", "voice_recipe"]);
+    expect(graphs.map((g) => g.graph).sort()).toEqual(["caricature", "caricature_flipbook", "clip", "clip_flipbook", "company_report", "drawing", "episode_by_shot", "find_release", "flipbook", "line_by_line", "part_recipe", "quarter_from_releases", "quarter_review", "shot_by_shot", "shot_recipe", "voice_recipe"]);
   });
 });
 
@@ -224,5 +225,45 @@ describe("what a step sees (D-13, D-55)", () => {
 
   it("full context needs no warning", () => {
     expect(warnings(graph(`  - { id: a, kind: agent, goal: "write about {{inputs.topic}}", tools: [search], uses: [inputs.topic], out: { t: text } }\n`))).toEqual([]);
+  });
+});
+
+describe("one at a time and send", () => {
+  const parent = (extra: string) => `graph: outer\nlevel: part\ninputs: { things: json }\nnodes:\n  - { id: each, kind: map, over: inputs.things, graph: inner${extra} }\nedges:\n  - { from: each, to: END }\n`;
+  const child = (uses: string) => `graph: inner\nlevel: shot\ninputs: { item: json }\noutputs: { reel: join.reel }\nnodes:\n  - { id: join, kind: tool, tool: assemble_reel, uses: [${uses}], out: { reel: video } }\nedges:\n  - { from: join, to: END }\n`;
+  const check = (...texts: string[]) => {
+    const graphs = texts.map((t) => loadText(t).graphs[0]!);
+    return validateBundle(graphs).filter((i) => i.severity === "error").map((i) => i.message);
+  };
+
+  it("so_far needs a for-each that goes one at a time", () => {
+    expect(check(parent(""), child("so_far.items"))[0]).toContain("one_at_a_time: true");
+    expect(check(parent(", one_at_a_time: true"), child("so_far.items"))).toEqual([]);
+  });
+
+  it("so_far has the items and the recipe's outputs, and suggests the nearest", () => {
+    expect(check(parent(", one_at_a_time: true"), child("so_far.reel"))).toEqual([]);
+    expect(check(parent(", one_at_a_time: true"), child("so_far.reels"))[0]).toContain("Did you mean 'reel'");
+  });
+
+  it("a for-each that doesn't say one_at_a_time has no such setting at all, so old recipes keep their settings hash", () => {
+    const { graphs } = loadText(parent(""));
+    expect("one_at_a_time" in graphs[0]!.nodes[0]!).toBe(false);
+  });
+
+  const sender = (fields: string) => minimal(`nodes:\n  - { id: say, kind: screen, review: approve, actions: [{ id: ok }] }\n  - { id: make, kind: model, ${fields}, out: { image: image } }\nedges:\n  - { from: say, to: make }\n  - { from: make, to: END }\n`);
+
+  it("send and a prompt can't both be there", () => {
+    expect(errors(sender("capability: image.edit, send: say.selected, prompt: hi")).map((p) => p.message).join()).toContain("has both send and a prompt");
+  });
+
+  it("send is for media models, and reads something real", () => {
+    expect(errors(sender("capability: llm.write, send: say.selected")).map((p) => p.message).join()).toContain("send is for what goes to an image, clip or voice model");
+    expect(errors(sender("capability: image.edit, send: sya.selected")).map((p) => p.message).join()).toContain("Did you mean 'say'");
+  });
+
+  it("a proposal someone says ok to doesn't need a locking button", () => {
+    const text = minimal(`nodes:\n  - { id: word, kind: model, capability: llm.write, prompt: hi, out: { prompt: text } }\n  - { id: ok, kind: screen, review: approve, show: word.prompt, actions: [{ id: send }] }\n  - { id: make, kind: model, capability: image.edit, send: ok.selected, out: { image: image } }\nedges:\n  - { from: word, to: ok }\n  - { from: ok, to: make, when: "action == 'send'" }\n  - { from: make, to: END }\n`);
+    expect(loadText(text).problems).toEqual([]);
   });
 });

@@ -11,6 +11,8 @@ that was hardcoded for that episode read from the manifest instead:
   * captions and the end card are drawn with Pillow and overlaid (no drawtext needed)
   * music sections follow each shot's cue and duck under the voices
   * a second copy is encoded to fit under `max_mb` for Instagram
+  * `draft` is for looking, not posting: a fast encode, a short plain ending instead
+    of the end card, and no Instagram copy
 
 Usage: python assemble_reel.py manifest.json   (prints one JSON line: the result)
 Needs ffmpeg and ffprobe on PATH, and Pillow.
@@ -18,6 +20,7 @@ Needs ffmpeg and ffprobe on PATH, and Pillow.
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -35,7 +38,8 @@ FIT = M.get("fit", "pan")
 X = 0.7            # crossfade
 H = X / 2
 GAP = 0.35         # gap between lines in a shot
-ENC = ["-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-r", "30"]
+DRAFT = bool(M.get("draft"))
+ENC = ["-an", "-c:v", "libx264", "-preset", "ultrafast" if DRAFT else "medium", "-crf", "28" if DRAFT else "18", "-pix_fmt", "yuv420p", "-r", "30"]
 N = "setsar=1,fps=30,format=yuv420p"
 W, HT = 1080, 1920
 
@@ -79,7 +83,7 @@ for i, seg in enumerate(M["segments"]):
         cur += (e0 - s0) + GAP
     segdur[SEG[i]] = max(seg.get("min", 4.0), cur + 0.4)
     t += segdur[SEG[i]]
-segdur["end"] = M.get("end_seconds", 3.8)
+segdur["end"] = 1.5 if DRAFT else M.get("end_seconds", 3.8)
 TOTAL = t + segdur["end"]
 start, acc = {}, 0.0
 for n in SEG:
@@ -188,13 +192,13 @@ ff("-sseof", "-0.15", "-i", f"{S}/{SEG[-2]}.mp4", "-frames:v", "1", f"{S}/last.p
 card = Image.new("RGBA", (W, HT), (0, 0, 0, 0))
 dc = ImageDraw.Draw(card)
 f1, f3 = ImageFont.truetype(FONT, 76), ImageFont.truetype(FONT, 52)
-lines = wrap(dc, M.get("hook") or "", f1, 900)
+lines = [] if DRAFT else wrap(dc, M.get("hook") or "", f1, 900)
 # A long hook starts higher, and the title always sits under its last line (a six-line hook ran over it, Oct 26).
 y = min(HT * 0.36, HT * 0.5 - len(lines) * 76 * 1.25 / 2)
 for ln in lines:
     dc.text((W / 2, y), ln, font=f1, fill=(255, 201, 60, 255), stroke_width=6, stroke_fill=(0, 0, 0, 255), anchor="ma")
     y += 76 * 1.25
-if M.get("title"):
+if M.get("title") and not DRAFT:
     dc.text((W / 2, max(HT * 0.625, y + 48)), M["title"], font=f3, fill=(255, 255, 255, 255), stroke_width=6, stroke_fill=(0, 0, 0, 255), anchor="ma")
 card.save(f"{S}/card.png")
 ff("-loop", "1", "-framerate", "30", "-t", f"{L['end']:.3f}", "-i", f"{S}/last.png", "-i", f"{S}/card.png",
@@ -265,8 +269,11 @@ ff(*vin, "-i", f"{S}/video.mp4", "-filter_complex", ";".join(af), "-map", f"{nv 
 # ---------------------------------------------------------------- instagram copy, under max_mb
 target_kbps = int(M.get("max_mb", 30) * 8000 * 0.92 / TOTAL) - 160
 vk = max(600, min(2400, target_kbps))
-ff("-i", M["out"], "-c:v", "libx264", "-preset", "slow", "-b:v", f"{vk}k", "-maxrate", f"{int(vk * 1.25)}k",
-   "-bufsize", f"{vk * 2}k", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", M["out_ig"])
+if DRAFT:
+    shutil.copyfile(M["out"], M["out_ig"])
+else:
+    ff("-i", M["out"], "-c:v", "libx264", "-preset", "slow", "-b:v", f"{vk}k", "-maxrate", f"{int(vk * 1.25)}k",
+       "-bufsize", f"{vk * 2}k", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", M["out_ig"])
 
 print(json.dumps({"seconds": round(dur(M["out_ig"]), 2), "mb": round(os.path.getsize(M["out_ig"]) / 1e6, 2),
                   "sections": [[c, round(a, 1), round(b, 1)] for c, a, b in sections]}))

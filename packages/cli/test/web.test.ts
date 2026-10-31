@@ -140,6 +140,23 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
     }
   });
 
+  it("a one-at-a-time for-each says so, and the shots to come haven't started", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-web-"));
+    await kriya(dir, "init", "p3", "--example", "mohalla-mitra");
+    const cwd = join(dir, "p3");
+    await kriya(cwd, "run", "episode_by_shot", "--input", "part_no=3", "--input", "story_pages=x", "--id", "ep");
+    await kriya(cwd, "decide", "1", "approve");
+    const web = await startWeb(loadProject(cwd), { port: 0, io: { out: () => {}, err: () => {}, cwd } });
+    try {
+      const g = (await (await fetch(`${web.url}/api/runs/ep/graph`)).json()) as { nodes: { id: string; inTurn?: boolean; items?: { key: string; status: string }[] }[] };
+      const shots = g.nodes.find((n) => n.id === "per_shot")!;
+      expect(shots.inTurn).toBe(true);
+      expect(shots.items!.map((i) => i.status)).toEqual(["awaiting_human", "not_started", "not_started"]);
+    } finally {
+      await web.close();
+    }
+  });
+
   it("a for-each step shows each item's state, and opening one shows that item's own steps", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kriya-web-"));
     await kriya(dir, "init", "p3", "--example", "mohalla-mitra");
@@ -151,6 +168,7 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       type Step = { key: string; name: string; status: string; waitingOnYou: boolean };
       const g = (await (await fetch(`${web.url}/api/runs/part/graph`)).json()) as { nodes: { id: string; items?: { key: string; label: string; status: string; steps: Step[] }[] }[] };
       const shots = g.nodes.find((n) => n.id === "per_shot")!.items!;
+      expect((g.nodes.find((n) => n.id === "per_shot") as { inTurn?: boolean }).inTurn).toBeUndefined();
       expect(shots.map((i) => [i.key, i.status])).toEqual([["per_shot[S1]", "awaiting_human"], ["per_shot[S2]", "awaiting_human"], ["per_shot[S3]", "awaiting_human"]]);
       // Each item carries its own steps, so the box can open them in place: the pick waits on you, the drawing is made.
       expect(shots[0]!.steps.find((s) => s.key === "per_shot[S1].pick")).toEqual({ key: "per_shot[S1].pick", name: "Pick one panel", status: "awaiting_human", waitingOnYou: true, asksYou: true });

@@ -322,7 +322,8 @@ async function mediaRequest(
     images.push({ label, img });
     return makes === "image" ? `image ${images.length}` : "the start frame";
   };
-  const parent = ctx.parent?.output[field];
+  // A refining `image.generate` is a new drawing of the same shot: the version it replaces goes in its tree but not in the request.
+  const parent = node.refines && node.capability === "image.generate" ? undefined : ctx.parent?.output[field];
   if (makes === "image" && parent !== undefined && !add("the image to edit", parent)) throw new ReplicateError(`the version to edit has no image kriya can read (${String(parent)})`);
 
   /** A received value as prompt text; images become "image N" and join the references. */
@@ -337,13 +338,16 @@ async function mediaRequest(
     return add(ref, v) ?? (typeof v === "string" ? v : JSON.stringify(v));
   };
   const used = refsIn(node.prompt);
-  let prompt = fill(node.prompt, (ref) => words(ref, ctx.uses[ref]));
+  let prompt = ctx.send ?? fill(node.prompt, (ref) => words(ref, ctx.uses[ref]));
   for (const [ref, v] of Object.entries(ctx.uses)) if (!used.has(ref)) words(ref, v);
   prompt = prompt.trimEnd();
-  for (const p of prevent) if (!prompt.includes(p)) prompt += `\n${p}`;
-  if (ctx.instruction && !prompt.includes(ctx.instruction)) prompt += `\nChange: ${ctx.instruction}`;
-  const area = makes === "image" && ctx.parent ? markedArea(ctx.region) : undefined;
-  if (area) prompt += `\nOnly change what's inside the marked area (${area}); keep everything outside it exactly the same.`;
+  // `send` is what a person said ok to: no tips, no "Change:" line. The images still need their labels, or "image 2" means nothing.
+  if (ctx.send === undefined) {
+    for (const p of prevent) if (!prompt.includes(p)) prompt += `\n${p}`;
+    if (ctx.instruction && !prompt.includes(ctx.instruction)) prompt += `\nChange: ${ctx.instruction}`;
+    const area = makes === "image" && ctx.parent ? markedArea(ctx.region) : undefined;
+    if (area) prompt += `\nOnly change what's inside the marked area (${area}); keep everything outside it exactly the same.`;
+  }
   if (makes === "image" && images.length) prompt += `\n\nReference images: ${images.map((x, i) => `${i + 1} = ${x.label}`).join("; ")}.`;
   prompt = prompt.trim();
   if (makes === "video" && images.length !== 1) {
@@ -359,6 +363,16 @@ async function mediaRequest(
   if (sent.length && fields.images) input[fields.images] = makes === "video" ? sent[0] : sent;
   const references = images.map((x) => ({ label: x.label, ref: "url" in x.img ? x.img.url : `sha256:${createHash("sha256").update(x.img.bytes).digest("hex")}` }));
   return { input, prompt, references };
+}
+
+/** A voice prompt as kriya records and shows it (`Say:`, `How:`, `Voice:` lines), back into its parts. */
+function readSpeech(text: string): { say: string; how?: string; voice?: string } {
+  const part = (name: string) => new RegExp(`^${name}:[ \\t]*(.*?)(?=\\n(?:Say|How|Voice):|$(?![\\s\\S]))`, "ms").exec(text)?.[1]?.replace(/\n\s+/g, "\n").trim() || undefined;
+  const say = part("Say");
+  if (!say) throw new ReplicateError(`there's no "Say:" line in what was sent, so kriya doesn't know the words: ${text.slice(0, 80)}`);
+  const how = part("How");
+  const voice = part("Voice");
+  return { say, ...(how ? { how } : {}), ...(voice ? { voice } : {}) };
 }
 
 /**
@@ -383,7 +397,8 @@ function speechRequest(
     return typeof v === "string" ? v : JSON.stringify(v);
   };
   const used = refsIn(node.prompt);
-  const say = fill(node.prompt, (ref) => text(ctx.uses[ref])).trim();
+  const sent = ctx.send === undefined ? undefined : readSpeech(ctx.send);
+  const say = sent?.say ?? fill(node.prompt, (ref) => text(ctx.uses[ref])).trim();
   if (!say) throw new ReplicateError(`'${node.id}' says nothing: its prompt is the line to speak, e.g. prompt: "{{item.hinglish}}"`);
 
   const styleField = fields.style ?? "prompt";
@@ -405,9 +420,11 @@ function speechRequest(
   const given = [own[styleField], base[styleField]].find((x): x is string => typeof x === "string");
   if (given) how.push(given);
   if (ctx.instruction) how.push(`Change: ${ctx.instruction}`);
+  // `send` is what a person said ok to: it replaces the style above, and a voice it names replaces the speaker's.
+  if (sent) how.splice(0, how.length, ...(sent.how ? [sent.how] : []));
 
   // The speaker's voice beats the settings' default voice; a step's own params beat both.
-  const input: Record<string, unknown> = { ...base, ...(voice ? { [voiceField]: voice } : {}), ...own, [fields.prompt ?? "text"]: say };
+  const input: Record<string, unknown> = { ...base, ...(voice ? { [voiceField]: voice } : {}), ...own, ...(sent?.voice ? { [voiceField]: sent.voice } : {}), [fields.prompt ?? "text"]: say };
   if (how.length) input[styleField] = how.join("\n");
   else delete input[styleField];
   const style = input[styleField];

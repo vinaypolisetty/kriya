@@ -1,0 +1,85 @@
+# One voice line of shot_by_shot. A redo is the same conversation as a picture's: say what's
+# wrong, read the exact words and direction Claude will send, press Send it.
+graph: line_by_line
+level: line
+
+inputs:
+  item: json
+
+outputs:
+  audio: listen.selected
+
+nodes:
+  - id: speak
+    kind: model
+    name: Voice the line
+    capability: audio.speech
+    prompt: "{{item.hinglish}}"
+    uses: [item.hinglish, item.emotion, item.speaker@voice, item.speaker@speech]
+    check: { seconds: { max: 8 } }   # a line over 8 s makes the Reel drag; shown on the review, redone only if you say so
+    out:
+      audio: audio
+      seconds: number
+
+  - id: listen
+    kind: screen
+    name: Listen to the line
+    review: listen
+    show: speak.audio
+    beside: [item.hinglish, item.caption_en, item.emotion]
+    actions:
+      - { id: use, label: Use this, locks: true }
+      - { id: change, label: Change it, needs: [note] }
+
+  - id: word_voice
+    kind: model
+    name: Write the new voice prompt
+    capability: llm.write
+    prompt: |
+      A creator is redoing one spoken line of a Hinglish cartoon Reel. You write exactly what the
+      voice model will get. They read it and say ok before anything is sent.
+
+      The line: {{item.hinglish}}
+      Who says it: {{item.speaker}}
+      Its emotion: {{item.emotion}}
+      They said: {{listen.note}}
+      The take they heard was made from:
+      {{listen.prompt}}
+      What you last proposed, if anything: {{ok_voice.selected}}
+
+      Answer in exactly these three lines and nothing else:
+      Say: the words to speak, as written unless they asked to change them
+      How: how to say it, in plain words; anything about speed goes last
+      Voice: the same voice as the take they heard, unless they asked for another
+    out:
+      prompt: text
+
+  - id: ok_voice
+    kind: screen
+    name: Send this voice prompt?
+    review: approve
+    show: word_voice.prompt
+    actions:
+      - { id: send, label: Send it }
+      - { id: change, label: Change the prompt, needs: [note] }
+
+  - id: respeak
+    kind: model
+    name: Voice it again
+    capability: audio.speech
+    refines: speak         # the new take becomes the next version of the line, so 'listen' plays it
+    send: ok_voice.selected
+    uses: [item.speaker@voice]
+    check: { seconds: { max: 8 } }
+    out:
+      audio: audio
+      seconds: number
+
+edges:
+  - { from: speak, to: listen }
+  - { from: listen, to: word_voice, when: "action == 'change'" }
+  - { from: word_voice, to: ok_voice }
+  - { from: ok_voice, to: word_voice, when: "action == 'change'", max_loops: 20 }
+  - { from: ok_voice, to: respeak, when: "action == 'send'" }
+  - { from: respeak, to: listen, max_loops: 20 }
+  - { from: listen, to: END, when: "action == 'use'" }

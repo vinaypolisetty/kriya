@@ -41,8 +41,11 @@ export const EngineEvent = z.discriminatedUnion("type", [
   on("MentionAdded", { node: NodeKey, ref: z.string().min(1), note: z.string().optional() }),
   /** The creator removed one automatic input from one step (✕ on a chip). */
   on("DefaultRemoved", { node: NodeKey, ref: z.string().min(1) }),
-  /** A step can run. `note` is set when a failed step is tried again with a change (Q-24): the next attempt's instruction. */
-  on("NodeReady", { node: NodeKey, note: z.string().min(1).optional() }),
+  /**
+   * A step can run. `note` is set when a failed step is tried again with a change (Q-24): the next attempt's instruction.
+   * `back` is set when an arrow goes back into a one-at-a-time for-each: it walks its items again.
+   */
+  on("NodeReady", { node: NodeKey, note: z.string().min(1).optional(), back: z.literal(true).optional() }),
   /**
    * The scheduler followed an edge. `edge` is its index in the graph's `edges`,
    * prefixed inside a map item (`per_shot[P3-04].1`), so each item counts its own loops toward `max_loops`.
@@ -53,6 +56,8 @@ export const EngineEvent = z.discriminatedUnion("type", [
    * The items themselves stay in the source step's locked version (`source` @ `version`, at `path`).
    */
   on("MapExpanded", { node: NodeKey, keys: z.array(z.string()), source: NodeKey, version: z.string(), path: z.array(z.string()) }),
+  /** A one-at-a-time for-each moved on to this item. Its order is the list's; this records how far it got. */
+  on("ItemStarted", { node: NodeKey, item: z.string().min(1) }),
   on("AttemptStarted", { node: NodeKey, attempt: Count }),
   on("CandidateProduced", {
     node: NodeKey,
