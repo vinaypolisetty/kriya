@@ -5,8 +5,8 @@
  * step across shots are a batch: after each decision the next one opens.
  * `embedded` is the same review inside its box on the graph, built for fewer
  * clicks: tap the one you want and that's the decision. Nothing is sent for a
- * few seconds, so a slip takes one tap to undo. Everything else ("not quite
- * right?") stays folded away.
+ * few seconds, so a slip takes one tap to undo. "Use it" on a suggestion is the
+ * same tap. Everything else ("not quite right?") stays folded away.
  */
 import { useEffect, useRef, useState } from "react";
 import { decide, type Button, type Item, type Media as File } from "./api";
@@ -27,6 +27,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
   const [region, setRegion] = useState("");
   const [sending, setSending] = useState<string>();
   const [error, setError] = useState<string>();
+  const [more, setMore] = useState(false);
 
   const at = batch.findIndex((b) => b.id === item.id);
   const shown = item.shows.find((s) => s.version === picked) ?? item.shows[0];
@@ -139,8 +140,17 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
   if (embedded) {
     const tap = !!lock && item.shows.length > 1 && lock.needs.every((n) => n === "selection");
     const wait = !!chosen || !!sending || item.working;
+    // Pictures and clips to choose between get the room: you can't judge a face at 214px.
+    const picks = tap && item.shows.some((s) => s.media);
+    // The suggested press goes through like a tap. An edit or a crop opens under "not quite right?", to check first.
+    const takeSuggestion = () => {
+      const s = item.suggested!;
+      if (lock && s.action === lock.id) return choose(lock, s.selection?.[0] ?? picked);
+      useSuggestion();
+      setMore(true);
+    };
     return (
-      <div className="review embedded">
+      <div className={`review embedded${picks ? " picks" : ""}`}>
         {item.working && <span className="tone-work">working…</span>}
         {item.branch && <span className="muted">On branch <b>{item.branch}</b>: only its versions are here. Switch in the step details.</span>}
         {besides}
@@ -172,12 +182,12 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
               Suggested: <b>{LABELS[item.suggested.action] ?? item.suggested.action}</b>
               {item.suggested.selection ? ` ${item.suggested.selection[0]}` : ""}
             </span>
-            <button type="button" className="link" onClick={useSuggestion}>Use it</button>
+            <button type="button" className="link" disabled={wait} onClick={takeSuggestion}>Use it</button>
           </div>
         )}
         {chosen ? (
           <p className="chosen">
-            <span>✓ Chosen</span>
+            <span>✓ {chosen} chosen: sends in a few seconds</span>
             <button type="button" className="link" onClick={undo}>Undo</button>
           </p>
         ) : (
@@ -188,7 +198,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
           )
         )}
         {!chosen && (others.length > 0 || noteField) && (
-          <details className="box-more">
+          <details className="box-more" open={more} onToggle={(e) => setMore(e.currentTarget.open)}>
             <summary>Not quite right?</summary>
             <div className="not-right">
               {others.some((b) => b.needs.includes("selection")) && options}

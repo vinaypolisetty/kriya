@@ -480,3 +480,6 @@ dl.readable dd { margin: 0; }
   .box .review.embedded, .box .panel, .box-video video, .box-video img { width: 100%; }
   .box-open .item-rows { width: auto; min-width: 0; }
 }
+@media (min-width: 761px) {
+  .box .review.embedded.picks { width: min(1560px, calc(100vw - 300px)); }
+}
