@@ -59,7 +59,9 @@ export function Region({ src, alt, value, onChange }: { src: string; alt: string
     if (!box || !img.current || !holder.current || !img.current.complete) return undefined;
     const frame = holder.current.getBoundingClientRect();
     const r = drawn(img.current);
-    return { left: r.left - frame.left + box.x * r.width, top: r.top - frame.top + box.y * r.height, width: box.w * r.width, height: box.h * r.height };
+    // Those are screen pixels; on a zoomed graph the overlay's own pixels are a different size.
+    const s = holder.current.offsetWidth / frame.width;
+    return { left: (r.left - frame.left + box.x * r.width) * s, top: (r.top - frame.top + box.y * r.height) * s, width: box.w * r.width * s, height: box.h * r.height * s };
   })();
 
   return (
