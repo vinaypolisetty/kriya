@@ -402,7 +402,7 @@ function useDrag(recipe: string, auto: Map<string, Placed>) {
 }
 
 const MIN_ZOOM = 0.1;
-const MAX_ZOOM = 2;
+const MAX_ZOOM = 8;
 /** One press of + or −. */
 const ZOOM_STEP = 1.25;
 /** Empty canvas on every side, so the spot under the pointer can stay put when zooming and you can move past the graph's edges. */
