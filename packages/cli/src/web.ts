@@ -384,6 +384,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
         ...(st?.staleReason ? { staleReason: st.staleReason } : {}),
         ...(st?.blockedReason ? { blockedReason: st.blockedReason } : {}),
         ...(items ? { items } : {}),
+        ...(n.kind === "map" && n.one_at_a_time ? { inTurn: true } : {}),
       };
     });
     const edges = arrows(g);

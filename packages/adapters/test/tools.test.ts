@@ -194,6 +194,40 @@ edges:
     expect(reel.length).toBeLessThan(5e6);
   }, 120_000);
 
+  it.skipIf(!hasPillow || !FONT)("assemble_reel draft: voices per shot, a short plain ending, no Instagram copy", async () => {
+    const g = recipe(`graph: part
+level: part
+inputs:
+  shots: json
+  panels: json
+  voices: json
+nodes:
+  - id: cut
+    kind: tool
+    tool: assemble_reel
+    uses: [inputs.shots, inputs.panels, inputs.voices]
+    args: { shots: inputs.shots, panels: inputs.panels, voices: inputs.voices, title: MOHALLA MITRA, draft: true }
+    out: { reel: video, seconds: number }
+edges:
+  - { from: cut, to: END }
+`);
+    const media = memoryMedia();
+    const still = media.put(make("s.png", "-f", "lavfi", "-i", "testsrc=size=1280x720", "-frames:v", "1"));
+    const line = (s: number) => media.put(make("l.wav", "-f", "lavfi", "-i", `sine=frequency=440:duration=${s}`, "-ar", "24000", "-ac", "1"));
+    const { rec, done } = run(g, media, {}, () => undefined, {
+      shots: [{ id: "S1", lines: [{ id: "L1" }, { id: "L2" }] }, { id: "S2", lines: [] }, { id: "S3", lines: [{ id: "L1" }] }],
+      panels: [still, still, still],
+      voices: [[line(3), line(3)], [], [line(5)]],
+    });
+    await done;
+    const a = rec.state.nodes.cut!;
+    expect(a.failure).toBeUndefined();
+    const out = Object.values(a.versions)[0]!.output as { reel: string; seconds: number };
+    // S1 holds both its lines (over 6 s) and S3 its one (over 5 s), which only happens if each shot found its own voices.
+    expect(out.seconds).toBeGreaterThan(6.3 + 4 + 5.3 + 1.5);
+    expect(out.seconds).toBeLessThan(6.3 + 4 + 5.3 + 1.5 + 2);
+  }, 120_000);
+
   it("extract_frames: a frame every half second, with its time; a clip too long to look through fails plainly", async () => {
     const g = recipe(`graph: f
 level: clip

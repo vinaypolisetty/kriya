@@ -727,7 +727,7 @@ describe("plain errors", () => {
   });
 
   it("an unknown recipe lists the real ones", async () => {
-    expect((await kriya((await project()), "run", "nope")).err).toBe("✗ there's no recipe 'nope' (you have: part_recipe, shot_recipe, voice_recipe)");
+    expect((await kriya((await project()), "run", "nope")).err).toBe("✗ there's no recipe 'nope' (you have: episode_by_shot, line_by_line, part_recipe, shot_recipe, shot_by_shot, voice_recipe)");
   });
 
   it("missing and unknown inputs", async () => {

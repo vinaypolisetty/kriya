@@ -36,6 +36,8 @@ export type GNode = {
   asksYou?: boolean;
   /** A for-each step's items, each with its own steps (keys like `per_shot[P3-04].pick`) and a picture of what it made. */
   items?: GItem[];
+  /** A for-each whose items go one at a time: drawn as a chain, not a fan. */
+  inTurn?: boolean;
   /** On an `item` box: the item it stands for. */
   item?: GItem;
   /** On a step unfolded from an item: the item's box, whose row it sits in. */

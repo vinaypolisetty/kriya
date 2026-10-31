@@ -168,6 +168,64 @@ Each value becomes an item, `posts[clay-cups]`, with its own drafts, locks and l
 
 Values in a plain list are also the items' names, so they use letters, digits, `-` and `_` (`clay-cups`, not `clay cups`; kriya says so if not). For richer items, make a list of records with an `id` field, like the Mohalla Mitra shot list does, and read their fields as `{{item.title}}`.
 
+## 5. One at a time, and redos you read first
+
+To finish each item before the next starts, say so on the for-each. Its recipe can then read everything so far:
+
+```yaml
+- id: per_shot
+  kind: map
+  over: shot_list.shots
+  graph: shot_by_shot
+  one_at_a_time: true
+
+# in shot_by_shot: after every shot, the whole movie
+- id: cut
+  kind: tool
+  tool: assemble_reel
+  uses: [so_far.items, so_far.panel, so_far.clip, so_far.audio]
+  args: { shots: so_far.items, panels: so_far.panel, clips: so_far.clip, voices: so_far.audio, draft: true }
+  out: { reel: video }
+```
+
+A redo that asks before it spends takes three steps: Claude writes the exact prompt, a screen shows it, and `send:` sends those words as they are.
+
+```yaml
+- id: word
+  kind: model
+  capability: llm.vision
+  prompt: |
+    Write the exact words for the image model. They said: {{pick.note}}
+    The prompt that made this picture: {{pick.prompt}}
+    What you last proposed, if anything: {{ok.selected}}
+  uses: [pick.selected]
+  out: { prompt: text }
+
+- id: ok
+  kind: screen
+  review: approve
+  show: word.prompt
+  actions:
+    - { id: send, label: Send it }          # no locks: true, a proposal is never built on
+    - { id: change, label: Change the prompt, needs: [note] }
+
+- id: edit
+  kind: model
+  capability: image.edit
+  refines: draw
+  send: ok.selected
+  out: { image: image }
+
+# edges
+- { from: pick, to: word, when: "action == 'change'" }
+- { from: word, to: ok }
+- { from: ok, to: word, when: "action == 'change'", max_loops: 20 }   # your reply is its instruction
+- { from: ok, to: edit, when: "action == 'send'" }
+- { from: edit, to: pick, max_loops: 20 }
+```
+
+[`episode_by_shot`](../examples/mohalla-mitra/episode_by_shot.yaml) is the whole thing: picture, clip and voices, a shot at a time.
+
 ## When it's wrong
 
 kriya checks recipes before anything runs (`kriya status` is enough), and says what's wrong, where, and the nearest valid name:

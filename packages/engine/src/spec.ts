@@ -64,6 +64,8 @@ export const ModelNode = z
     capability: z.string().regex(/^[a-z]+(\.[a-z_]+)+$/, "a capability looks like image.generate"),
     model: z.string().optional(),
     prompt: z.string().optional(),
+    /** Send this reference's text word for word instead of a `prompt`, e.g. the prompt a person just said ok to. Not an input: it's recorded on the version as what was sent. */
+    send: Ref.optional(),
     /** Extra settings passed to the provider as they are, e.g. `aspect_ratio: "16:9"`. Part of the step's settings, so changing one makes its work stale. */
     params: z.record(z.unknown()).optional(),
     uses: z.array(Ref).default([]),
@@ -140,6 +142,8 @@ export const MapNode = z
     over: Ref,
     graph: Id,
     key: z.string().default("id"),
+    /** Items go in turn: the next starts when this one ends, and each can read `so_far`. Optional, not defaulted: a new default would change every map's settings hash. */
+    one_at_a_time: z.boolean().optional(),
   })
   .strict();
 
@@ -155,6 +159,9 @@ export const SubgraphNode = z
 export const Node = z.discriminatedUnion("kind", [ModelNode, AgentNode, ToolNode, ScreenNode, MapNode, SubgraphNode]);
 
 export const END = "END";
+
+/** What a recipe run by a one-at-a-time for-each reads to see the items up to its own: `so_far.items`, `so_far.<output>`. */
+export const SO_FAR = "so_far";
 
 export const Edge = z
   .object({

@@ -1,0 +1,102 @@
+# Episode recipe, shot by shot: one Reel made in story order. Each shot is finished (picture,
+# clip if it's marked, voices) and the whole movie so far plays before the next shot starts.
+graph: episode_by_shot
+level: episode
+inherits: [series]   # reads the series' locked style, rules and cast
+description: Make a Reel one shot at a time, watching the movie grow after each one.
+
+inputs:
+  story_pages: text
+  part_no: number
+
+types:
+  shot:
+    fields:
+      id: text
+      characters: list<library.character>   # names from the Library, exactly: a look and a voice exist for each
+      place: library.place
+      action: text
+      lines: list<line>
+      animate: boolean
+      music: text        # the music cue under this shot: main, clue, villain or chase
+  line:
+    fields:
+      id: text
+      speaker: library.character
+      hinglish: text
+      emotion: text
+      caption_en: text
+
+outputs:
+  reel: assemble.reel
+
+nodes:
+  - id: shot_list
+    kind: model
+    name: Break it into shots
+    capability: llm.write
+    prompt: |
+      Turn these pages into 10 to 13 shots named P{{inputs.part_no}}-NN, in story order.
+      Mark the 4 shots with the biggest motion as animate.
+      Give each shot a music cue: main, clue, villain or chase.
+      Use the Library's names for characters and places; put time of day, crowds and details in the action.
+      Give each shot its own voice lines, and write an end-card hook.
+    uses: [inputs.story_pages, series.rules, series.cast]
+    out:
+      shots: list<shot>
+      hook: text
+
+  - id: approve_shots
+    kind: screen
+    name: Approve the shot list
+    review: approve
+    show: shot_list.shots
+    actions:
+      - { id: approve, locks: true }
+      - { id: redo, needs: [note] }
+
+  - id: per_shot
+    kind: map
+    name: Make the shots, in order
+    over: shot_list.shots
+    graph: shot_by_shot
+    one_at_a_time: true   # the next shot starts when this one is done
+
+  - id: assemble
+    kind: tool
+    name: Assemble the Reel
+    tool: assemble_reel
+    uses: [shot_list.shots, shot_list.hook, per_shot.panel, per_shot.clip, per_shot.audio, series.music]
+    args:
+      shots: shot_list.shots
+      panels: per_shot.panel
+      clips: per_shot.clip     # a shot with a clip plays it; the rest pan over the panel
+      voices: per_shot.audio
+      hook: shot_list.hook     # the end card
+      music: series.music      # the series' tracks, by cue; ducked under the voices
+      title: MOHALLA MITRA
+      max_mb: 30
+      fit: whole
+      captions: false
+      background: black
+    out:
+      reel: video
+      seconds: number
+
+  - id: watch
+    kind: screen
+    name: Watch the Reel
+    review: approve
+    show: assemble.reel
+    actions:
+      - { id: approve, locks: true }
+      - { id: back, label: Go back through the shots }   # each shot's movie asks again; change what you want, press Next on the rest
+
+edges:
+  - { from: shot_list, to: approve_shots }
+  - { from: approve_shots, to: shot_list, when: "action == 'redo'", max_loops: 3 }
+  - { from: approve_shots, to: per_shot, when: "action == 'approve'" }
+  - { from: per_shot, to: assemble }
+  - { from: assemble, to: watch }
+  - { from: watch, to: per_shot, when: "action == 'back'", max_loops: 5 }
+  - { from: watch, to: END, when: "action == 'approve'" }

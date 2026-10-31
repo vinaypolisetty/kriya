@@ -15,7 +15,7 @@ Depends on `zod` and `yaml` only. Imports no other `@kriya` package.
 | [`events.ts`](src/events.ts) | Every event type as a strict schema. Payloads are recorded data only |
 | [`state.ts`](src/state.ts) | `apply(state, event)`: pure, refuses impossible events. `replay(events)` |
 | [`recorder.ts`](src/recorder.ts) | The only writer: check + apply, then append; transactions; refuses values JSON would change |
-| [`scheduler.ts`](src/scheduler.ts) | Which step runs next; edges, loops, joins, for-each items; locks, stale, branches, retry, keep; the `Executors` interface |
+| [`scheduler.ts`](src/scheduler.ts) | Which step runs next; edges, loops, joins, for-each items, in turn or all at once; locks, stale, branches, retry, keep; the `Executors` interface |
 | [`cli-validate.ts`](src/cli-validate.ts) | `pnpm validate:examples` |
 
 ## Public API, in brief

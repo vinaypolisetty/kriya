@@ -3,7 +3,7 @@
  * buttons that edges rely on. Run before a recipe is published, so problems
  * show up in the builder, not halfway through a paid run.
  */
-import { contextMode, END, findGraph, stepText, type Edge, type Graph, type Node } from "./spec.js";
+import { contextMode, END, findGraph, SO_FAR, stepText, type Edge, type Graph, type Node } from "./spec.js";
 import { ConditionError, literalsComparedTo, parseCondition, pathsIn } from "./condition.js";
 
 export type Issue = {
@@ -47,6 +47,20 @@ export function validateBundle(graphs: Graph[]): Issue[] {
       for (const name of Object.keys(runs?.inputs ?? {}).filter((k) => k !== "item")) {
         issues.push({ graph: g.graph, path: ["nodes", i, "graph"], severity: "error", message: `'${n.graph}' runs once per item, so its one input is item, but it also asks for '${name}', which a for-each can't give it. In ${n.graph}, rename the input to item and read {{item}}` });
       }
+    });
+  }
+  // `so_far` reads the items before this one, which only exist if they run in turn.
+  for (const g of graphs) {
+    const inTurn = graphs.some((o) => o.nodes.some((n) => n.kind === "map" && n.one_at_a_time && findGraph(graphs, n.graph) === g));
+    g.nodes.forEach((n, i) => {
+      if (!("uses" in n)) return;
+      n.uses.forEach((ref, j) => {
+        if (!ref.startsWith(`${SO_FAR}.`)) return;
+        const field = ref.slice(SO_FAR.length + 1);
+        const path = ["nodes", i, "uses", j];
+        if (!inTurn) issues.push({ graph: g.graph, path, severity: "error", message: `'${ref}' reads the items before this one, so '${g.graph}' must be run by a for-each with one_at_a_time: true` });
+        else if (field !== "items" && !(field in g.outputs)) issues.push({ graph: g.graph, path, severity: "error", message: `'${ref}' isn't something so_far has. It has so_far.items and this recipe's outputs${suggest(field, ["items", ...Object.keys(g.outputs)])}` });
+      });
     });
   }
   return issues;
@@ -151,9 +165,19 @@ export function validateGraph(g: Graph, knownGraphs: Set<string>): Issue[] {
     }
   });
 
-  // A screen that shows a step should have a button that locks it (D-42).
+  // A step that sends text word for word gets it from a reference, instead of a prompt.
   g.nodes.forEach((n, i) => {
-    if (n.kind !== "screen" || !n.show) return;
+    if (n.kind !== "model" || !n.send) return;
+    checkRootRef(n.send, ["nodes", i, "send"]);
+    if (n.prompt) err(["nodes", i, "send"], `'${n.id}' has both send and a prompt; send is the whole prompt, word for word, so remove one`);
+    if (n.capability.startsWith("llm.")) err(["nodes", i, "send"], `'${n.id}' is a ${n.capability} step; send is for what goes to an image, clip or voice model. Give it a prompt`);
+  });
+
+  // A screen that shows a step should have a button that locks it (D-42). A proposal someone says ok to
+  // and a step then sends is the exception: nothing is built on it, so it's never locked and never goes stale.
+  const sent = new Set(g.nodes.flatMap((n) => (n.kind === "model" && n.send ? [n.send.split(".")[0]!] : [])));
+  g.nodes.forEach((n, i) => {
+    if (n.kind !== "screen" || !n.show || sent.has(n.id)) return;
     if (!n.actions.some((a) => a.locks)) {
       warn(["nodes", i, "actions"], `screen '${n.id}' shows '${n.show}' but none of its buttons locks it; add locks: true to the button that accepts it`);
     }
@@ -276,7 +300,7 @@ function safeLiterals(when: string): string[] {
 
 /** Nodes with no incoming edge, ignoring loop-back edges. */
 /** Scopes every recipe can read without declaring them. */
-const BUILTIN_SCOPES = ["item", "inputs", "run", "assets"];
+const BUILTIN_SCOPES = ["item", "inputs", "run", "assets", SO_FAR];
 /** Common level names, to give a better hint when one is used without `inherits`. */
 const KNOWN_LEVELS = ["project", "series", "story", "episode", "part", "season", "channel", "watchlist", "quarter"];
 

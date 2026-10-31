@@ -234,7 +234,7 @@ export function anthropicExecutors(opts: AnthropicOptions): Pick<Executors, "pro
       // A step with no image is written work: the judge reads it (D-73).
       const written = fields.length === 0;
       if (!written && !media) throw new Error("the judge has nowhere to read images from");
-      const asked = "prompt" in node && node.prompt ? judgeText(node.prompt, ctx) : (node.name ?? node.id);
+      const asked = ctx.send ?? ("prompt" in node && node.prompt ? judgeText(node.prompt, ctx) : (node.name ?? node.id));
       const rules = `Rules:\n${rubric.map((r, i) => `${i + 1}. ${r}`).join("\n")}`;
       opts.jobs.start(ticket, {
         kind: "verdicts",

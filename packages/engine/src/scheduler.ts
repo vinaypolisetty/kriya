@@ -19,7 +19,7 @@
  *
  * Not built yet: `subgraph` steps, run upgrades, proposals for locked nodes (D-28).
  */
-import { contextMode, END, stepText, type AgentNode, type Graph, type Node, type ScreenNode } from "./spec.js";
+import { contextMode, END, SO_FAR, stepText, type AgentNode, type Graph, type Node, type ScreenNode } from "./spec.js";
 import { createHash } from "node:crypto";
 import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
@@ -43,6 +43,8 @@ export type StepContext = {
   parent?: { version: string; output: Record<string, unknown> };
   /** For an edit or a replayed change: what to change, e.g. "add the gamcha". */
   instruction?: string;
+  /** For a step with `send`: the text to send word for word. Nothing is added to it. */
+  send?: string;
   /** For a refining step: the region the person marked on the screen (`--region`), e.g. for a crop. */
   region?: unknown;
   /** For an adopt: the other version to take from ("use its ending"); `parent` is the one it builds on. */
@@ -472,6 +474,7 @@ export class Scheduler {
   private call(key: string, node: Producer, ctx: Context): void {
     if (node.kind === "agent") return this.agent(key, node, ctx);
     const sc = this.produceRequest(key, node, ctx);
+    if (node.kind === "model" && node.send && sc.send === undefined) return this.fail(key, `it sends '${node.send}', and there's no text there to send`);
     const result = this.external(() => this.exec.produce(node, sc));
     if (!Array.isArray(result)) {
       this.rec.record({ type: "Suspended", node: key, ticket: result.ticket, kind: "model_job" });
@@ -681,6 +684,10 @@ export class Scheduler {
     const sc = this.context(key, node, ctx, n.attempts, target, parent, instruction);
     if (region !== undefined) sc.region = region;
     sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}`;
+    if (node.kind === "model" && node.send) {
+      const text = evaluate(parseCondition(node.send), this.scope(ctx));
+      if (typeof text === "string" && text.trim()) sc.send = text;
+    }
     return sc;
   }
 
@@ -1041,13 +1048,22 @@ export class Scheduler {
       for (const { key, node, ctx } of this.instances()) {
         const n = this.rec.state.nodes[key];
         if (!n) continue;
-        if (isProducer(node) && n.status === "running") this.call(key, node, ctx);
+        if (isProducer(node) && n.status === "running" && !this.beingRemade(node, ctx)) this.call(key, node, ctx);
         else if (isProducer(node) && n.status === "waiting_external") this.resubmit(key, node, ctx, n.ticketKind);
         else if (node.kind === "screen" && n.status === "awaiting_human") this.ask(key, node, ctx);
         else if (node.kind === "agent" && this.openQuestion(key)) this.askAgent(key, node, ctx);
         else if (isProducer(node) && n.status === "awaiting_human") this.askAgain(key, node, ctx);
       }
     });
+  }
+
+  /**
+   * Whether a refining step is making this step's next version right now. The
+   * target shows as running, but it isn't the one calling out: repeating it after
+   * a crash would pay to draw the original again, and collide with the edit.
+   */
+  private beingRemade(node: Node, ctx: Context): boolean {
+    return ctx.graph.nodes.some((o) => isProducer(o) && o.refines === node.id && ACTIVE.includes(this.status(ctx.prefix + o.id)!));
   }
 
   /** Runs `fn` as one batch of events: written together, or not at all. */
@@ -1464,6 +1480,8 @@ export class Scheduler {
     const reviewer = "refines" in node && node.refines ? this.reviewer(node.refines, ctx)?.id : undefined;
     for (const [r, v] of Object.entries(this.received(key, node, ctx).uses)) {
       if (reviewer && r.split(/[.@[]/)[0] === reviewer) continue;
+      // `so_far` is a look at the moment, not an input: redoing shot 2 shouldn't mark the movie made after shots 3, 4 and 5 stale.
+      if (r.startsWith(`${SO_FAR}.`)) continue;
       out[`uses:${r}`] = hash(v ?? null);
     }
     for (const e of ctx.graph.edges) {
@@ -1613,8 +1631,27 @@ export class Scheduler {
 
     const scope = this.scope(ctx);
     const got: Received = { uses: {}, assets: {}, missing: [], parent: mode !== "isolated" };
-    for (const ref of refs) got.uses[ref] = this.resolve(ref, key, scope, got);
+    for (const ref of refs) got.uses[ref] = ref.startsWith(`${SO_FAR}.`) ? this.soFar(ref, ctx) : this.resolve(ref, key, scope, got);
     return got;
+  }
+
+  /**
+   * What a one-at-a-time for-each has made up to and including this item:
+   * `so_far.items` is the items themselves, `so_far.<output>` one list per
+   * output of the recipe, as the map's own result will read (D-41). Only when a
+   * step asks for it: it reads every item before this one.
+   */
+  private soFar(ref: string, ctx: Context): unknown[] {
+    const [, mapKey, k] = /^(.*)\[([^\]]+)\]\.$/.exec(ctx.prefix) ?? [];
+    const map = this.instances().find((x) => x.key === mapKey)?.node;
+    if (map?.kind !== "map" || !map.one_at_a_time) throw new Error(`'${ref}' only works in a recipe that a one-at-a-time for-each runs`);
+    const items = this.children(mapKey!, map.graph);
+    const upTo = items.slice(0, items.findIndex((c) => c.prefix === ctx.prefix) + 1);
+    const field = ref.slice(SO_FAR.length + 1);
+    if (field === "items") return upTo.map((c) => c.inputs.item);
+    const output = ctx.graph.outputs[field];
+    if (!output) throw new Error(`'${ref}' isn't one of this recipe's outputs (it has ${Object.keys(ctx.graph.outputs).join(", ")})`);
+    return upTo.map((c) => evaluate(parseCondition(output), this.scope(c)) ?? null);
   }
 
   /** One reference: `@Mitra.voice` (a facet), `item.characters@look` (facets of named entities), or a path. */
@@ -1655,9 +1692,7 @@ export class Scheduler {
   /** Starts a map: reads its list and makes each item's first steps ready. */
   private expand(key: string, node: Extract<Node, { kind: "map" }>, ctx: Context): void {
     const n = this.rec.state.nodes[key]!;
-    const again = n.attempts > 0;
-    const child = this.graphs.get(node.graph);
-    if (!child) return this.fail(key, `it runs recipe '${node.graph}', which isn't loaded`);
+    if (!this.graphs.has(node.graph)) return this.fail(key, `it runs recipe '${node.graph}', which isn't loaded`);
 
     const from = this.listSource(node.over, ctx);
     if ("missing" in from) return this.fail(key, from.missing);
@@ -1676,18 +1711,47 @@ export class Scheduler {
 
     this.rec.record({ type: "AttemptStarted", node: key, attempt: n.attempts + 1 });
     this.rec.record({ type: "MapExpanded", node: key, keys, source: from.source, version: from.version, path: from.path });
-    for (const k of keys) {
-      const prefix = `${key}[${k}].`;
-      const seen = again && Object.keys(this.rec.state.nodes).some((s) => s.startsWith(prefix));
-      if (!seen) {
-        for (const id of startNodes(child)) this.rec.record({ type: "NodeReady", node: prefix + id });
-      } else {
-        // An item from before: unchanged work is kept; only its stale steps run again (D-35).
-        this.refreshStale();
-        const c = this.children(key, node.graph).find((x) => x.prefix === prefix)!;
-        this.readyEarliestStale(this.instances(c, [], true));
-      }
+    if (node.one_at_a_time) {
+      this.nextItem(key, node);
+      return;
     }
+    for (const k of keys) this.startItem(key, node, k);
+  }
+
+  /** Makes one item's work ready. Returns the steps of an item from before that are running again. */
+  private startItem(key: string, node: Extract<Node, { kind: "map" }>, k: string): string[] {
+    const prefix = `${key}[${k}].`;
+    const seen = Object.keys(this.rec.state.nodes).some((s) => s.startsWith(prefix));
+    if (!seen) {
+      for (const id of startNodes(this.graphs.get(node.graph)!)) this.rec.record({ type: "NodeReady", node: prefix + id });
+      return [];
+    }
+    // An item from before: unchanged work is kept; only its stale steps run again (D-35).
+    this.refreshStale();
+    const c = this.children(key, node.graph).find((x) => x.prefix === prefix)!;
+    return this.readyEarliestStale(this.instances(c, [], true));
+  }
+
+  /**
+   * Gives the next item of a one-at-a-time for-each its turn: the first this pass
+   * hasn't reached that has something to do. Going back over items already made
+   * (an arrow into the map), each one's last review asks again, so a person can
+   * change it or carry on; nothing is remade unless they say. Returns whether an
+   * item started.
+   */
+  private nextItem(key: string, node: Extract<Node, { kind: "map" }>): boolean {
+    for (const k of this.rec.state.nodes[key]!.items!.keys) {
+      const items = this.rec.state.nodes[key]!.items!;
+      if (items.started?.includes(k)) continue;
+      this.rec.record({ type: "ItemStarted", node: key, item: k });
+      const again = this.startItem(key, node, k);
+      const c = this.children(key, node.graph).find((x) => x.prefix === `${key}[${k}].`)!;
+      if (items.walking && again.length === 0 && !this.busy(c)) {
+        for (const screen of lastReviews(c.graph)) this.rec.record({ type: "NodeReady", node: c.prefix + screen });
+      }
+      if (this.busy(c)) return true;
+    }
+    return false;
   }
 
   /**
@@ -1701,11 +1765,15 @@ export class Scheduler {
       const items = this.children(key, node.graph);
       if (items.some((c) => this.busy(c))) continue;
 
-      const failed = this.rec.state.nodes[key]!.items!.keys.filter((_, i) => !this.endReached(items[i]!) || this.hasFailure(items[i]!));
+      // In turn, only items that have had theirs can have fallen short; the rest are still to come.
+      const state = this.rec.state.nodes[key]!.items!;
+      const reached = (k: string) => !node.one_at_a_time || state.started?.includes(k);
+      const failed = state.keys.filter((k, i) => reached(k) && (!this.endReached(items[i]!) || this.hasFailure(items[i]!)));
       if (failed.length > 0) {
         this.fail(key, `${failed.length === 1 ? "item" : "items"} ${failed.join(", ")} didn't finish`);
         return true;
       }
+      if (node.one_at_a_time && this.nextItem(key, node)) return true;
       const child = this.graphs.get(node.graph)!;
       const output: Record<string, unknown> = {};
       for (const [name, ref] of Object.entries(child.outputs)) {
@@ -1779,7 +1847,9 @@ export class Scheduler {
       const to = edge.to === END ? END : ctx.prefix + edge.to;
       this.rec.record({ type: "EdgeFollowed", edge: edgeKey, from: fromKey, to });
       followed++;
-      if (to !== END) this.rec.record({ type: "NodeReady", node: to });
+      const target = ctx.graph.nodes.find((n) => n.id === edge.to);
+      const back = edge.max_loops !== undefined && target?.kind === "map" && target.one_at_a_time;
+      if (to !== END) this.rec.record({ type: "NodeReady", node: to, ...(back ? { back: true as const } : {}) });
     });
 
     if (followed === 0 && limited) this.fail(fromKey, limited);
@@ -1846,7 +1916,7 @@ export class Scheduler {
       if (!n || n.status === "stale") continue; // stale work is out of context, like rejected candidates
       if (node.kind === "screen") {
         const d = n.decisions.at(-1);
-        if (d) scope[node.id] = { action: d.action, selected: this.selected(ctx, node, d), note: d.note };
+        if (d) scope[node.id] = { action: d.action, selected: this.selected(ctx, node, d), note: d.note, prompt: this.sentFor(ctx, node, d) };
       } else if (n.locked) {
         scope[node.id] = n.versions[n.locked.version]?.output;
       }
@@ -1875,18 +1945,34 @@ export class Scheduler {
    */
   private selected(ctx: Context, screen: ScreenNode, d: { action?: string; selection?: string[] | undefined }): unknown {
     if (!screen.show) return d.selection;
-    const [root, ...path] = screen.show.split(".");
-    const t = this.rec.state.nodes[ctx.prefix + root];
+    const [, ...path] = screen.show.split(".");
+    const chosen = this.chosen(ctx, screen, d);
+    if (!chosen) return undefined;
+    const values = chosen.map((v) => {
+      let out: unknown = v.output;
+      for (const k of path) out = out != null && typeof out === "object" ? (out as Record<string, unknown>)[k] : undefined;
+      return out;
+    });
+    return values.length === 1 ? values[0] : values;
+  }
+
+  /** The prompt that made what a screen's decision chose, as the provider got it: `pick.prompt`. Recorded data, so a redo can start from what was really sent. */
+  private sentFor(ctx: Context, screen: ScreenNode, d: { action?: string; selection?: string[] | undefined }): string | undefined {
+    const chosen = screen.show ? this.chosen(ctx, screen, d) : undefined;
+    return chosen?.length === 1 ? chosen[0]!.prompt : undefined;
+  }
+
+  /** The versions a screen's decision means: the selected ones, the locked one, or the only one on show. Undefined when the shown step is stale. */
+  private chosen(ctx: Context, screen: ScreenNode, d: { action?: string; selection?: string[] | undefined }): Version[] | undefined {
+    const t = this.rec.state.nodes[ctx.prefix + screen.show!.split(".")[0]!];
     if (!t || t.status === "stale") return undefined; // stale work is out of context
     // A locking button's pick is whatever is locked *now*: if the creator moved the lock later, that wins.
     const locking = screen.actions.find((a) => a.id === d.action)?.locks;
-    const ids = locking && t.locked ? [t.locked.version] : d.selection && d.selection.length > 0 ? d.selection : t.locked ? [t.locked.version] : [];
-    const values = ids.map((id) => {
-      let v: unknown = t.versions[id]?.output;
-      for (const k of path) v = v != null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
-      return v;
-    });
-    return values.length === 1 ? values[0] : values;
+    if (locking && t.locked) return [t.versions[t.locked.version]!];
+    if (d.selection && d.selection.length > 0) return d.selection.flatMap((id) => t.versions[id] ?? []);
+    if (t.locked) return [t.versions[t.locked.version]!];
+    const latest = onBranch(t);
+    return latest.length === 1 ? latest : [];
   }
 }
 
@@ -1941,6 +2027,12 @@ export function onBranch(t: NodeState): Version[] {
   }
   const last = Math.max(...mine.map((v) => v.attempt));
   return mine.filter((v) => v.attempt === last);
+}
+
+/** The reviews that end a recipe: the screens with an arrow to END. Where a pass back over an item stops to ask. */
+function lastReviews(g: Graph): string[] {
+  const ends = g.edges.filter((e) => e.to === END).flatMap((e) => (Array.isArray(e.from) ? e.from : [e.from]));
+  return g.nodes.filter((n) => n.kind === "screen" && ends.includes(n.id)).map((n) => n.id);
 }
 
 /** An item's key in a for-each step: its `key` field, or the item itself in a list of plain names (`["AAPL", "MSFT"]`, D-74). */
