@@ -70,7 +70,7 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       expect(body.project).toBe("p3");
       expect(body.items).toHaveLength(1);
       const item = body.items[0]!;
-      expect(item).toMatchObject({ id: "shot:pick", run: "shot", key: "pick", review: "pick_one", working: false });
+      expect(item).toMatchObject({ id: "shot:pick", run: "shot", key: "pick", review: "pick_one" });
       expect(item.shows.map((s) => [s.version, s.verdict?.pass])).toEqual([["1.1", true], ["1.2", true], ["1.3", true]]);
       expect(item.buttons.map((b) => b.id)).toEqual(["lock", "edit", "crop", "retry"]);
       expect(item.suggested).toMatchObject({ action: "lock", selection: ["1.1"] });

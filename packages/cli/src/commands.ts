@@ -730,7 +730,7 @@ async function chatCommand(args: string[], io: IO): Promise<number> {
       io.out(lines.length ? lines.join("\n") : `Nothing said to ${step} yet. Say something: kriya chat ${id} ${step} "why is v2 darker?"`);
       return 0;
     }
-    const { reply, did } = await talk(project, s, () => rec.state, chatFor(project, projectMedia(project, store)), step, words.join(" "));
+    const { reply, did } = await talk(project, s, chatFor(project, projectMedia(project, store)), step, words.join(" "));
     io.out(`kriya: ${reply.text}`);
     for (const d of did) io.out(`  · ${d}`);
     if (rec.state.status === "running") {

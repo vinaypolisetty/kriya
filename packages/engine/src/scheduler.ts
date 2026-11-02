@@ -297,6 +297,11 @@ export class Scheduler {
     this.blobs = options.blobs ?? memoryBlobs();
   }
 
+  /** The run as recorded so far (read it; change it only through the methods below). */
+  get state(): RunState {
+    return this.rec.state;
+  }
+
   /** Starts a run: records RunStarted and makes the starting steps ready. */
   start(release: string, inputs: Record<string, unknown> = {}, context: Record<string, Record<string, unknown>> = {}): void {
     for (const g of this.recipesUsed()) {

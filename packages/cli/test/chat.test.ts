@@ -101,7 +101,7 @@ describe("what the chat is told and what it may do", () => {
     try {
       const { rec, s } = await openRun(project, store, "part_recipe-1", { out: () => {}, err: () => {}, cwd }, { readOnly: true });
       const chat: Chat = async () => ({ text: "Locked.", actions: [{ do: "lock", version: 2, why: "it has the best composition" }], model: "test", cost_usd: 0.02 });
-      const { did } = await talk(project, s, () => rec.state, chat, DRAW, "go with v2");
+      const { did } = await talk(project, s, chat, DRAW, "go with v2");
       expect(did).toEqual(["locked v2"]);
       expect(rec.state.nodes[DRAW]!.locked).toEqual({ version: "1.2", by: "human" });
       expect(rec.state.nodes[DRAW]!.thread.at(-1)).toMatchObject({ by: "kriya", did: ["locked v2"], model: "test", costUsd: 0.02 });
@@ -117,7 +117,7 @@ describe("what the chat is told and what it may do", () => {
     try {
       const { rec, s } = await openRun(project, store, "part_recipe-1", { out: () => {}, err: () => {}, cwd }, { readOnly: true });
       const chat: Chat = async () => ({ text: "Sure.", actions: [{ do: "lock", version: 9, why: "" }, { do: "make", from: 0, instruction: "  ", how: "redo" }], model: "test", cost_usd: 0 });
-      const { did } = await talk(project, s, () => rec.state, chat, DRAW, "lock v9 and redo it");
+      const { did } = await talk(project, s, chat, DRAW, "lock v9 and redo it");
       expect(did).toEqual(["couldn't lock v9: there's no v9", "couldn't make a new version: say what to change, e.g. \"make it night\""]);
     } finally {
       store.close();

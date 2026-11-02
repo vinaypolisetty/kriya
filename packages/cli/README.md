@@ -17,10 +17,11 @@ Depends on every other package, plus `yaml`, `zod` and `qrcode` (the phone-pairi
 | [`chat.ts`](src/chat.ts) | Talking to a step (`kriya chat`, `POST /api/chat`, D-87): the brief the chat gets from recorded state, and `talk`, which records the message, asks the chat, does what it asked the way a click would (lock, make a version) and records the answer |
 | [`fake.ts`](src/fake.ts) | Fake models, tools and a fake step chat, so a whole episode runs without keys or cost |
 | [`web.ts`](src/web.ts) | `kriya web`: the JSON API, media, server-sent events, LAN pairing. Its header lists every route |
+| [`live.ts`](src/live.ts) | The runs `kriya web` is carrying on: writes one at a time, one scheduler per run while its models work (D-86) |
 
 ## How a command works
 
-Each command is its own process. It loads the project, opens `.kriya/`, and calls `openRun()`, which replays the run, applies Library changes and calls `recover()`. Then it does its one thing, drives the run until it waits, prints a short report, and closes the store. Nothing is kept in memory between commands, so a closed terminal loses nothing. `kriya web` does the same per request, and sends every write through one queue, because two schedulers on one run would disagree.
+Each command is its own process. It loads the project, opens `.kriya/`, and calls `openRun()`, which replays the run, applies Library changes and calls `recover()`. Then it does its one thing, drives the run until it waits, prints a short report, and closes the store. Nothing is kept in memory between commands, so a closed terminal loses nothing. `kriya web` does the same per request, and sends every write through `LiveRuns` (`live.ts`, D-86): writes are recorded one at a time, and a run whose models are still working keeps its one scheduler, which takes the next write, because two schedulers on one run would disagree. Work in flight never holds a write up.
 
 The full command reference is [docs/cli.md](../../docs/cli.md).
 
@@ -32,4 +33,4 @@ The full command reference is [docs/cli.md](../../docs/cli.md).
 
 ## Tests
 
-`pnpm --filter @kriya/cli test`. `commands.test.ts` runs the commands through `main()` on temporary projects made with `kriya init --example mohalla-mitra`, using fakes. `web.test.ts` starts the server on a free port and talks to it with `fetch`, including acting as an unpaired phone.
+`pnpm --filter @kriya/cli test`. `commands.test.ts` runs the commands through `main()` on temporary projects made with `kriya init --example mohalla-mitra`, using fakes. `web.test.ts` starts the server on a free port and talks to it with `fetch`, including acting as an unpaired phone. `live.test.ts` drives a run whose clip is slow, to show a pick goes through meanwhile.

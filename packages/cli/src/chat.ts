@@ -100,31 +100,43 @@ function lockedWork(state: RunState, key: string): { key: string; value: unknown
 export type Talked = { reply: ChatReply; did: string[] };
 
 /**
- * One message to a step: recorded, answered, its actions done, the answer
- * recorded. The caller then drives the run (`drive`), since a new version or a
- * lock may set work going.
+ * One message to a step, start to finish: heard, answered, acted on. The
+ * caller then drives the run (`drive`), since a new version or a lock may set
+ * work going. `kriya web` does the two halves itself, so the chat's answer is
+ * waited for outside the line of writes (D-86).
  */
-export async function talk(project: Project, s: Scheduler, state: () => RunState, chat: Chat, key: string, text: string): Promise<Talked> {
+export async function talk(project: Project, s: Scheduler, chat: Chat, key: string, text: string): Promise<Talked> {
+  const brief = hear(project, s, key, text);
+  const r = await chat(brief);
+  return { reply: r, did: reply(s, key, brief.message, r) };
+}
+
+/** Records what the creator said and returns what the chat is told (the conversation before this message). */
+export function hear(project: Project, s: Scheduler, key: string, text: string): ChatBrief {
   const message = text.trim();
-  if (!message) throw new UserError("say something to the step, e.g. kriya chat <run> <step> \"why is v2 darker?\"");
-  const brief = chatBrief(project, state(), key, message);
+  if (!message) throw new UserError('say something to the step, e.g. kriya chat <run> <step> "why is v2 darker?"');
+  const brief = chatBrief(project, s.state, key, message);
   s.said(key, message);
-  const reply = await chat(brief);
-  const did = reply.actions.map((a) => {
+  return brief;
+}
+
+/** Does what the chat asked, the way a click would, and records its answer with what was done. */
+export function reply(s: Scheduler, key: string, message: string, r: ChatReply): string[] {
+  const did = r.actions.map((a) => {
     try {
-      return act(s, state, key, a, message);
+      return act(s, key, a, message);
     } catch (e) {
       return `couldn't ${a.do === "lock" ? `lock v${a.version}` : "make a new version"}: ${describeError(e)}`;
     }
   });
-  s.answered(key, { text: reply.text, did, model: reply.model, cost_usd: reply.cost_usd });
-  return { reply, did };
+  s.answered(key, { text: r.text, did, model: r.model, cost_usd: r.cost_usd });
+  return did;
 }
 
 /** Does one thing the chat asked for, the way a click would, and says what was done. */
-function act(s: Scheduler, state: () => RunState, key: string, a: ChatReply["actions"][number], message: string): string {
-  if (state().status === "completed") return `didn't ${a.do === "lock" ? "lock" : "make"} anything: this run is finished, so it stays as it is`;
-  const n = state().nodes[key]!;
+function act(s: Scheduler, key: string, a: ChatReply["actions"][number], message: string): string {
+  if (s.state.status === "completed") return `didn't ${a.do === "lock" ? "lock" : "make"} anything: this run is finished, so it stays as it is`;
+  const n = s.state.nodes[key]!;
   const byNumber = Object.fromEntries(Object.entries(numbers(n)).map(([id, k]) => [k, id]));
   if (a.do === "lock") {
     const id = byNumber[a.version];

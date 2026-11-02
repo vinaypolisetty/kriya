@@ -52,7 +52,9 @@
  * `.kriya/web-token`). This machine never needs it.
  *
  * Reading never calls a model or writes. A decision is recorded at once; the
- * run then carries on in the background (models, tools), one at a time.
+ * run then carries on in the background (models, tools). Writes are recorded
+ * one at a time, but work in flight never holds them up: a pick on one shot
+ * goes through while another shot's clip is still being made (D-86).
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -63,9 +65,10 @@ import { fileURLToPath } from "node:url";
 import { describeError, sniff, suggestFix, type FixRule } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
 import { findGraph, intention, numbers, type RunState } from "@kriya/engine";
-import { allInbox, drive, openRun, projectMedia, recipeId, startRun, type Entry, type IO } from "./commands.js";
-import { chatFor, recipeOf, talk } from "./chat.js";
+import { allInbox, openRun, projectMedia, recipeId, startRun, type Entry, type IO } from "./commands.js";
+import { chatFor, hear, recipeOf, reply } from "./chat.js";
 import { answerTip, projectTips } from "./kb.js";
+import { LiveRuns } from "./live.js";
 import { traceView } from "./trace.js";
 import { libraryAssets, MEDIA } from "./library.js";
 import { loadProject, UserError, type Project } from "./project.js";
@@ -88,8 +91,6 @@ export type WebItem = {
   suggested?: { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
   /** The branch of the step on show, when it's not main: the review shows only that branch's candidates (D-71). */
   branch?: string;
-  /** Its run is still working after a decision (models, tools); the item may change. */
-  working: boolean;
   /** Reviews of the same step across a for-each step's items share a batch (`part:per_shot[].pick`); `item` names this one (P3-04). */
   batch: string;
   item?: string;
@@ -252,9 +253,11 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     return p;
   };
   const quiet: IO = { out: () => {}, err: () => {}, cwd: opts.io.cwd };
-  /** Decisions and the work after them, one at a time: two schedulers on one run would disagree. */
-  let queue: Promise<unknown> = Promise.resolve();
-  const busy = new Set<string>();
+  /** Writes, one at a time, and the runs carrying on after them (D-86). */
+  const live = new LiveRuns(
+    async (run) => openRun(current(), store, run, quiet, { readOnly: true }),
+    (run, e) => opts.io.err(`! ${run}: ${describeError(e)}`),
+  );
   const clients = new Set<ServerResponse>();
 
   /** Blobs never change, so each one's type is read once. */
@@ -289,7 +292,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     for (const e of entries) if (!states.has(e.run)) states.set(e.run, (await openRun(project, store, e.run, quiet, { readOnly: true })).rec.state);
     return entries.map((e) => {
       e = { ...e, beside: e.beside.map((b) => ({ ...b, value: projectFile(project, b.value) })) };
-      const item = web(e, busy.has(e.run), typeOf, estimates(project, states.get(e.run)!, e.key), project.kb.rules);
+      const item = web(e, typeOf, estimates(project, states.get(e.run)!, e.key), project.kb.rules);
       const branch = shownBranch(project, states.get(e.run)!, e.key);
       return branch && branch !== "main" ? { ...item, branch } : item;
     });
@@ -307,7 +310,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
         recipe: recipeId(project, rec.state.graph),
         status: rec.state.status,
         waiting: rec.state.status === "running" ? s.inbox().length : 0,
-        working: busy.has(id),
+        working: live.working(id),
         stale: nodes.filter((n) => n.status === "stale").length,
         failed: nodes.filter((n) => n.status === "failed").length,
         costUsd: rec.state.costUsd,
@@ -403,61 +406,34 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     if (typeof run !== "string" || typeof key !== "string") throw new BadRequest("say which run and step: { run, key }");
     if (note !== undefined && typeof note !== "string") throw new BadRequest("a note is words: { run, key, note: \"say it gently\" }");
     if (leaveOut !== undefined && !(Array.isArray(leaveOut) && leaveOut.every((r) => typeof r === "string"))) throw new BadRequest("say what to leave out as a list: { run, key, leaveOut: [\"line.emotion\"] }");
-    const started = queue.then(async () => {
-      const { s, jobs } = await openRun(current(), store, run, quiet, { readOnly: true });
-      s.retry(key, { ...(note ? { note } : {}), ...(leaveOut ? { leaveOut: leaveOut as string[] } : {}) });
-      return { s, jobs };
-    });
-    queue = started.then(
-      ({ s, jobs }) => {
-        busy.add(run);
-        s.recover();
-        return drive(s, jobs, quiet)
-          .catch((e) => opts.io.err(`! ${run}: ${describeError(e)}`))
-          .finally(() => busy.delete(run));
-      },
-      () => undefined,
-    );
-    await started;
+    await live.change(run, (s) => s.retry(key, { ...(note ? { note } : {}), ...(leaveOut ? { leaveOut: leaveOut as string[] } : {}) }));
   };
 
   /** Branching and switching record one event each; nothing runs until a button is pressed on the branch. */
   const branch = async (body: { run?: unknown; key?: unknown; name?: unknown; from?: unknown; branch?: unknown }) => {
     const { run, key } = body;
     if (typeof run !== "string" || typeof key !== "string") throw new BadRequest("say which run and step: { run, key }");
-    const done = queue.then(async () => {
-      const { s } = await openRun(current(), store, run, quiet, { readOnly: true });
-      if (typeof body.branch === "string") return s.switchBranch(key, body.branch);
-      if (typeof body.name !== "string" || typeof body.from !== "string") throw new BadRequest("say what to call the branch and which version it starts from: { name, from }");
-      s.branch(key, body.name, body.from);
-    });
-    queue = done.catch(() => undefined);
-    await done;
+    await live.change(
+      run,
+      (s) => {
+        if (typeof body.branch === "string") return s.switchBranch(key, body.branch);
+        if (typeof body.name !== "string" || typeof body.from !== "string") throw new BadRequest("say what to call the branch and which version it starts from: { name, from }");
+        s.branch(key, body.name, body.from);
+      },
+      { carryOn: false },
+    );
   };
 
   /** One message to a step's chat (D-87): answered and recorded at once; a new version or a rebuild carries on in the background. */
   const chat = async (body: { run?: unknown; key?: unknown; text?: unknown }) => {
     const { run, key, text } = body;
     if (typeof run !== "string" || typeof key !== "string" || typeof text !== "string") throw new BadRequest('say which run and step, and what to say: { run, key, text: "why is v2 darker?" }');
-    const talked = queue.then(async () => {
-      const project = current();
-      const { rec, s, jobs } = await openRun(project, store, run, quiet, { readOnly: true });
-      const r = await talk(project, s, () => rec.state, chatFor(project, projectMedia(project, store)), key, text);
-      return { r, s, jobs, going: rec.state.status === "running" };
-    });
-    queue = talked.then(
-      ({ s, jobs, going }) => {
-        if (!going) return;
-        busy.add(run);
-        s.recover();
-        return drive(s, jobs, quiet)
-          .catch((e) => opts.io.err(`! ${run}: ${describeError(e)}`))
-          .finally(() => busy.delete(run));
-      },
-      () => undefined,
-    );
-    const { r } = await talked;
-    return { text: r.reply.text, did: r.did };
+    const project = current();
+    const brief = await live.change(run, (s) => hear(project, s, key, text), { carryOn: false });
+    // Asked outside the line of writes: a chat thinking for a few seconds holds up no one else's decision (D-86).
+    const r = await chatFor(project, projectMedia(project, store))(brief);
+    const did = await live.change(run, (s) => reply(s, key, brief.message, r), { carryOn: r.actions.length > 0 });
+    return { text: r.text, did };
   };
 
   /** The recipe files as written, problems and all: a broken recipe is the one you most need to see. */
@@ -531,7 +507,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
       throw new BadRequest('give each input as words, the way you would type it after --input: { recipe, inputs: { video: "clips/fall.mp4" } }');
     }
     if (id !== undefined && (typeof id !== "string" || !/^[\w.-]+$/.test(id))) throw new BadRequest("a run's name is letters, numbers, dots and dashes, like fall-take-2");
-    const started = queue.then(() => {
+    const started = live.begin(() => {
       const project = current();
       const graph = findGraph(project.graphs, recipe);
       for (const [name, value] of Object.entries(inputs as Record<string, string>)) {
@@ -541,15 +517,6 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
       }
       return startRun(project, store, recipe, inputs as Record<string, string>, id as string | undefined, (m) => `'${m}'`);
     });
-    queue = started.then(
-      ({ id, s, jobs }) => {
-        busy.add(id);
-        return drive(s, jobs, quiet)
-          .catch((e) => opts.io.err(`! ${id}: ${describeError(e)}`))
-          .finally(() => busy.delete(id));
-      },
-      () => undefined,
-    );
     return (await started).id;
   };
 
@@ -589,31 +556,17 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
   const decide = async (body: { run?: unknown; key?: unknown; action?: unknown; selection?: unknown; note?: unknown; region?: unknown }) => {
     const { run, key, action } = body;
     if (typeof run !== "string" || typeof key !== "string" || typeof action !== "string") throw new BadRequest("say which run, step and button: { run, key, action }");
-    const answered = queue.then(async () => {
-      // Read-only first: the person's answer is recorded before anything else runs, so nothing
-      // (an automatic screen, a recovered job) can answer in their place.
-      const { s, jobs } = await openRun(current(), store, run, quiet, { readOnly: true });
+    // The person's answer is recorded before anything else runs, so nothing (an automatic screen,
+    // a recovered job) can answer in their place; what follows carries on without the browser waiting.
+    await live.change(run, (s) =>
       s.answer(key, {
         action,
         ...(Array.isArray(body.selection) && body.selection.length ? { selection: body.selection.map(String) } : {}),
         ...(typeof body.note === "string" && body.note.trim() ? { note: body.note.trim() } : {}),
         ...(body.region !== undefined && body.region !== "" ? { region: body.region } : {}),
         by: "human",
-      });
-      return { s, jobs };
-    });
-    queue = answered.then(
-      ({ s, jobs }) => {
-        // The decision is on the record; what follows (models, tools) carries on without the browser waiting.
-        busy.add(run);
-        s.recover();
-        return drive(s, jobs, quiet)
-          .catch((e) => opts.io.err(`! ${run}: ${describeError(e)}`))
-          .finally(() => busy.delete(run));
-      },
-      () => undefined,
+      }),
     );
-    await answered;
   };
 
   // Any growth in the log, from anyone, is news. Polling SQLite is cheap and sees other processes too.
@@ -708,7 +661,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     async close() {
       clearInterval(ticker);
       for (const c of clients) c.end();
-      await queue;
+      await live.idle();
       store.close();
     },
   };
@@ -722,7 +675,6 @@ function shownBranch(project: Project, state: RunState, key: string): string | u
   return shown ? state.nodes[r!.prefix + shown]?.branch : undefined;
 }
 
-/** An inbox entry for the browser: blobs as media URLs, the suggested fix, and whether its run is still working. */
 /**
  * What each of a screen's buttons will cost, before you press it: the step its
  * arrow leads to, times what that step's candidates have cost in this run so
@@ -750,7 +702,8 @@ export function estimates(project: Project, state: RunState, key: string): Recor
   return out;
 }
 
-function web(e: Entry, working: boolean, typeOf: (hash: string) => string | undefined, cost: Record<string, number> = {}, rules?: FixRule[]): WebItem {
+/** An inbox entry for the browser: blobs as media URLs, and the suggested fix. */
+function web(e: Entry, typeOf: (hash: string) => string | undefined, cost: Record<string, number> = {}, rules?: FixRule[]): WebItem {
   const s = suggestFix({ actions: e.buttons }, e.shows, rules);
   return {
     id: `${e.run}:${e.key}`,
@@ -763,7 +716,6 @@ function web(e: Entry, working: boolean, typeOf: (hash: string) => string | unde
       const media = besideMedia(b.value, typeOf);
       return media.length ? { ...b, media } : b;
     }),
-    working,
     shows: e.shows.map((x) => {
       const media = mediaIn(x.value, typeOf);
       return { version: x.version, value: x.value, ...(media ? { media } : {}), ...(x.verdict ? { verdict: x.verdict } : {}) };
