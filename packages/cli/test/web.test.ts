@@ -535,3 +535,38 @@ describe("a new run from the browser", () => {
     }
   });
 });
+
+describe("talking to a step from the browser (D-87)", () => {
+  const post = async (web: { url: string }, path: string, body: unknown) => {
+    const r = await fetch(web.url + path, { method: "POST", body: JSON.stringify(body) });
+    return { status: r.status, body: (await r.json()) as { text?: string; did?: string[]; error?: string } };
+  };
+  type Graph = { nodes: { id: string; locked?: { version: string; why?: string }; thread?: { by: string; text: string; did?: string[] }[]; versions: { id: string; n: number; intention: string }[] }[] };
+  const draw = async (web: { url: string }) => ((await (await fetch(`${web.url}/api/runs/shot/graph`)).json()) as Graph).nodes.find((n) => n.id === "draw")!;
+
+  it("answers, does what was asked, and the graph has the conversation and numbered versions", async () => {
+    const { web } = await waitingShot();
+    try {
+      expect(await post(web, "/api/chat", { run: "shot", key: "draw", text: "lock v2, the chai looks hot" })).toEqual({ status: 200, body: { text: "Locking v2.", did: ["locked v2"] } });
+      const d = await draw(web);
+      expect(d.locked).toMatchObject({ version: "1.2", why: "the chai looks hot" });
+      expect(d.thread).toEqual([
+        { by: "you", text: "lock v2, the chai looks hot", branch: "main" },
+        { by: "kriya", text: "Locking v2.", branch: "main", did: ["locked v2"], model: "fake", costUsd: 0 },
+      ]);
+      expect(d.versions.map((v) => [v.id, v.n, v.intention])).toEqual([["1.1", 1, "from recipe"], ["1.2", 2, "from recipe"], ["1.3", 3, "from recipe"]]);
+    } finally {
+      await web.close();
+    }
+  });
+
+  it("plain refusals: nothing to say, a step with no versions of its own", async () => {
+    const { web } = await waitingShot();
+    try {
+      expect((await post(web, "/api/chat", { run: "shot", key: "draw" })).status).toBe(400);
+      expect(await post(web, "/api/chat", { run: "shot", key: "pick", text: "hi" })).toEqual({ status: 400, body: { error: expect.stringContaining("talk to the step it shows: draw") } });
+    } finally {
+      await web.close();
+    }
+  });
+});

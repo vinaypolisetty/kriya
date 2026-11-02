@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
 import { answerTip, preventFor, projectTips } from "./kb.js";
+import { chatFor, talk, threadLines } from "./chat.js";
 import { trace } from "./trace.js";
 import { libraryAssets } from "./library.js";
 import { loadProject, releaseOf, UserError, type Project } from "./project.js";
@@ -44,6 +45,7 @@ const HELP = `kriya: run recipes with people in the loop
   kriya tips [apply|dismiss <tip>]                what keeps failing, and the words that would prevent it
   kriya adopt <run> <step> <base> <from> --note text
                                                   merge two versions: base, taking what the note says from <from>
+  kriya chat <run> <step> [message]               talk to a step about its versions: ask, lock or change by saying so
 
 Values starting with @ are read from a file: --input story_pages=@pages.txt`;
 
@@ -63,6 +65,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "retry": return await retry(rest, io);
       case "keep": return await keep(rest, io);
       case "adopt": return await adopt(rest, io);
+      case "chat": return await chatCommand(rest, io);
       case "library": return await library(rest, io);
       case "tips": return await tipsCommand(rest, io);
       case "check": return await check(rest, io);
@@ -708,6 +711,39 @@ async function adopt(args: string[], io: IO): Promise<number> {
   }
 }
 
+/**
+ * Talks to one step (D-87): with no message, its conversation so far; with
+ * one, the chat answers and does what it was asked (a lock, a new version),
+ * and the run carries on.
+ */
+async function chatCommand(args: string[], io: IO): Promise<number> {
+  const [id, step, ...words] = args;
+  if (!id || !step) throw new UserError('say which run and step: kriya chat <run> <step> "why is v2 darker?"');
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const { rec, s, jobs } = await openRun(project, store, id, io, { readOnly: true });
+    const n = rec.state.nodes[step];
+    if (!n) throw new UserError(`there's no step '${step}' in ${id} yet${suggest(step, Object.keys(rec.state.nodes))}`);
+    if (words.length === 0) {
+      const lines = threadLines(n);
+      io.out(lines.length ? lines.join("\n") : `Nothing said to ${step} yet. Say something: kriya chat ${id} ${step} "why is v2 darker?"`);
+      return 0;
+    }
+    const { reply, did } = await talk(project, s, () => rec.state, chatFor(project, projectMedia(project, store)), step, words.join(" "));
+    io.out(`kriya: ${reply.text}`);
+    for (const d of did) io.out(`  · ${d}`);
+    if (rec.state.status === "running") {
+      s.recover();
+      await drive(s, jobs, io);
+    }
+    report(io, rec.state, s.inbox());
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
 // ── shared ──────────────────────────────────────────────────────────────────
 
 export function checkedProject(io: IO): Project {
@@ -813,7 +849,7 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
  * and video files inside the project (sheets, tracks), https URLs as they are.
  * Downloaded and made files go into the store.
  */
-function projectMedia(project: Project, store: Store): Media {
+export function projectMedia(project: Project, store: Store): Media {
   return {
     read(value) {
       if (value.startsWith("blob:")) {

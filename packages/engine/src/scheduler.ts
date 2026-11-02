@@ -454,7 +454,7 @@ export class Scheduler {
     if (node.refines) {
       const t = this.rec.state.nodes[target];
       if (!t || Object.keys(t.versions).length === 0) return this.fail(key, `there's no '${node.refines}' yet to refine`);
-      ({ parent, instruction } = this.refineSource(ctx, node.refines));
+      if (!this.askedFor(key, true)) ({ parent, instruction } = this.refineSource(ctx, node.refines));
     }
 
     // A missing facet (Tiwari has no look yet) blocks the step until it exists; nothing is spent.
@@ -526,7 +526,10 @@ export class Scheduler {
   /** What the next turn is asked with: the same every time for the same recorded state, so a resubmission matches. */
   private turnRequest(key: string, node: AgentNode, ctx: Context): { sc: StepContext; history: AgentHistory } {
     const n = this.rec.state.nodes[key]!;
-    const sc = this.context(key, node, ctx, n.attempts);
+    // Asked for from the chat (D-87): the agent starts from that version, with what to change.
+    const asked = this.askedFor(key);
+    const sc = this.context(key, node, ctx, n.attempts, key, asked?.from, asked?.instruction);
+    if (asked?.from && !sc.parent) sc.parent = { version: asked.from, output: n.versions[asked.from]!.output };
     sc.idempotencyKey = `${this.rec.runId}/${key}#${n.attempts}/t${n.history.length + 1}`;
     const notes = this.agentNotes(key);
     if (Object.keys(notes).length > 0) sc.notes = notes;
@@ -732,6 +735,11 @@ export class Scheduler {
    */
   private decideLock(key: string, node: Producer, ctx: Context): void {
     const target = node.refines ? ctx.prefix + node.refines : key;
+    // Asked for from the chat (D-87): the new version waits to be locked, and the recipe doesn't move.
+    if (this.askedFor(key)) {
+      if (target !== key) this.rec.record({ type: "NodeCompleted", node: target });
+      return void this.rec.record({ type: "NodeCompleted", node: key });
+    }
     const t = this.rec.state.nodes[target]!;
     if (!this.reviewer(node.refines ?? node.id, ctx)) {
       const passed = Object.values(t.versions).find((v) => v.attempt === t.attempts && summary(v)?.pass);
@@ -812,11 +820,19 @@ export class Scheduler {
    * tried again with (Q-24), added to either.
    */
   private source(key: string, node: Producer, ctx: Context): { parent?: string; instruction?: string; region?: unknown } {
+    const asked = this.askedFor(key);
+    if (asked) return { ...(asked.from ? { parent: asked.from } : {}), instruction: asked.instruction };
     const n = this.rec.state.nodes[key]!;
     const change = n.retry?.attempt === n.attempts ? n.retry.note : undefined;
     const got = node.refines ? this.refineSource(ctx, node.refines) : { instruction: change ? undefined : this.retryNote(key, node, ctx) };
     const instruction = [got.instruction, change].filter(Boolean).join(". ") || undefined;
     return { ...got, instruction };
+  }
+
+  /** The version the creator asked this step for (D-87), when the current attempt (or, with `next`, the coming one) is for it. */
+  private askedFor(key: string, next = false): NonNullable<NodeState["asked"]> | undefined {
+    const n = this.rec.state.nodes[key];
+    return n?.asked && n.asked.attempt === n.attempts + (next ? 1 : 0) ? n.asked : undefined;
   }
 
   /**
@@ -909,6 +925,16 @@ export class Scheduler {
     instruction?: string,
   ): StepContext {
     const got = this.received(key, node, ctx);
+    // An edit asked for from the chat (D-87) reads the version named there and the chat's words,
+    // not the last pick on the screen (`pick.selected`, `pick.note`).
+    const asked = isProducer(node) && node.refines ? this.askedFor(key) : undefined;
+    const screen = asked && "refines" in node && node.refines ? this.reviewer(node.refines, ctx) : undefined;
+    if (asked && screen) {
+      for (const ref of Object.keys(got.uses)) {
+        if (ref === `${screen.id}.note`) got.uses[ref] = asked.instruction;
+        if (ref === `${screen.id}.selected` && asked.from) got.uses[ref] = this.selected(ctx, screen, { selection: [asked.from] });
+      }
+    }
     const sc: StepContext = { visit, inputs: ctx.inputs, key, uses: got.uses };
     if (Object.keys(got.assets).length > 0) sc.assets = got.assets;
     if (got.parent && parent && target) sc.parent = { version: parent, output: this.rec.state.nodes[target]!.versions[parent]!.output };
@@ -1457,6 +1483,75 @@ export class Scheduler {
     if (stepKey !== key) this.rec.record({ type: "NodeCompleted", node: stepKey });
     return made;
     });
+  }
+
+  // ── The step's conversation (D-87) ──────────────────────────────────────
+
+  /**
+   * Asks a step for a new version outside the recipe's flow, from its chat:
+   * "make v2 at night". An edit goes to the step that refines this one (for a
+   * panel, `edit`) and starts from `from`; a redo, or a step nothing refines,
+   * is made by the step itself with the instruction. It runs like any attempt,
+   * slow jobs and crashes included, then goes back to rest: the new version
+   * waits to be locked and no arrow is followed. Returns the step that makes
+   * it. Call `run()` after.
+   */
+  make(key: string, ask: { from?: string; instruction: string; redo?: boolean }): string {
+    return this.atomic(() => {
+      const t = this.rec.state.nodes[key];
+      const inst = this.instances().find((x) => x.key === key);
+      if (!t || !inst) throw new Error(`there's no step '${key}' in this run yet`);
+      const own = inst.node;
+      if (!isProducer(own)) throw new Error(`'${key}' is a ${own.kind} step; only model, agent and tool steps make versions`);
+      if (own.refines) throw new Error(`'${key}' makes versions of '${own.refines}'; ask that step instead`);
+      if (ask.from !== undefined && !t.versions[ask.from]) throw new Error(`'${key}' has no version ${ask.from}`);
+      const instruction = ask.instruction.trim();
+      if (!instruction) throw new Error(`say what to change, e.g. "make it night"`);
+      // A tool that refines it (a crop) needs a marked area, not words: only a model or agent edits from the chat.
+      const editor = ask.redo ? undefined : inst.ctx.graph.nodes.find((n): n is Producer => (n.kind === "model" || n.kind === "agent") && n.refines === own.id);
+      const from = ask.from ?? t.locked?.version ?? onBranch(t).at(-1)?.id;
+      if (editor && !from) throw new Error(`'${key}' has no version yet to change`);
+      const maker = inst.ctx.prefix + (editor ?? own).id;
+      for (const k of new Set([key, maker])) {
+        const st = this.status(k);
+        if (st && ACTIVE.includes(st)) throw new Error(`'${k}' is busy right now (${st}); ask again once it's done`);
+      }
+      this.reopen(`'${key}' was asked for a new version`);
+      this.rec.record({ type: "VersionAsked", node: maker, ...(from ? { from } : {}), instruction });
+      return maker;
+    });
+  }
+
+  /**
+   * Locks a version the way the creator would by hand, from the chat: if a
+   * screen showing this step (or its own approval) is waiting, the pick is
+   * that screen's answer, so the recipe carries on down its arrow; otherwise
+   * it's a direct lock and the work after it goes stale. Call `run()` after.
+   */
+  choose(key: string, version: string, why?: string): void {
+    const inst = this.instances().find((x) => x.key === key);
+    const n = this.rec.state.nodes[key];
+    if (!inst || !n?.versions[version]) throw new Error(`'${key}' has no version ${version}`);
+    const note = why ? { note: why } : {};
+    if (isProducer(inst.node) && n.status === "awaiting_human" && !this.openQuestion(key)) {
+      return this.answer(key, { action: "approve", selection: [version], ...note, by: "human" });
+    }
+    const screen = this.reviewer(inst.node.id, inst.ctx);
+    const button = screen?.actions.find((a) => a.locks && a.needs.includes("selection"));
+    if (screen && button && this.status(inst.ctx.prefix + screen.id) === "awaiting_human") {
+      return this.answer(inst.ctx.prefix + screen.id, { action: button.id, selection: [version], ...note, by: "human" });
+    }
+    this.lock(key, version, why);
+  }
+
+  /** Records what the creator said in a step's chat. Talking changes no work, so a finished run stays finished. */
+  said(key: string, text: string): void {
+    this.atomic(() => this.rec.record({ type: "ChatSaid", node: key, text }));
+  }
+
+  /** Records the chat's answer: its words, what it did, and the call's model and cost. */
+  answered(key: string, a: { text: string; did: string[]; model: string; cost_usd: number }): void {
+    this.atomic(() => this.rec.record({ type: "ChatAnswered", node: key, ...a }));
   }
 
   // ── Cache keys and stale (docs/03-engine.md §6) ─────────────────────────

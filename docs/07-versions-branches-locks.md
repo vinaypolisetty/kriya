@@ -26,10 +26,24 @@ Operations inside a node:
 | **Lock** | Declare the node's output |
 | **Unlock** | Remove the lock; downstream work goes stale |
 
+## Talking to a step
+
+Every model, agent and tool step has a conversation of its own ([D-87](17-decisions.md)): `kriya chat <run> <step>`, or **Talk to this step** in its box in the browser.
+
+- **Versions are numbered** v1, v2, v3… in the order they were made, across branches, so "v3" always names one version. Each one says why it exists, in one line: `from recipe`, `"make him smile"`, `from v2: "night"`, `v4 + v2: "the sky"`, `made again`.
+- **Asking is free of side effects.** "Why is v2 flatter than v3?" gets an answer from what's recorded: each version's prompt, model and checks, pictures of the latest ones, and the story so far (the run's inputs and every locked output). Nothing is made.
+- **Saying what you want acts, the way a click would.** "Make v2 at night" makes a new version from v2 (by the step's edit step when it has one, else the step itself with the instruction); it waits to be locked, and the recipe doesn't move. "Lock v3, the smile reads" locks v3 with *the smile reads* as its why, word for word; if a pick is waiting on this step, that's the pick's answer and the recipe carries on. Vague praise isn't a lock: the chat asks.
+- **A finished run is done and frozen.** You can talk about it; nothing in it is locked or made.
+- **In a run still going, a lock that leaves later work stale rebuilds it** at once: in progress follows the change.
+
+Every message, answer and action is an event, recorded once and replayed (rule 1). The conversation never leaves the step: only its locked version and your lock's why flow downstream ([D-11](17-decisions.md), [D-29](17-decisions.md)).
+
+Not built yet: changes wider than the step (this episode or the Library, then "keep it for future episodes?"), @references to other steps' versions, and finished runs pinned against Library changes.
+
 ## Candidates vs branches
 
 - **Candidates are automatic** and declared in config (images per shot). Pick one; the rest leave context.
-- **Branches are explicit**: only when the user says "branch off" or clicks Branch. By default a conversation is a single path; each message refines the current version. ([Decision D-04](17-decisions.md))
+- **Branches are explicit**: only when the user says "branch off" or clicks Branch. By default a conversation is a single path. ([Decision D-04](17-decisions.md))
 
 ```yaml
 image:

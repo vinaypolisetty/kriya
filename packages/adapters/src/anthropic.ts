@@ -378,7 +378,7 @@ export const take = (i: number, n: number) =>
 const show = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
 
 /** A stored image as an image block Claude reads, or undefined if it isn't one (a clip, a voice, a missing blob). */
-function storedImage(media: Media | undefined, ref: string): Anthropic.Beta.Messages.BetaImageBlockParam | undefined {
+export function storedImage(media: Media | undefined, ref: string): Anthropic.Beta.Messages.BetaImageBlockParam | undefined {
   const img = media?.read(ref);
   if (!img) return undefined;
   if ("url" in img) return { type: "image", source: { type: "url", url: img.url } };
@@ -401,6 +401,9 @@ function cost(m: Message): number {
   const u = m.usage;
   return ((u.input_tokens ?? 0) * p[0] + (u.output_tokens ?? 0) * p[1] + (u.cache_read_input_tokens ?? 0) * p[2] + (u.cache_creation_input_tokens ?? 0) * p[3]) / 1e6;
 }
+
+/** What one answer from Claude cost, in US$, by the model that actually served it. */
+export const claudeCost = cost;
 
 // ── Agents ─────────────────────────────────────────────────────────────────
 
@@ -428,7 +431,9 @@ function agentTools(names: string[], tools: Tools | undefined, outSchema: Record
 function agentMessages(goal: string, ctx: StepContext, history: AgentHistory): Anthropic.Beta.Messages.BetaMessageParam[] {
   const { text, used } = fill(goal, ctx);
   const inputs = Object.entries(ctx.uses).filter(([k]) => !used.has(k));
-  const first = `Goal: ${text.trim()}${inputs.length ? `\n\nInputs:\n${inputs.map(([k, v]) => `- ${k}: ${show(v)}`).join("\n")}` : ""}`;
+  const from = ctx.parent ? `\n\nStart from this version:\n${show(ctx.parent.output)}` : "";
+  const change = ctx.instruction ? `\n\nChange: ${ctx.instruction}` : "";
+  const first = `Goal: ${text.trim()}${inputs.length ? `\n\nInputs:\n${inputs.map(([k, v]) => `- ${k}: ${show(v)}`).join("\n")}` : ""}${from}${change}`;
   const messages: Anthropic.Beta.Messages.BetaMessageParam[] = [{ role: "user", content: first }];
   const notes: Record<string, string> = {};
   for (const h of history) {
