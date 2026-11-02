@@ -13,11 +13,14 @@
  * replaced by its bytes' hash, so redrawing a sheet in place, or changing a
  * voice, is a new version. Every version is kept in `.kriya` (history and
  * files), numbered v1, v2… in the order kriya first saw it.
+ *
+ * A change made in a run and kept for future runs (D-88) is written back to
+ * the entity's file with `writeFacet`, its comments and order kept.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { parse } from "yaml";
+import { isMap, parse, parseDocument } from "yaml";
 import { suggest, type Assets } from "@kriya/engine";
 import type { Store } from "@kriya/store";
 
@@ -69,6 +72,17 @@ export function loadLibrary(root: string, kinds: Record<string, string[]>): Libr
     entities.set(name, { name, ...(typeof kind === "string" ? { kind } : {}), file, facets });
   }
   return { entities, problems };
+}
+
+/** Writes one facet of an entity back to its file, everything else (comments, order) as it was. */
+export function writeFacet(root: string, entity: Entity, facet: string, value: unknown): void {
+  const path = join(root, entity.file);
+  const doc = parseDocument(readFileSync(path, "utf8"));
+  // Field by field into a facet that's already parts, so `look: { image: …, words: … }` keeps its one line.
+  if (isMap(doc.get(facet, true)) && value && typeof value === "object" && !Array.isArray(value)) {
+    for (const [k, v] of Object.entries(value)) doc.setIn([facet, k], v);
+  } else doc.set(facet, value);
+  writeFileSync(path, doc.toString());
 }
 
 /** A facet's version and the files it names, or `missing` for files that aren't in the project. */

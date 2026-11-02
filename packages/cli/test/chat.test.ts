@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "@kriya/store";
@@ -122,5 +122,54 @@ describe("what the chat is told and what it may do", () => {
     } finally {
       store.close();
     }
+  });
+});
+
+describe("changes wider than a step: this run, then the Library if you keep it (D-88)", () => {
+  const MITRA = "name: Mitra\nkind: character\n# drawn round 2\nlook: { image: sheets/mitra.png, words: a thin 60-year-old bald man }\nvoice: { voice: Charon, words: calm and dry }\nspeech: Hinglish\n";
+  const shot = JSON.stringify({ id: "P3-04", characters: ["Mitra"], place: "Chai stall", action: "Mitra writes", lines: [], animate: false });
+
+  /** A Part whose three shots are picked (its voices still wait), and a shot run that's finished. */
+  async function cast(): Promise<string> {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-chat-"));
+    expect((await kriya(dir, "init", "p3", "--example", "mohalla-mitra")).code).toBe(0);
+    const cwd = join(dir, "p3");
+    mkdirSync(join(cwd, "sheets"));
+    writeFileSync(join(cwd, "sheets", "mitra.png"), "mitra");
+    writeFileSync(join(cwd, "library", "mitra.yaml"), MITRA);
+    await kriya(cwd, "run", "shot_recipe", "--input", `item=${shot}`, "--id", "done");
+    await kriya(cwd, "decide", "done:pick", "lock", "--pick", "1.1");
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x", "--id", "p3");
+    await kriya(cwd, "decide", "p3:approve_shots", "approve");
+    for (const s of ["S1", "S2", "S3"]) expect((await kriya(cwd, "decide", `p3:per_shot[${s}].pick`, "lock", "--pick", "1.1")).code).toBe(0);
+    return cwd;
+  }
+
+  it("a change goes to this run only: the shots that used it are redrawn, the Library and other runs don't move", async () => {
+    const cwd = await cast();
+    const r = await kriya(cwd, "chat", "p3", "per_shot[S1].draw", "set Mitra.look.words to an old man with a white beard");
+    expect(r.out).toContain('· changed Mitra\'s look words to "an old man with a white beard" for this run; redoing');
+    expect((await kriya(cwd, "inbox")).out).toContain("p3 · per_shot[S1].pick");
+    expect(readFileSync(join(cwd, "library", "mitra.yaml"), "utf8")).toBe(MITRA);
+    expect((await kriya(cwd, "status", "done")).out).not.toContain("stale");
+  });
+
+  it("kept, it's written to the Library, comments and the sheet as they were; a finished run keeps its look", async () => {
+    const cwd = await cast();
+    await kriya(cwd, "chat", "p3", "per_shot[S1].draw", "set Mitra.look.words to an old man with a white beard");
+    const r = await kriya(cwd, "chat", "p3", "per_shot[S1].draw", "keep Mitra.look");
+    expect(r.out).toContain("· kept Mitra's look in the Library (library/mitra.yaml): runs from now on start with it; finished runs keep theirs");
+    const file = readFileSync(join(cwd, "library", "mitra.yaml"), "utf8");
+    expect(file).toContain("# drawn round 2");
+    expect(file).toMatch(/look: \{ image: sheets\/mitra\.png, words: an old man with a white beard \}/);
+    expect((await kriya(cwd, "status", "done")).out).not.toContain("stale");
+  });
+
+  it("refuses plainly: a file, someone not in the Library, a finished run, nothing to keep", async () => {
+    const cwd = await cast();
+    expect((await kriya(cwd, "chat", "p3", "per_shot[S1].draw", "set Mitra.look.image to sheets/new.png")).out).toContain("· couldn't change Mitra's look: Mitra's look image is a file (sheets/mitra.png); change that in the Library yourself");
+    expect((await kriya(cwd, "chat", "p3", "per_shot[S1].draw", "set Mitrа.voice.voice to Puck")).out).toContain("there's no 'Mitrа' in the Library. Did you mean 'Mitra'?");
+    expect((await kriya(cwd, "chat", "done", "draw", "set Mitra.voice.voice to Puck")).out).toContain("· didn't change anything: this run is finished, so it stays as it is");
+    expect((await kriya(cwd, "chat", "p3", "per_shot[S1].draw", "keep Mitra.voice")).out).toContain("Mitra's voice hasn't been changed in this run, so there's nothing to keep");
   });
 });

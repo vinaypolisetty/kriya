@@ -85,9 +85,11 @@ describe("asset facets", () => {
 
   it("a new look for Bheem makes only Bheem's shot stale", () => {
     const lib = fullLibrary();
-    const { s } = part(lib);
+    const { s, rec } = part(lib);
     lib.facets["Bheem.look"] = ["v2", "bheem-sheet-v2.png"];
     s.assetsChanged();
+    expect(s.stale()).toEqual([]); // the Part is finished: it keeps the look it was drawn with (D-88)
+    s.lock("shot_list", rec.state.nodes.shot_list!.locked!.version); // worked on again, it catches up
     expect(s.stale().map((x) => x.key)).toEqual(["per_shot", "per_shot[P3-02].draw", "assemble"]);
   });
 

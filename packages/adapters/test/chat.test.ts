@@ -37,6 +37,8 @@ const brief = (over: Partial<ChatBrief> = {}): ChatBrief => ({
     { n: 1, branch: "main", locked: false, intention: "from recipe", output: { image: "blob:abc" }, checks: "passed" },
     { n: 2, branch: "night", locked: true, intention: 'from v1: "night"', output: { image: "blob:def" }, model: "google/nano-banana-2" },
   ],
+  facets: [{ ref: "Mitra.look", value: { image: "sheets/mitra.png", words: "a thin 60-year-old bald man" }, from: "Library" }],
+  library: ["Mitra (character): look, voice, speech"],
   story: { inputs: { part_no: 3 }, locked: [{ key: "shot_list", value: { hook: "the tanker never came" } }] },
   images: [{ n: 1, ref: "blob:abc" }, { n: 2, ref: "blob:def" }],
   thread: [
@@ -65,8 +67,10 @@ describe("claudeChat", () => {
     const { client } = fakeClient({
       reply: "Warming v1.",
       actions: [
-        { do: "make", version: 1, why: "", instruction: "warmer light; keep the pose", how: "edit" },
-        { do: "lock", version: 2, why: "", instruction: "", how: "edit" },
+        { do: "make", version: 1, why: "", instruction: "warmer light; keep the pose", how: "edit", entity: "", facet: "", field: "", value: "" },
+        { do: "lock", version: 2, why: "", instruction: "", how: "edit", entity: "", facet: "", field: "", value: "" },
+        { do: "change", version: 0, why: "", instruction: "", how: "edit", entity: "Mitra", facet: "voice", field: "words", value: "older, hoarse" },
+        { do: "keep", version: 0, why: "", instruction: "", how: "edit", entity: "Mitra", facet: "voice", field: "", value: "" },
       ],
     });
     const r = await claudeChat({ client, media })(brief());
@@ -75,6 +79,8 @@ describe("claudeChat", () => {
       actions: [
         { do: "make", from: 1, instruction: "warmer light; keep the pose", how: "edit" },
         { do: "lock", version: 2, why: "" },
+        { do: "change", entity: "Mitra", facet: "voice", field: "words", value: "older, hoarse" },
+        { do: "keep", entity: "Mitra", facet: "voice" },
       ],
       model: "claude-opus-5-5",
       cost_usd: (1000 * 4 + 200 * 20) / 1e6,
@@ -90,11 +96,13 @@ describe("claudeChat", () => {
 });
 
 describe("briefText", () => {
-  it("lists every version by number, why it exists, its branch and lock, and the story so far", () => {
+  it("lists every version by number, why it exists, its branch and lock, the facets it uses, and the story so far", () => {
     const t = briefText(brief());
     expect(t).toContain("v1: from recipe\n  output: {\"image\":\"blob:abc\"}\n  checks: passed");
     expect(t).toContain('v2 (locked) [branch night]: from v1: "night"');
     expect(t).toContain("It can be edited (how: edit). The run is in progress.");
     expect(t).toContain('- shot_list: {"hook":"the tanker never came"}');
+    expect(t).toContain('Library facets it uses:\n- Mitra.look (from the Library): {"image":"sheets/mitra.png","words":"a thin 60-year-old bald man"}');
+    expect(t).toContain("In the Library: Mitra (character): look, voice, speech");
   });
 });

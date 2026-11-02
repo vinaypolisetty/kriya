@@ -1287,7 +1287,10 @@ export class Scheduler {
     });
   }
 
-  /** The Library changed (a new facet version): work that used the old version goes stale. */
+  /**
+   * The Library changed (a new facet version): work that used the old version goes stale.
+   * A finished run keeps the Library it was made with (D-88; see `refreshStale`).
+   */
   assetsChanged(): void {
     this.atomic(() => this.refreshStale());
   }
@@ -1615,6 +1618,9 @@ export class Scheduler {
    * match again as fresh (re-locking the original restores everything, D-05).
    */
   private refreshStale(): void {
+    // Done is frozen (D-88): a finished run keeps the Library facets it was made with. A recipe
+    // change still reaches it; reopened (a lock, a rebuild), it catches up with the Library too.
+    const pinned = this.rec.state.status === "completed";
     for (let pass = 0; pass < 50; pass++) {
       let changed = false;
       for (const { key, node, ctx } of this.instances(this.root(), [], true)) {
@@ -1627,7 +1633,7 @@ export class Scheduler {
         const maker = ctx.graph.nodes.find((x) => x.id === makerId) ?? node;
         const now = this.inputsOf(ctx.prefix + maker.id, maker, ctx);
         // Versions recorded before Oct 26 still list a refining step's own target; it isn't an input.
-        const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k] && !ownTarget(maker, k));
+        const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k] && !ownTarget(maker, k) && !(pinned && k.includes("@")));
         if (diff.length > 0 && n.status !== "stale") {
           // Name the Library change itself ("Bheem's look changed"), not just the reference that reads it.
           const used = this.received(ctx.prefix + maker.id, maker, ctx).assets;

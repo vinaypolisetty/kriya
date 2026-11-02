@@ -33,12 +33,13 @@ Every model, agent and tool step has a conversation of its own ([D-87](17-decisi
 - **Versions are numbered** v1, v2, v3… in the order they were made, across branches, so "v3" always names one version. Each one says why it exists, in one line: `from recipe`, `"make him smile"`, `from v2: "night"`, `v4 + v2: "the sky"`, `made again`.
 - **Asking is free of side effects.** "Why is v2 flatter than v3?" gets an answer from what's recorded: each version's prompt, model and checks, pictures of the latest ones, and the story so far (the run's inputs and every locked output). Nothing is made.
 - **Saying what you want acts, the way a click would.** "Make v2 at night" makes a new version from v2 (by the step's edit step when it has one, else the step itself with the instruction); it waits to be locked, and the recipe doesn't move. "Lock v3, the smile reads" locks v3 with *the smile reads* as its why, word for word; if a pick is waiting on this step, that's the pick's answer and the recipe carries on. Vague praise isn't a lock: the chat asks.
-- **A finished run is done and frozen.** You can talk about it; nothing in it is locked or made.
+- **Facts about a character, place or thing change for the whole run, then the Library if you keep it** ([D-88](17-decisions.md)). "Mitra should sound older" in a voice line's chat changes Mitra's voice for this run: every line he speaks here is redone, the Library isn't touched. Then the chat asks whether to keep it for future runs; yes writes it to `library/mitra.yaml`, no leaves it in this run. One field at a time, never a file: a new sheet is drawn and changed in the Library by hand.
+- **A finished run is done and frozen.** You can talk about it; nothing in it is locked, made or changed, and a Library change doesn't make it stale: it keeps the voices and looks it was made with. Worked on again, it catches up.
 - **In a run still going, a lock that leaves later work stale rebuilds it** at once: in progress follows the change.
 
 Every message, answer and action is an event, recorded once and replayed (rule 1). The conversation never leaves the step: only its locked version and your lock's why flow downstream ([D-11](17-decisions.md), [D-29](17-decisions.md)).
 
-Not built yet: changes wider than the step (this episode or the Library, then "keep it for future episodes?"), @references to other steps' versions, and finished runs pinned against Library changes.
+Not built yet: @references to other steps' versions, redoing candidates that wait for a review when a change touches them, and changes for one step only.
 
 ## Candidates vs branches
 

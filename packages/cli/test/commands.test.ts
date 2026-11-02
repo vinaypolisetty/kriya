@@ -490,12 +490,14 @@ describe("models: { image: replicate } (Day 16)", () => {
       expect(readFileSync(join(cwd, view)).subarray(8).toString()).toBe("panel p3");
       expect(readdirSync(join(cwd, ".kriya", "jobs"))).toHaveLength(1); // the ledger: one step, three predictions
 
-      // Lock a panel, then redraw Bheem's sheet in place: the shot that used it goes stale.
+      // Lock a panel, then redraw Bheem's sheet in place: the finished shot keeps the sheet it was drawn with (D-88)…
       expect((await kriya(cwd, "decide", "1", "lock", "--pick", "1.2")).code).toBe(0);
       expect((await kriya(cwd, "status", "shot_recipe-1")).out.split("\n")[0]).toBe("shot_recipe-1 · shot_recipe · completed");
       writeFileSync(join(cwd, "sheets", "bheem.png"), png("bheem, round 3"));
-      const after = (await kriya(cwd, "status", "shot_recipe-1")).out;
-      expect(after).toContain("↻ draw · stale: Bheem's look changed · locked 1.2");
+      expect((await kriya(cwd, "status", "shot_recipe-1")).out).not.toContain("stale");
+      // …until it's worked on again: then the shot that used it goes stale.
+      expect((await kriya(cwd, "lock", "shot_recipe-1", "draw", "1.2")).code).toBe(0);
+      expect((await kriya(cwd, "status", "shot_recipe-1")).out).toContain("↻ draw · stale: Bheem's look changed · locked 1.2");
     } finally {
       api.close();
       for (const [k, v] of [["REPLICATE_API_TOKEN", saved.token], ["REPLICATE_BASE_URL", saved.url]] as const) {
@@ -594,14 +596,17 @@ describe("the Library (Day 18)", () => {
     expect(Object.keys(voice!).sort()).toEqual(["Mitra.speech", "Mitra.voice"]);
     expect(Object.keys(received(cwd, "shot", "draw")!).sort()).toEqual(["Chai stall.look", "Mitra.look"]);
 
-    // Approve both, then give Mitra a new voice: the line he spoke goes stale; the panel doesn't.
+    // Approve both, then give Mitra a new voice: the line is done, so it keeps the voice it was made with (D-88).
     expect((await kriya(cwd, "decide", "line:listen", "approve")).code).toBe(0);
     expect((await kriya(cwd, "decide", "shot:pick", "lock", "--pick", "1.1")).code).toBe(0);
     entity(cwd, "mitra", MITRA.replace("Charon", "Puck"));
-    expect((await kriya(cwd, "status", "line")).out).toContain("Mitra's voice changed");
+    expect((await kriya(cwd, "status", "line")).out).not.toContain("stale");
     expect((await kriya(cwd, "status", "shot")).out).not.toContain("stale");
-    expect((await kriya(cwd, "status")).out).toContain("voice_recipe     completed · 1 stale"); // finished runs say so too
-    expect(received(cwd, "line", "speak")!["Mitra.voice"]).toBe(voice!["Mitra.voice"]); // the old take keeps the version it used
+    expect(received(cwd, "line", "speak")!["Mitra.voice"]).toBe(voice!["Mitra.voice"]); // the take keeps the version it used
+
+    // Worked on again, the line catches up with the Library: Mitra's voice changed.
+    expect((await kriya(cwd, "lock", "line", "speak", "1.1")).code).toBe(0);
+    expect((await kriya(cwd, "status", "line")).out).toContain("Mitra's voice changed");
   });
 
   it("kriya library lists everyone by kind, with versions, what's missing, and files that aren't there", async () => {

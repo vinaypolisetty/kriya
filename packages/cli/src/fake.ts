@@ -40,14 +40,19 @@ export function fakeExecutors(graphs: Graph[], names: Names = () => []): Executo
 
 /**
  * A fake step chat (D-87), no key, no cost: "lock v2, the smile reads" locks v2 with that why;
- * "make v1 at night" (or change, edit, redo, try) makes a new version; anything else gets an echo.
+ * "make v1 at night" (or edit, redo, try) makes a new version; "set Mitra.voice.voice to Puck"
+ * changes a facet for this run and "keep Mitra.voice" keeps it (D-88); anything else gets an echo.
  */
 export const fakeChat: Chat = async (brief) => {
   const said = brief.message;
   const usage = { model: "fake", cost_usd: 0 };
   const lock = /\block v(\d+)\b[\s,.:;—-]*(.*)$/i.exec(said);
   if (lock) return { text: `Locking v${lock[1]}.`, actions: [{ do: "lock", version: Number(lock[1]), why: lock[2]!.trim() }], ...usage };
-  if (/^(make|change|edit|redo|try)\b/i.test(said)) {
+  const set = /^set (.+?)\.(\w+)(?:\.(\w+))? to (.+)$/i.exec(said);
+  if (set) return { text: `Changing ${set[1]}'s ${set[2]} for this run. Keep it for future runs too?`, actions: [{ do: "change", entity: set[1]!, facet: set[2]!, field: set[3] ?? "", value: set[4]! }], ...usage };
+  const keep = /^keep (.+?)\.(\w+)$/i.exec(said);
+  if (keep) return { text: "Keeping it in the Library.", actions: [{ do: "keep", entity: keep[1]!, facet: keep[2]! }], ...usage };
+  if (/^(make|edit|redo|try)\b/i.test(said)) {
     const from = Number(/\bv(\d+)\b/i.exec(said)?.[1] ?? 0);
     const how = /\b(redo|again)\b/i.test(said) || !brief.canEdit ? "redo" : "edit";
     return { text: "Making a new version.", actions: [{ do: "make", from, instruction: said, how }], ...usage };

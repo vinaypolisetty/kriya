@@ -11,10 +11,10 @@ Depends on every other package, plus `yaml`, `zod` and `qrcode` (the phone-pairi
 | [`main.ts`](src/main.ts) | The executable: real terminal in, exit code out |
 | [`commands.ts`](src/commands.ts) | Every command (`main()`), `openRun` (replay, re-check the Library, recover), `drive`, and `executors()`, which routes each step to Claude, Replicate, a tool or a fake |
 | [`project.ts`](src/project.ts) | `kriya.yaml` (models, context, Library kinds, tools), `recipes/`, the release hash |
-| [`library.ts`](src/library.ts) | `library/*.yaml` → entities and facets; facet versions by content hash; `Assets` for the engine |
+| [`library.ts`](src/library.ts) | `library/*.yaml` → entities and facets; facet versions by content hash; `Assets` for the engine; `writeFacet`, a change kept from a run (D-88) |
 | [`kb.ts`](src/kb.ts) | `kb.yaml`: the project's own rules and its answers to tips; failures by step from every run's checks; `preventFor`, the words applied tips add to a prompt (D-76) |
 | [`trace.ts`](src/trace.ts) | The event log as plain-words lines (`kriya log`, a step's **What happened** in `kriya web`), arrow counts and each review's last answer |
-| [`chat.ts`](src/chat.ts) | Talking to a step (`kriya chat`, `POST /api/chat`, D-87): the brief the chat gets from recorded state, and `talk`, which records the message, asks the chat, does what it asked the way a click would (lock, make a version) and records the answer |
+| [`chat.ts`](src/chat.ts) | Talking to a step (`kriya chat`, `POST /api/chat`, D-87): the brief the chat gets from recorded state, and `talk`, which records the message, asks the chat, does what it asked the way a click would (lock, make a version, change a facet for the run, keep it in the Library) and records the answer |
 | [`fake.ts`](src/fake.ts) | Fake models, tools and a fake step chat, so a whole episode runs without keys or cost |
 | [`web.ts`](src/web.ts) | `kriya web`: the JSON API, media, server-sent events, LAN pairing. Its header lists every route |
 | [`live.ts`](src/live.ts) | The runs `kriya web` is carrying on: writes one at a time, one scheduler per run while its models work (D-86) |
