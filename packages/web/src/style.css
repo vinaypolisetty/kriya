@@ -218,6 +218,16 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 .leave-out label { display: inline-flex; align-items: center; gap: 6px; }
 .branch-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .version .branch-off { font-size: 12px; padding: 0 8px 6px; }
+/* a step's conversation (D-87): yours on the right, the chat's on the left with what it did */
+.thread { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; }
+.said { max-width: 88%; padding: 6px 10px; border-radius: 10px; font-size: 14px; }
+.said p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.said.you { justify-self: end; background: var(--teal-soft); }
+.said.kriya { justify-self: start; background: var(--tool); }
+.said .did { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.said .did::before { content: "· "; }
+.chat-form { display: flex; gap: 8px; align-items: flex-end; }
+.chat-form textarea { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); resize: vertical; }
 .version .why { margin: 0; padding: 0 8px 6px; font-size: 11px; line-height: 15px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* buttons */

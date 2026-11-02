@@ -87,7 +87,7 @@ Run state itself is never stored: it's recomputed from events every time a comma
 | Which step is ready, in what order | Model outputs (`CandidateProduced`) |
 | Edge conditions ([`condition.ts`](../packages/engine/src/condition.ts): no calls, no clock) | Judge verdicts (`VerdictRecorded`) |
 | Loop limits, budgets, joins | Agent turns and tool results (`AgentTurn`, `ToolResult`) |
-| Stale tracking (per-input hashes, D-45) | Human answers (`HumanDecision`) |
+| Stale tracking (per-input hashes, D-45) | Human answers (`HumanDecision`), and what a step's chat said and did (`ChatSaid`, `ChatAnswered`, `VersionAsked`, D-87) |
 | The fix policy's choice ([`fixes.ts`](../packages/adapters/src/fixes.ts) is pure) | Library facet versions (hashes, on each version) |
 
 If you need the engine to "decide" something that takes judgement, add a step that *records* a verdict, and let a condition read it (design rule 2).

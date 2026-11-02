@@ -1,6 +1,6 @@
-/** One step of a run, inside its box on the graph: its state, why, and what it made. */
+/** One step of a run, inside its box on the graph: its state, why, what it made, and its conversation (D-87). */
 import { useState } from "react";
-import { branchOff, retry, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunGraph, type TraceLine, type TraceView } from "./api";
+import { branchOff, retry, say, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunGraph, type TraceLine, type TraceView } from "./api";
 import { statusOf } from "./Graph";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
@@ -8,6 +8,8 @@ const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 export function NodePanel({ n, run }: { n: GNode; run: string }) {
   const st = statusOf(n.status);
   const latest = Math.max(0, ...n.versions.map((v) => Number(v.id.split(".")[0])));
+  const locked = n.versions.find((v) => v.id === n.locked?.version);
+  const talks = run && (n.kind === "model" || n.kind === "agent" || n.kind === "tool") && n.status !== "not_started";
   return (
     <aside className="panel" aria-label={`Step ${n.name}`}>
       <p className={`pill tone-${st.tone}`}>{n.waitingOnYou ? "Waiting for you" : st.label}</p>
@@ -17,7 +19,7 @@ export function NodePanel({ n, run }: { n: GNode; run: string }) {
       {n.staleReason && <p className="note">Stale: {n.staleReason}</p>}
       {n.locked && (
         <p className="note">
-          Locked {n.locked.version}
+          Locked {locked ? `v${locked.n}` : n.locked.version}
           {n.locked.by === "auto" ? " automatically" : ""}
           {n.locked.why ? `: "${n.locked.why}"` : ""}
         </p>
@@ -25,8 +27,79 @@ export function NodePanel({ n, run }: { n: GNode; run: string }) {
       {n.costUsd > 0 && <p className="muted mono">Spent {usd(n.costUsd)}</p>}
 
       {n.versions.length > 0 && <VersionTree n={n} run={run} latest={latest} />}
+      {talks && <Chat run={run} n={n} />}
       {run && <Happened run={run} n={n} />}
     </aside>
+  );
+}
+
+/**
+ * Talk to this step (D-87): ask about its versions, or say what you want
+ * ("make v2 at night", "lock v3, the smile reads"). The chat answers and does
+ * what a click could; what it did is listed under its answer.
+ */
+function Chat({ run, n }: { run: string; n: GNode }) {
+  const [text, setText] = useState("");
+  const [sent, setSent] = useState<string>();
+  const [error, setError] = useState<string>();
+  const thread = n.thread ?? [];
+  const send = async () => {
+    const said = text.trim();
+    if (!said || sent) return;
+    setSent(said);
+    setError(undefined);
+    try {
+      await say(run, n.key, said);
+      setText("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSent(undefined);
+    }
+  };
+  return (
+    <section className="chat">
+      <h3>Talk to this step</h3>
+      {thread.length === 0 && !sent && <p className="muted small">Ask about its versions, or say what you want: "make v2 at night", "lock v3, the smile reads".</p>}
+      {(thread.length > 0 || sent) && (
+        <ol className="thread">
+          {thread.map((t, i) => (
+            <li key={i} className={`said ${t.by}`}>
+              <p>{t.text}</p>
+              {t.did?.map((d, j) => (
+                <p key={j} className="did">{d}</p>
+              ))}
+            </li>
+          ))}
+          {sent && <li className="said you"><p>{sent}</p></li>}
+          {sent && <li className="said kriya muted"><p>Thinking…</p></li>}
+        </ol>
+      )}
+      <form
+        className="chat-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void send();
+        }}
+      >
+        <textarea
+          value={text}
+          rows={2}
+          aria-label={`Say something to ${n.name}`}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              e.currentTarget.form?.requestSubmit();
+            }
+          }}
+          placeholder={n.versions.length > 1 ? `e.g. why is v${n.versions.length} darker?` : "e.g. make it night"}
+          disabled={!!sent}
+        />
+        <button type="submit" className="primary" disabled={!text.trim() || !!sent}>{sent ? "…" : "Send"}</button>
+      </form>
+      {error && <p className="note fail">{error}</p>}
+    </section>
   );
 }
 
@@ -374,25 +447,22 @@ function VersionCard({ v, n, older, onBranch }: { v: GVersion; n: GNode; older: 
   return (
     <figure className={["version", v.verdict ? (v.verdict.pass ? "pass" : "fail") : "", v.id === n.locked?.version ? "locked" : "", older ? "older" : ""].join(" ")}>
       {v.thumb?.type.startsWith("image/") ? (
-        <img src={v.thumb.url} alt={`version ${v.id}`} loading="lazy" />
+        <img src={v.thumb.url} alt={`v${v.n}`} loading="lazy" />
       ) : v.thumb?.type.startsWith("audio/") ? (
         <audio src={v.thumb.url} controls preload="none" />
       ) : v.thumb?.type.startsWith("video/") ? (
         <video src={v.thumb.url} controls preload="metadata" />
       ) : null}
       <figcaption>
-        <b>{v.id}</b>
+        <b title={`version ${v.id}`}>v{v.n}</b>
         {v.id === n.locked?.version && <span className="lock">locked</span>}
         {v.verdict && <span className={v.verdict.pass ? "ok" : "bad"}>{v.verdict.pass ? "✓" : `✗ ${v.verdict.issues.length}`}</span>}
         {v.costUsd > 0 && <span className="mono muted">{usd(v.costUsd)}</span>}
       </figcaption>
-      {(v.madeBy || v.instruction || v.parents.length > 0) && (
-        <p className="why">
-          {v.parents.length > 0 && <span className="muted">from {v.parents.join(" + ")} · </span>}
-          {v.madeBy ? `by ${v.madeBy}` : v.parents.length ? "" : "again"}
-          {v.instruction ? `: "${v.instruction}"` : ""}
-        </p>
-      )}
+      <p className="why">
+        {v.intention}
+        {v.madeBy && <span className="muted"> · by {v.madeBy.split(".").at(-1)}</span>}
+      </p>
       <button type="button" className="link branch-off" onClick={onBranch}>Branch off</button>
     </figure>
   );

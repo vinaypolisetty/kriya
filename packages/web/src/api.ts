@@ -11,7 +11,8 @@ export type Item = { id: string; run: string; key: string; title: string; review
 export type Decision = { run: string; key: string; action: string; selection?: string[]; note?: string; region?: string };
 
 export type Run = { id: string; recipe: string; status: string; waiting: number; working: boolean; stale: number; failed: number; costUsd: number; started?: string; updated?: string };
-export type GVersion = { id: string; costUsd: number; branch: string; parents: string[]; thumb?: Media; verdict?: Verdict; madeBy?: string; instruction?: string; model?: string };
+/** A version: its id (`attempt.candidate`), its number v1, v2… within the step, and why it exists, in one line (D-87). */
+export type GVersion = { id: string; n: number; intention: string; costUsd: number; branch: string; parents: string[]; thumb?: Media; verdict?: Verdict; madeBy?: string; instruction?: string; model?: string };
 export type GNode = {
   id: string;
   key: string;
@@ -27,6 +28,8 @@ export type GNode = {
   branch?: string;
   branches?: { name: string; from?: string }[];
   locked?: { version: string; by: string; why?: string };
+  /** The step's conversation, oldest first (D-87). */
+  thread?: ChatEntry[];
   failure?: string;
   /** A failed step's inputs it can try again without (Q-24): an emotion, a facet, a style. */
   leavable?: string[];
@@ -82,6 +85,11 @@ export type Recipe = { file: string; text: string; created: string; graph?: stri
 
 export const branchOff = (run: string, key: string, name: string, from: string) => call<{ ok: true }>("/api/branch", { method: "POST", body: JSON.stringify({ run, key, name, from }) });
 export const switchBranch = (run: string, key: string, branch: string) => call<{ ok: true }>("/api/switch", { method: "POST", body: JSON.stringify({ run, key, branch }) });
+
+/** One message in a step's conversation: yours, or the chat's answer with what it did (D-87). */
+export type ChatEntry = { by: "you" | "kriya"; text: string; branch: string; did?: string[]; model?: string; costUsd?: number };
+/** Says something to a step; comes back once the chat has answered and done what it was asked. */
+export const say = (run: string, key: string, text: string) => call<{ text: string; did: string[] }>("/api/chat", { method: "POST", body: JSON.stringify({ run, key, text }) });
 
 export const retry = (run: string, key: string, change: { note?: string; leaveOut?: string[] } = {}) => call<{ ok: true }>("/api/retry", { method: "POST", body: JSON.stringify({ run, key, ...change }) });
 

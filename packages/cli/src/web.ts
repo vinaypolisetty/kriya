@@ -5,7 +5,8 @@
  *
  *   GET  /api/runs         every run: its recipe, status, what's waiting on you, cost, stale work
  *   GET  /api/runs/<id>/graph[?at=per_shot[P3-04]]
- *                          a run as its recipe's graph with each step's live state (Day 24, D-67);
+ *                          a run as its recipe's graph with each step's live state (Day 24, D-67), its versions
+ *                          numbered v1, v2… with why each exists, and its conversation (D-87);
  *                          `at` opens one item of a for-each step; `given` is what it was started with
  *   GET  /api/runs/<id>/trace[?at=…][&key=…][&all=1]
  *                          what happened, from the event log (Day 36): one step's lines in plain words
@@ -23,6 +24,8 @@
  *                          failed items); a note or inputs left out try it with a change (Q-24)
  *   POST /api/branch       branch off from a version: { run, key, name, from } (Day 26, D-71)
  *   POST /api/switch       switch a step to another of its branches: { run, key, branch }
+ *   POST /api/chat         say something to a step (D-87): { run, key, text }; answers { text, did } once the chat
+ *                          has answered and done what it was asked (a lock, a new version); the run carries on in the background
  *   GET  /api/tips         what keeps failing and the words that would prevent it, and the tips applied (D-76)
  *   POST /api/tips         say yes or no to a tip: { id, answer: "apply" | "dismiss" } (saved in kb.yaml)
  *   GET  /api/recipes      every recipe file, oldest first: its YAML as written, when the file was made,
@@ -61,8 +64,9 @@ import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeError, sniff, suggestFix, type FixRule } from "@kriya/adapters";
 import { openStore, type Store } from "@kriya/store";
-import { findGraph, type RunState } from "@kriya/engine";
-import { allInbox, openRun, recipeId, startRun, type Entry, type IO } from "./commands.js";
+import { findGraph, intention, numbers, type RunState } from "@kriya/engine";
+import { allInbox, openRun, projectMedia, recipeId, startRun, type Entry, type IO } from "./commands.js";
+import { chatFor, hear, recipeOf, reply } from "./chat.js";
 import { answerTip, projectTips } from "./kb.js";
 import { LiveRuns } from "./live.js";
 import { traceView } from "./trace.js";
@@ -362,11 +366,12 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
               return { key: `${key}[${k}]`, label: k, status: itemStatus(rec.state.nodes, at), steps, ...(made.length ? { thumb: made.at(-1)! } : {}) };
             })
           : undefined;
+      const num = st ? numbers(st) : {};
       const versions = st
         ? Object.values(st.versions).map((v) => {
             const t = thumb(v.output);
             const sum = verdictOf(v.verdicts);
-            return { id: v.id, costUsd: v.costUsd, branch: v.branch, parents: v.parents, ...(t ? { thumb: t } : {}), ...(sum ? { verdict: sum } : {}), ...(v.madeBy ? { madeBy: v.madeBy } : {}), ...(v.instruction ? { instruction: v.instruction } : {}), ...(v.model ? { model: v.model } : {}) };
+            return { id: v.id, n: num[v.id]!, intention: intention(st, v), costUsd: v.costUsd, branch: v.branch, parents: v.parents, ...(t ? { thumb: t } : {}), ...(sum ? { verdict: sum } : {}), ...(v.madeBy ? { madeBy: v.madeBy } : {}), ...(v.instruction ? { instruction: v.instruction } : {}), ...(v.model ? { model: v.model } : {}) };
           })
         : [];
       return {
@@ -382,6 +387,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
         versions,
         ...(st ? { branch: st.branch, branches: Object.entries(st.branches).map(([name, b]) => ({ name, ...(b.from ? { from: b.from } : {}) })) } : {}),
         ...(st?.locked ? { locked: st.locked } : {}),
+        ...(st && st.thread.length ? { thread: st.thread } : {}),
         ...(st?.failure ? { failure: st.failure } : {}),
         ...(st?.status === "failed" && (n.kind === "model" || n.kind === "agent") ? { leavable: s.leavable(key) } : {}),
         ...(st?.staleReason ? { staleReason: st.staleReason } : {}),
@@ -416,6 +422,18 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
       },
       { carryOn: false },
     );
+  };
+
+  /** One message to a step's chat (D-87): answered and recorded at once; a new version or a rebuild carries on in the background. */
+  const chat = async (body: { run?: unknown; key?: unknown; text?: unknown }) => {
+    const { run, key, text } = body;
+    if (typeof run !== "string" || typeof key !== "string" || typeof text !== "string") throw new BadRequest('say which run and step, and what to say: { run, key, text: "why is v2 darker?" }');
+    const project = current();
+    const brief = await live.change(run, (s) => hear(project, s, key, text), { carryOn: false });
+    // Asked outside the line of writes: a chat thinking for a few seconds holds up no one else's decision (D-86).
+    const r = await chatFor(project, projectMedia(project, store))(brief);
+    const did = await live.change(run, (s) => reply(s, key, brief.message, r), { carryOn: r.actions.length > 0 });
+    return { text: r.text, did };
   };
 
   /** The recipe files as written, problems and all: a broken recipe is the one you most need to see. */
@@ -583,6 +601,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
       await branch(url.pathname === "/api/switch" ? body : { ...body, branch: undefined });
       return json(res, 200, { ok: true });
     }
+    if (req.method === "POST" && url.pathname === "/api/chat") return json(res, 200, await chat(JSON.parse((await readBody(req)) || "{}")));
     if (url.pathname === "/api/tips" && (req.method === "GET" || req.method === "POST")) {
       const project = current();
       const found = projectTips(store, project.graphs, project.kb);
@@ -646,19 +665,6 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
       store.close();
     },
   };
-}
-
-/** The recipe a step key is in, walking down for-each items: `per_shot[P3-04].pick` → shot_recipe and `per_shot[P3-04].`. */
-function recipeOf(project: Project, state: RunState, key: string) {
-  let g = findGraph(project.graphs, state.graph);
-  let prefix = "";
-  for (const [, mapId, item] of key.matchAll(/(\w+)\[([^\]]+)\]\./g)) {
-    const map = g?.nodes.find((n) => n.id === mapId);
-    if (!map || map.kind !== "map") return undefined;
-    prefix += `${mapId}[${item}].`;
-    g = findGraph(project.graphs, map.graph);
-  }
-  return g ? { g, prefix } : undefined;
 }
 
 /** Which branch a screen's candidates come from: the branch of the step it shows. */

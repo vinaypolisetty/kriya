@@ -10,6 +10,7 @@ Depends on `@kriya/engine` and `@anthropic-ai/sdk`. Replicate is plain `fetch`.
 |---|---|
 | [`jobs.ts`](src/jobs.ts) | `Jobs` (calls in flight, by ticket) and `settle(scheduler, jobs)` (deliver each result, then run on) (D-53) |
 | [`anthropic.ts`](src/anthropic.ts) | `anthropicExecutors`: `llm.write` / `llm.vision` with structured outputs, `llm.research` with web search and fetch (D-74), the judge (`check`), agent turns; prices; `describeError` (D-54, D-63) |
+| [`chat.ts`](src/chat.ts) | `claudeChat`: a step's chat (D-87), one Claude call per message, answering with words and actions (lock, make) as structured output; `briefText`, the step in words |
 | [`replicate.ts`](src/replicate.ts) | `replicateExecutors`: `image.generate`, `image.edit`, `video.from_image`, `audio.speech`, `audio.music`; the job ledger; throttle handling (D-56, D-58, D-69) |
 | [`tools.ts`](src/tools.ts) | `mediaTools`: `crop`, `compress`, `assemble_reel`, `extract_frames`, `stills`, `attach`, `insert_caricatures`, run locally as jobs (D-62, D-80) |
 | [`workers/assemble_reel.py`](workers/assemble_reel.py) | The Reel assembler: Python, Pillow and ffmpeg; reads a manifest, prints one JSON line |

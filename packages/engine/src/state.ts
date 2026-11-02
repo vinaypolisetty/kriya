@@ -90,9 +90,16 @@ export type NodeState = {
   retry?: { attempt: number; note: string };
   /** An arrow just came back into this for-each: set until it reads its list again. */
   walkBack?: boolean;
+  /** A version the creator asked for outside the recipe's flow (D-87), and the attempt it's for. */
+  asked?: { attempt: number; from?: string; instruction: string };
+  /** The step's conversation, oldest first (D-87). */
+  thread: ChatEntry[];
   /** For a map step: its items, in list order, and where they were read from. In a one-at-a-time map, `started` is how far this pass got and `walking` that it's a pass over items already made. */
   items?: { keys: string[]; source: string; version: string; path: string[]; started?: string[]; walking?: boolean };
 };
+
+/** One message in a step's conversation: the creator's (`you`) or the chat's answer (`kriya`), on the branch it was said on. */
+export type ChatEntry = { by: "you" | "kriya"; text: string; branch: string; did?: string[]; model?: string; costUsd?: number };
 
 export type RunState = {
   release: string;
@@ -124,6 +131,7 @@ const newNode = (): NodeState => ({
   branches: { main: {} },
   mentions: [],
   removed: [],
+  thread: [],
 });
 
 /** Applies one event and returns the next state. The input state is not modified. */
@@ -133,6 +141,14 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
     return { release: e.release, graph: e.graph, inputs: e.inputs, status: "running", nodes: {}, edges: {}, context: e.context, overrides: {}, costUsd: 0 };
   }
   if (!state) fail(e, "it came before RunStarted");
+  // Talking about a step changes no work, so it's allowed in a finished run too (D-87).
+  if (e.type === "ChatSaid" || e.type === "ChatAnswered") {
+    const n = state.nodes[e.node];
+    if (!n) fail(e, `step '${e.node}' hasn't started, so there's nothing to talk about yet`);
+    const entry: ChatEntry = e.type === "ChatSaid" ? { by: "you", text: e.text, branch: n.branch } : { by: "kriya", text: e.text, branch: n.branch, did: e.did, model: e.model, costUsd: e.cost_usd };
+    const cost = e.type === "ChatAnswered" ? e.cost_usd : 0;
+    return withNode({ ...state, costUsd: state.costUsd + cost }, e.node, { ...n, thread: [...n.thread, entry], costUsd: n.costUsd + cost });
+  }
   if (e.type === "RunReopened") {
     if (state.status === "running") fail(e, "the run is already open");
     return { ...state, status: "running" };
@@ -157,6 +173,15 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
     const n = prev ? { ...prev, status: "ready" as const } : newNode();
     if (e.back) return withNode(state, e.node, { ...n, walkBack: true });
     return withNode(state, e.node, e.note ? { ...n, retry: { attempt: n.attempts + 1, note: e.note } } : n);
+  }
+
+  if (e.type === "VersionAsked") {
+    const prev = state.nodes[e.node];
+    if (prev && BUSY.includes(prev.status)) fail(e, `step '${e.node}' is busy (${prev.status})`);
+    const n = prev ?? newNode();
+    const asked: NonNullable<NodeState["asked"]> = { attempt: n.attempts + 1, instruction: e.instruction };
+    if (e.from !== undefined) asked.from = e.from;
+    return withNode(state, e.node, { ...n, status: "ready", asked });
   }
 
   const n = state.nodes[e.node];
@@ -307,6 +332,30 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
     case "NodeFailed":
       return next({ status: "failed", failure: e.reason });
   }
+}
+
+/** A step in the middle of something: it can't be asked for another version until it's done. */
+const BUSY: NodeStatus[] = ["running", "checking", "fixing", "waiting_external", "awaiting_human"];
+
+/**
+ * Each version's number within its step, v1, v2… in the order they were made,
+ * across branches, so "v3" names exactly one version (D-87). Ids stay `attempt.candidate`.
+ */
+export function numbers(n: NodeState): Record<string, number> {
+  const byAge = Object.values(n.versions).sort((a, b) => a.attempt - b.attempt || a.candidate - b.candidate);
+  return Object.fromEntries(byAge.map((v, i) => [v.id, i + 1]));
+}
+
+/** Why a version exists, in one line (D-87): `from recipe`, `"make him smile"`, `from v2: "night"`, `v4 + v2: "…"`. */
+export function intention(n: NodeState, v: Version): string {
+  const num = numbers(n);
+  const said = v.instruction ? `"${v.instruction}"` : undefined;
+  if (v.replayedFrom) return `replay of ${v.replayedFrom}${said ? `: ${said}` : ""}`;
+  const parents = v.parents.map((p) => `v${num[p] ?? p}`);
+  if (parents.length > 1) return `${parents.join(" + ")}${said ? `: ${said}` : ""}`;
+  if (parents.length === 1) return `from ${parents[0]}${said ? `: ${said}` : ""}`;
+  if (said) return said;
+  return v.attempt === 1 ? "from recipe" : "made again";
 }
 
 /** Rebuilds run state from a log. */

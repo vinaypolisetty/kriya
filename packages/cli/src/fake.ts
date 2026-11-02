@@ -3,6 +3,7 @@
  * with no keys and no cost. Outputs are made up from each step's declared
  * `out` types, so the recipe's own conditions and maps still work.
  */
+import type { Chat } from "@kriya/adapters";
 import { libraryKind, type Executors, type Graph, type Node, type StepContext, type Tools } from "@kriya/engine";
 
 /** The Library's names by kind; fake outputs use real names where a field is typed `library.<kind>`. */
@@ -36,6 +37,23 @@ export function fakeExecutors(graphs: Graph[], names: Names = () => []): Executo
   };
   return exec;
 }
+
+/**
+ * A fake step chat (D-87), no key, no cost: "lock v2, the smile reads" locks v2 with that why;
+ * "make v1 at night" (or change, edit, redo, try) makes a new version; anything else gets an echo.
+ */
+export const fakeChat: Chat = async (brief) => {
+  const said = brief.message;
+  const usage = { model: "fake", cost_usd: 0 };
+  const lock = /\block v(\d+)\b[\s,.:;—-]*(.*)$/i.exec(said);
+  if (lock) return { text: `Locking v${lock[1]}.`, actions: [{ do: "lock", version: Number(lock[1]), why: lock[2]!.trim() }], ...usage };
+  if (/^(make|change|edit|redo|try)\b/i.test(said)) {
+    const from = Number(/\bv(\d+)\b/i.exec(said)?.[1] ?? 0);
+    const how = /\b(redo|again)\b/i.test(said) || !brief.canEdit ? "redo" : "edit";
+    return { text: "Making a new version.", actions: [{ do: "make", from, instruction: said, how }], ...usage };
+  }
+  return { text: `(fake chat) ${brief.step.name} has ${brief.versions.length} version${brief.versions.length === 1 ? "" : "s"}. You said: ${said}`, actions: [], ...usage };
+};
 
 /** Tools that do nothing but say what they were asked (fake mode; real tools arrive on Day 19). */
 export function fakeTools(): Tools {

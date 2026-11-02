@@ -144,6 +144,8 @@ Rules:
 
 In the UI this is **one chat panel whose scope follows the selection**, with a breadcrumb showing who you're talking to.
 
+Built so far: the node level, one conversation per step, which talks about its versions (v1, v2…) and can lock or make one, as a click would ([D-87](17-decisions.md), [07](07-versions-branches-locks.md#talking-to-a-step)). Episode and project agents come later.
+
 ## Autonomy ("trust") per step
 
 Each step has a trust setting: **Ask me · Decide for me when confident · Always decide**. Steps can move up as the AI checker's agreement with the human's verdicts improves. The same graph runs supervised today and mostly automatic later, with no restructuring.
