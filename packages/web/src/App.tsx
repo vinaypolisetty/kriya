@@ -417,7 +417,6 @@ function InboxPage() {
             <span className="card-head">
               <span className="run-name">{item.run}</span>
               <b>{item.item ? `${item.item} · ` : ""}{item.title}</b>
-              {item.working && <span className="tone-work">working…</span>}
             </span>
             <span className="thumbs">
               {item.shows.map((s) => (

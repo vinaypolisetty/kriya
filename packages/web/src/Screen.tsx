@@ -129,7 +129,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
       {others.map((b) => {
         const need = missing(b);
         return (
-          <button key={b.id} type="button" disabled={!!sending || item.working || need.length > 0} title={need.length ? `needs ${need.map((n) => (n === "selection" ? "a pick" : `a ${n}`)).join(" and ")}` : ""} onClick={() => void press(b)}>
+          <button key={b.id} type="button" disabled={!!sending || need.length > 0} title={need.length ? `needs ${need.map((n) => (n === "selection" ? "a pick" : `a ${n}`)).join(" and ")}` : ""} onClick={() => void press(b)}>
             {sending === b.id ? "…" : `${label(b)}${cost(b)}`}
           </button>
         );
@@ -139,7 +139,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
 
   if (embedded) {
     const tap = !!lock && item.shows.length > 1 && lock.needs.every((n) => n === "selection");
-    const wait = !!chosen || !!sending || item.working;
+    const wait = !!chosen || !!sending;
     // Pictures and clips to choose between get the room: you can't judge a face at 214px.
     const picks = tap && item.shows.some((s) => s.media);
     // The suggested press goes through like a tap. An edit or a crop opens under "not quite right?", to check first.
@@ -151,7 +151,6 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
     };
     return (
       <div className={`review embedded${picks ? " picks" : ""}`}>
-        {item.working && <span className="tone-work">working…</span>}
         {item.branch && <span className="muted">On branch <b>{item.branch}</b>: only its versions are here. Switch in the step details.</span>}
         {besides}
         {tap ? (
@@ -232,7 +231,6 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
             ))}
           </div>
         )}
-        {item.working && <span className="tone-work">working…</span>}
         {item.branch && <span className="muted">On branch <b>{item.branch}</b>: only its versions are here. Switch in the run's step panel.</span>}
       </header>
 
@@ -293,7 +291,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
 
       <footer className="review-foot">
         {lock && (
-          <button type="button" className="primary wide" disabled={!!sending || item.working || missing(lock).length > 0} onClick={() => void press(lock)}>
+          <button type="button" className="primary wide" disabled={!!sending || missing(lock).length > 0} onClick={() => void press(lock)}>
             {sending === lock.id ? "…" : `${label(lock)}${picked && lock.needs.includes("selection") ? ` ${picked}` : ""}${cost(lock)}`}
           </button>
         )}
