@@ -106,7 +106,7 @@ Each recipe below lists the files to touch, in order. Every change also needs a 
 
 **A new CLI command.** A function in `cli/src/commands.ts` that opens the project and store, does one thing, and closes the store in `finally`. Add it to `main()`'s switch, `HELP`, and [docs/cli.md](cli.md). Throw `UserError` for anything the creator did wrong, in plain words with the fix. Test it through `main()` in `commands.test.ts`.
 
-**A new web endpoint or page.** The endpoint goes in `cli/src/web.ts`: add it to the header's route list, and send every write through `queue` (two schedulers on one run would disagree). Reads must never call a model or record anything. The page goes in `packages/web/src/`, with types and calls in `api.ts`. Live data uses `useLive(path)`, which refetches on the server's `changed` event. Server tests go in `cli/test/web.test.ts`.
+**A new web endpoint or page.** The endpoint goes in `cli/src/web.ts`: add it to the header's route list, and send every write through `live.change` (`cli/src/live.ts`, D-86): two schedulers on one run would disagree, so a run whose models are working takes the write on the scheduler it already has. Reads must never call a model or record anything. The page goes in `packages/web/src/`, with types and calls in `api.ts`. Live data uses `useLive(path)`, which refetches on the server's `changed` event. Server tests go in `cli/test/web.test.ts`.
 
 **A new validator rule.** In `engine/src/validate.ts`, as an error or a warning with a plain message that names the fix. Add a test in `validate.test.ts` with a recipe that breaks the rule.
 
