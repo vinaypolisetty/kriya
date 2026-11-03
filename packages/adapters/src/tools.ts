@@ -147,6 +147,7 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
       title: arg(node, ctx, "title") ?? "",
       max_mb: Number(arg(node, ctx, "max_mb") ?? 30),
       fit,
+      captions: arg(node, ctx, "captions") !== false,
       music: Object.fromEntries(Object.entries((music ?? {}) as Record<string, unknown>).map(([cue, v]) => [cue, file(o, v, `m_${cue.replace(/\W/g, "_")}`)])),
     };
     writeFileSync(join(o.dir, "manifest.json"), JSON.stringify(manifest, null, 2));

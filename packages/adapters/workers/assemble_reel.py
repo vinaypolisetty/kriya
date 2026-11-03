@@ -176,7 +176,7 @@ def caption_png(text, path, size=74, maxw=840, stroke=7):
 
 caps = []
 for i, (k, at, sp, end) in enumerate(place):
-    if V[k][3]:
+    if V[k][3] and M.get("captions", True):
         p = f"{S}/cap{i:02d}.png"
         caption_png(V[k][3], p)
         caps.append((p, max(0, sp - 0.05), end + 0.3))
