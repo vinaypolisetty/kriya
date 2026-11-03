@@ -52,6 +52,8 @@ export const fakeChat: Chat = async (brief) => {
   if (set) return { text: `Changing ${set[1]}'s ${set[2]} for this run. Keep it for future runs too?`, actions: [{ do: "change", entity: set[1]!, facet: set[2]!, field: set[3] ?? "", value: set[4]! }], ...usage };
   const keep = /^keep (.+?)\.(\w+)$/i.exec(said);
   if (keep) return { text: "Keeping it in the Library.", actions: [{ do: "keep", entity: keep[1]!, facet: keep[2]! }], ...usage };
+  const patch = /^patch(?: v(\d+))? (.+)$/is.exec(said);
+  if (patch) return { text: "Patching it.", actions: [{ do: "patch", from: Number(patch[1] ?? 0), edits: patch[2]! }], ...usage };
   if (/^(make|edit|redo|try)\b/i.test(said)) {
     const from = Number(/\bv(\d+)\b/i.exec(said)?.[1] ?? 0);
     const how = /\b(redo|again)\b/i.test(said) || !brief.canEdit ? "redo" : "edit";

@@ -31,6 +31,7 @@ const media: Media = { read: (v) => (v === "blob:abc" ? { bytes: PNG, mime: "ima
 
 const brief = (over: Partial<ChatBrief> = {}): ChatBrief => ({
   step: { key: "per_shot[P3-04].draw", name: "Draw the shot", kind: "model", asks: "Mitra at the tap", makes: ["image (image)"] },
+  shapes: [],
   canEdit: true,
   finished: false,
   versions: [

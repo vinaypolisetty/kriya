@@ -23,6 +23,7 @@ import { contextMode, END, SO_FAR, stepText, type AgentNode, type Graph, type No
 import { createHash } from "node:crypto";
 import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
+import { applyEdits, type Edit } from "./patch.js";
 import type { Recorder } from "./recorder.js";
 import type { NodeState, NodeStatus, RunState, Verdict, Version } from "./state.js";
 import { promptRefs, startNodes } from "./validate.js";
@@ -1199,6 +1200,50 @@ export class Scheduler {
     this.rec.record({ type: "CandidateProduced", node: key, attempt, candidate: 1, output, parents, cost_usd: 0, ...(instruction ? { instruction } : {}) });
     this.rec.record({ type: "NodeCompleted", node: key });
     return versionId(attempt, 1);
+    });
+  }
+
+  /**
+   * A new version made from `from` plus edits by item key (D-89): "add a shot
+   * after P3-05" adds one item, and every other item is copied exactly, so
+   * its work stays fresh once this is locked. Code makes it, not a model:
+   * nothing is spent and the result fits the step's `out` types. It inherits
+   * `from`'s inputs, so it goes stale when they move, like the version it was
+   * made from. Nothing is locked; returns the new version's id and what each
+   * edit did.
+   */
+  patch(key: string, from: string, edits: Edit[], opts: { note?: string; names?: (kind: string) => string[] } = {}): { version: string; did: string[] } {
+    return this.atomic(() => {
+      const t = this.rec.state.nodes[key];
+      const inst = this.instances().find((x) => x.key === key);
+      if (!t || !inst) throw new Error(`there's no step '${key}' in this run yet`);
+      const node = inst.node;
+      if (!isProducer(node)) throw new Error(`'${key}' is a ${node.kind} step; only model, agent and tool steps have versions to change`);
+      const base = t.versions[from];
+      if (!base) throw new Error(`'${key}' has no version ${from}`);
+      const st = this.status(key);
+      if (st && ACTIVE.includes(st)) throw new Error(`'${key}' is busy right now (${st}); change it once it's done`);
+      // A list read by a for-each is known by that for-each's key, so a patch and the run agree on what an item is.
+      const keyOf = (field: string) => inst.ctx.graph.nodes.find((n): n is Extract<Node, { kind: "map" }> => n.kind === "map" && n.over === `${node.id}.${field}`)?.key ?? "id";
+      const { output, did } = applyEdits(base.output, edits, { out: node.out, types: inst.ctx.graph.types, keyOf, ...(opts.names ? { names: opts.names } : {}) });
+      const instruction = opts.note?.trim() || did.join("; ");
+      this.reopen(`'${key}' got a patched version`);
+      const attempt = t.attempts + 1;
+      this.rec.record({ type: "AttemptStarted", node: key, attempt });
+      this.rec.record({
+        type: "CandidateProduced",
+        node: key,
+        attempt,
+        candidate: 1,
+        output,
+        parents: [from],
+        cost_usd: 0,
+        instruction,
+        ...(base.inputs ? { inputs: base.inputs } : {}),
+        ...(base.assets ? { assets: base.assets } : {}),
+      });
+      this.rec.record({ type: "NodeCompleted", node: key });
+      return { version: versionId(attempt, 1), did };
     });
   }
 

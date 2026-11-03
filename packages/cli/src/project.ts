@@ -146,3 +146,6 @@ export function loadProject(from: string): Project {
 
 /** An error meant for the person at the terminal: printed as-is, no stack trace. */
 export class UserError extends Error {}
+
+/** The Library's names by kind, in file order, for fields typed `library.<kind>`. */
+export const namesOf = (project: Project) => (kind: string) => [...project.library.entities.values()].filter((e) => e.kind === kind).map((e) => e.name);
