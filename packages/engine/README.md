@@ -16,6 +16,7 @@ Depends on `zod` and `yaml` only. Imports no other `@kriya` package.
 | [`state.ts`](src/state.ts) | `apply(state, event)`: pure, refuses impossible events. `replay(events)` |
 | [`recorder.ts`](src/recorder.ts) | The only writer: check + apply, then append; transactions; refuses values JSON would change |
 | [`scheduler.ts`](src/scheduler.ts) | Which step runs next; edges, loops, joins, for-each items, in turn or all at once; locks, stale, branches, retry, keep; the `Executors` interface |
+| [`patch.ts`](src/patch.ts) | `applyEdits(output, edits, shape)`: a version's output changed by item key (add, update, remove, move, set), checked against the step's types; pure (D-89) |
 | [`cli-validate.ts`](src/cli-validate.ts) | `pnpm validate:examples` |
 
 ## Public API, in brief
@@ -34,7 +35,7 @@ s.inbox();                                                  // what's waiting on
 replay(readRun(eventLog, "run-1"));                         // equals rec.state, always
 ```
 
-What the scheduler can do to a run: `run`, `recover`, `inbox`, `answer`, `lock`, `writeVersion`, `rebuild`, `retry`, `keep`, `branch`, `switchBranch`, `adopt`, `replayChange`, `make` (a version asked for from a step's chat, D-87), `choose` (a lock by word: answers the waiting screen if there is one), `said` / `answered` (the step's conversation), `updateContext`, `override`, `mention`, `removeDefault`, `assetsChanged`, `unblock`. Jobs come back through `deliver`, `deliverTool`, `deliverTurn`, `deliverVerdicts` and `failJob`.
+What the scheduler can do to a run: `run`, `recover`, `inbox`, `answer`, `lock`, `writeVersion`, `patch` (a version changed by item key, D-89), `rebuild`, `retry`, `keep`, `branch`, `switchBranch`, `adopt`, `replayChange`, `make` (a version asked for from a step's chat, D-87), `choose` (a lock by word: answers the waiting screen if there is one), `said` / `answered` (the step's conversation), `updateContext`, `override`, `mention`, `removeDefault`, `assetsChanged`, `unblock`. Jobs come back through `deliver`, `deliverTool`, `deliverTurn`, `deliverVerdicts` and `failJob`.
 
 What it asks of the outside world:
 

@@ -48,6 +48,7 @@ packages/engine/src/
   state.ts         run state as a pure fold over events: apply / replay
   recorder.ts      live side: check + apply an event, then append it
   scheduler.ts     which step runs next: edges, conditions, loop limits, joins
+  patch.ts         a version changed by item key: add, update, remove, move (D-89)
 packages/engine/test/   vitest tests
 packages/store/src/
   blobs.ts         content-addressed blob store (sha256, write-once)
@@ -65,7 +66,7 @@ packages/adapters/src/
   fixes.ts         the fix loop: verdicts → crop / edit / retry / lock; KB rules from the failure table (D-64)
 packages/adapters/workers/assemble_reel.py   the Reel assembler (Python + Pillow + ffmpeg)
 packages/cli/src/
-  commands.ts      init, run, status, show, inbox, decide, lock, rebuild, retry, adopt, check, library (each a fresh process over .kriya/)
+  commands.ts      init, run, status, show, inbox, decide, lock, rebuild, retry, adopt, patch, check, library (each a fresh process over .kriya/)
   project.ts       kriya.yaml + recipes folder
   library.ts       library/ folder: entities, kinds, facet versions
   fake.ts          fake models and Library for keyless runs

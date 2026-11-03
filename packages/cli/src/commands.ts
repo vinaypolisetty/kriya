@@ -10,16 +10,16 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse, stringify } from "yaml";
-import { findGraph, formatProblems, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
+import { findGraph, formatProblems, numbers, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
 import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, TIP_AFTER, MissingKey, MissingToken, replicateExecutors, settle, type FixRule, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
 import { answerTip, preventFor, projectTips } from "./kb.js";
-import { chatFor, talk, threadLines } from "./chat.js";
+import { chatFor, parseEdits, talk, threadLines } from "./chat.js";
 import { trace } from "./trace.js";
 import { libraryAssets } from "./library.js";
-import { loadProject, releaseOf, UserError, type Project } from "./project.js";
+import { loadProject, namesOf, releaseOf, UserError, type Project } from "./project.js";
 
 export type IO = { out: (line: string) => void; err: (line: string) => void; cwd: string };
 
@@ -45,6 +45,8 @@ const HELP = `kriya: run recipes with people in the loop
   kriya tips [apply|dismiss <tip>]                what keeps failing, and the words that would prevent it
   kriya adopt <run> <step> <base> <from> --note text
                                                   merge two versions: base, taking what the note says from <from>
+  kriya patch <run> <step> <version> <edits> [--note text]
+                                                  a new version with items added, changed, removed or moved by key; the rest kept exactly
   kriya chat <run> <step> [message]               talk to a step about its versions: ask, lock or change by saying so
 
 Values starting with @ are read from a file: --input story_pages=@pages.txt`;
@@ -65,6 +67,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "retry": return await retry(rest, io);
       case "keep": return await keep(rest, io);
       case "adopt": return await adopt(rest, io);
+      case "patch": return await patchCommand(rest, io);
       case "chat": return await chatCommand(rest, io);
       case "library": return await library(rest, io);
       case "tips": return await tipsCommand(rest, io);
@@ -712,6 +715,44 @@ async function adopt(args: string[], io: IO): Promise<number> {
 }
 
 /**
+ * A new version of a step from one of its versions plus edits by item key
+ * (D-89): `kriya patch part-3 shot_list v3 @add-leak.yaml`. Every item it
+ * doesn't name is copied as it is, so locking it later redoes only what changed.
+ */
+async function patchCommand(args: string[], io: IO): Promise<number> {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { note: { type: "string" } } });
+  const [id, step, version, text] = positionals;
+  if (!id || !step || !version || !text) throw new UserError('say which run, step and version, and the edits: kriya patch <run> <step> <version> @edits.yaml (or the edits as JSON: \'[{"op":"remove","field":"shots","key":"P3-08"}]\')');
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const { rec, s } = await openRun(project, store, id, io);
+    const n = rec.state.nodes[step];
+    if (!n) throw new UserError(`there's no step '${step}' in ${id} yet${suggest(step, Object.keys(rec.state.nodes))}`);
+    const from = versionNamed(n, version);
+    const edits = parseEdits(text.startsWith("@") ? readFileSync(resolve(io.cwd, text.slice(1)), "utf8") : text);
+    const made = s.patch(step, from, edits, { ...(values.note ? { note: values.note } : {}), names: namesOf(project) });
+    const num = numbers(rec.state.nodes[step]!);
+    io.out(`✓ Made v${num[made.version]} of ${step} from v${num[from]} (${made.version}), at no cost:`);
+    for (const d of made.did) io.out(`    ${d}`);
+    io.out(`  Nothing is locked yet. To use it: kriya lock ${id} ${step} ${made.version}`);
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** A version by its number (`v3`, D-87) or its id (`2.1`). */
+function versionNamed(n: NodeState, name: string): string {
+  if (n.versions[name]) return name;
+  const num = numbers(n);
+  const byNumber = Object.entries(num).find(([, k]) => `v${k}` === name.toLowerCase())?.[0];
+  if (byNumber) return byNumber;
+  const known = Object.entries(num).map(([vid, k]) => `v${k} (${vid})`);
+  throw new UserError(`there's no version '${name}'; this step has ${known.join(", ") || "none yet"}`);
+}
+
+/**
  * Talks to one step (D-87): with no message, its conversation so far; with
  * one, the chat answers and does what it was asked (a lock, a new version),
  * and the run carries on.
@@ -778,9 +819,6 @@ function assetsOf(project: Project, store: Store): ReturnType<typeof libraryAsse
   if (!a) assetsCache.set(project, (a = libraryAssets(project.library, project.root, store, realMedia(project).length === 0)));
   return a;
 }
-
-/** The Library's names by kind, in file order, for fields typed `library.<kind>`. */
-const namesOf = (project: Project) => (kind: string) => [...project.library.entities.values()].filter((e) => e.kind === kind).map((e) => e.name);
 
 /** How many times a `trust: when_confident` screen presses its own buttons before it asks you. */
 const AUTO_ROUNDS = 3;

@@ -5,7 +5,8 @@
  * A message is recorded first (`ChatSaid`), then the chat answers from a brief
  * of the run's recorded state. What it asks to do is checked here and done the
  * way a click would do it, through the scheduler: a lock (answering the screen
- * that waits for it, if one does) or a new version (`make`). Then the answer is
+ * that waits for it, if one does), a new version (`make`), or a patched one:
+ * items of a list changed by key, the rest copied exactly (D-89). Then the answer is
  * recorded with what was done (`ChatAnswered`). The chat never touches the run
  * itself.
  *
@@ -22,10 +23,12 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { claudeChat, describeError, type Chat, type ChatBrief, type ChatReply, type Media } from "@kriya/adapters";
-import { findGraph, intention, numbers, suggest, type NodeState, type RunState, type Scheduler } from "@kriya/engine";
+import { Edit, findGraph, intention, numbers, onBranch, suggest, type Graph, type NodeState, type RunState, type Scheduler } from "@kriya/engine";
+import { parse } from "yaml";
+import { z } from "zod";
 import { MEDIA, writeFacet } from "./library.js";
 import { fakeChat } from "./fake.js";
-import { UserError, type Project } from "./project.js";
+import { namesOf, UserError, type Project } from "./project.js";
 
 /** The recipe a step key is in, walking down for-each items: `per_shot[P3-04].pick` → shot_recipe and `per_shot[P3-04].`. */
 export function recipeOf(project: Project, state: RunState, key: string) {
@@ -67,6 +70,7 @@ export function chatBrief(project: Project, state: RunState, key: string, messag
   const shown = new Set([...byNumber.slice(-PICTURES).map((v) => v.id), ...(n.locked ? [n.locked.version] : [])]);
   return {
     step: { key, name: node.name ?? node.id, kind: node.kind, asks, makes: Object.entries(node.out).map(([f, t]) => `${f} (${t})`) },
+    shapes: shapes(Object.values(node.out), r.g.types),
     canEdit: r.g.nodes.some((x) => (x.kind === "model" || x.kind === "agent") && x.refines === node.id),
     finished: state.status === "completed",
     versions: byNumber.map((v) => ({
@@ -86,6 +90,33 @@ export function chatBrief(project: Project, state: RunState, key: string, messag
     thread: n.thread.map((t) => ({ by: t.by, text: t.text })),
     message,
   };
+}
+
+/** The declared types a step's outputs hold, nested ones too, in words: `shot: id (text), place (library.place), …`. */
+function shapes(types: string[], declared: Graph["types"], seen = new Set<string>()): string[] {
+  return types.flatMap((t) => {
+    const name = /^list<(.+)>$/.exec(t)?.[1] ?? t;
+    const d = declared[name];
+    if (!d || seen.has(name)) return [];
+    seen.add(name);
+    return [`${name}: ${Object.entries(d.fields).map(([f, ft]) => `${f} (${ft})`).join(", ")}`, ...shapes(Object.values(d.fields), declared, seen)];
+  });
+}
+
+/** Edits as YAML or JSON (one edit, or a list), checked before anything is made (D-89). */
+export function parseEdits(text: string): Edit[] {
+  let raw: unknown;
+  try {
+    raw = parse(text);
+  } catch (e) {
+    throw new UserError(`the edits aren't readable YAML or JSON: ${describeError(e)}`);
+  }
+  const r = z.array(Edit).safeParse(Array.isArray(raw) ? raw : [raw]);
+  if (!r.success) {
+    const first = r.error.issues[0]!;
+    throw new UserError(`edit ${Number(first.path[0] ?? 0) + 1} doesn't look right${first.path.length > 1 ? ` (at ${first.path.slice(1).join(".")})` : ""}: ${first.message}. An edit is one of: add (field, item, after or before), update (field, key, set), remove (field, key), move (field, key, after or before), set (field, value)`);
+  }
+  return r.data;
 }
 
 /** The facets a step's versions used, as they read in this run now: the run's change, or the Library's. */
@@ -149,7 +180,7 @@ export function reply(project: Project, s: Scheduler, key: string, message: stri
     try {
       return act(project, s, key, a, message);
     } catch (e) {
-      const what = a.do === "lock" ? `lock v${a.version}` : a.do === "make" ? "make a new version" : `${a.do} ${a.entity}'s ${a.facet}`;
+      const what = a.do === "lock" ? `lock v${a.version}` : a.do === "make" || a.do === "patch" ? "make a new version" : `${a.do} ${a.entity}'s ${a.facet}`;
       return `couldn't ${what}: ${describeError(e)}`;
     }
   });
@@ -177,6 +208,13 @@ function act(project: Project, s: Scheduler, key: string, a: ChatReply["actions"
   }
   const from = a.from > 0 ? byNumber[a.from] : undefined;
   if (a.from > 0 && !from) return `couldn't make a new version: there's no v${a.from}`;
+  if (a.do === "patch") {
+    const base = from ?? n.locked?.version ?? onBranch(n).at(-1)?.id;
+    if (!base) return "couldn't make a new version: this step has no version yet to change";
+    const made = s.patch(key, base, parseEdits(a.edits), { note: message, names: namesOf(project) });
+    const num = numbers(s.state.nodes[key]!);
+    return `made v${num[made.version]} from v${num[base]}: ${made.did.join("; ")}. Nothing is locked yet`;
+  }
   const maker = s.make(key, { ...(from ? { from } : {}), instruction: a.instruction, redo: a.how === "redo" });
   return `making a new version${from ? ` from v${a.from}` : ""}${maker !== key ? ` with ${maker.split(".").at(-1)}` : ""}: ${a.instruction}`;
 }
