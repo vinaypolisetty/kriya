@@ -165,6 +165,24 @@ describe("changes wider than a step: this run, then the Library if you keep it (
     expect((await kriya(cwd, "status", "done")).out).not.toContain("stale");
   });
 
+  it("lines waiting for you are voiced again in the new voice; reviews that don't use it stay as they were (D-90)", async () => {
+    const cwd = await cast();
+    const r = await kriya(cwd, "chat", "p3", "voices[L1].speak", "set Mitra.voice.words to older, hoarse");
+    expect(r.out).toContain('· changed Mitra\'s voice words to "older, hoarse" for this run; making new takes for the 3 reviews waiting for you');
+    const inbox = (await kriya(cwd, "inbox")).out;
+    for (const line of ["L1", "L2", "L3"]) expect(inbox).toContain(`2.1  fake://audio/voices[${line}].speak/v2.1`);
+    expect(inbox).toContain("1.1  {\"clip\":\"fake://video/per_shot[S1].animate/v1.1\"}"); // the clips don't use a voice
+    expect((await kriya(cwd, "rebuild", "p3")).out).toContain("Nothing is stale or out of date");
+  });
+
+  it("the Library edited by hand reaches them too, on a rebuild, like stale work", async () => {
+    const cwd = await cast();
+    writeFileSync(join(cwd, "library", "mitra.yaml"), MITRA.replace("calm and dry", "older, hoarse"));
+    expect((await kriya(cwd, "inbox")).out).toContain("1.1  fake://audio/voices[L1].speak/v1.1"); // nothing moves by itself
+    expect((await kriya(cwd, "rebuild", "p3")).out).toContain("✓ Rebuilding from voices[L1].speak, voices[L2].speak, voices[L3].speak");
+    expect((await kriya(cwd, "inbox")).out).toContain("2.1  fake://audio/voices[L1].speak/v2.1");
+  });
+
   it("refuses plainly: a file, someone not in the Library, a finished run, nothing to keep", async () => {
     const cwd = await cast();
     expect((await kriya(cwd, "chat", "p3", "per_shot[S1].draw", "set Mitra.look.image to sheets/new.png")).out).toContain("· couldn't change Mitra's look: Mitra's look image is a file (sheets/mitra.png); change that in the Library yourself");

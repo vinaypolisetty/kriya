@@ -827,7 +827,7 @@ export class Scheduler {
    */
   private source(key: string, node: Producer, ctx: Context): { parent?: string; instruction?: string; region?: unknown } {
     const asked = this.askedFor(key);
-    if (asked) return { ...(asked.from ? { parent: asked.from } : {}), instruction: asked.instruction };
+    if (asked) return { ...(asked.from ? { parent: asked.from } : {}), ...(asked.instruction ? { instruction: asked.instruction } : {}) };
     const n = this.rec.state.nodes[key]!;
     const change = n.retry?.attempt === n.attempts ? n.retry.note : undefined;
     const got = node.refines ? this.refineSource(ctx, node.refines) : { instruction: change ? undefined : this.retryNote(key, node, ctx) };
@@ -1263,10 +1263,41 @@ export class Scheduler {
   rebuild(): string[] {
     return this.atomic(() => {
     this.refreshStale();
-    if (this.stale().length > 0) this.reopen("rebuilding stale work");
+    const outdated = this.outdated().map((x) => x.key);
+    if (this.stale().length > 0 || outdated.length > 0) this.reopen("rebuilding stale work");
     const all = this.instances(this.root(), [], true);
     const staleMaps = all.filter((x) => x.node.kind === "map" && this.status(x.key) === "stale").map((x) => x.key);
-    return this.readyEarliestStale(all.filter((x) => !staleMaps.some((m) => x.key.startsWith(`${m}[`))));
+    const ready = this.readyEarliestStale(all.filter((x) => !staleMaps.some((m) => x.key.startsWith(`${m}[`))));
+    // Takes waiting for you, made from what has since changed, are made again by their step (D-90).
+    for (const key of outdated) this.rec.record({ type: "VersionAsked", node: key });
+    return [...ready, ...outdated];
+    });
+  }
+
+  /**
+   * Takes still waiting for your review whose step's inputs changed after they
+   * were made (D-90): Mitra's voice changed while two lines wait for a pick. A
+   * rebuild makes them again, so you pick from takes in the new voice. Work a
+   * stale step leads to isn't listed: it's redone when that step is.
+   */
+  outdated(): { key: string; reason: string }[] {
+    if (this.rec.state.status === "completed") return [];
+    const all = this.instances(this.root(), [], true);
+    const stale = all.filter((x) => this.status(x.key) === "stale");
+    const maps = all.filter((x) => x.node.kind === "map");
+    const behindStale = (x: Instance): boolean => {
+      if (stale.some((o) => o.ctx.prefix === x.ctx.prefix && reaches(x.ctx.graph, o.node.id, x.node.id))) return true;
+      const parent = maps.filter((m) => x.ctx.prefix.startsWith(`${m.key}[`)).sort((a, b) => b.key.length - a.key.length)[0];
+      return parent ? stale.includes(parent) || behindStale(parent) : false;
+    };
+    return all.flatMap((x) => {
+      const n = this.rec.state.nodes[x.key];
+      if (!n || n.locked || !isProducer(x.node) || x.node.refines || ACTIVE.includes(n.status)) return [];
+      const screen = this.reviewer(x.node.id, x.ctx);
+      if (!screen || this.status(x.ctx.prefix + screen.id) !== "awaiting_human") return [];
+      const v = onBranch(n).at(-1);
+      const changed = v ? this.changedSince(x, v, false) : undefined;
+      return changed && !behindStale(x) ? [{ key: x.key, reason: changed }] : [];
     });
   }
 
@@ -1674,19 +1705,12 @@ export class Scheduler {
         if (!n?.locked || node.kind === "screen" || ACTIVE.includes(n.status)) continue;
         const v = n.versions[n.locked.version];
         if (!v?.inputs) continue;
-        const makerId = v.madeBy ? v.madeBy.slice(ctx.prefix.length) : node.id;
-        const maker = ctx.graph.nodes.find((x) => x.id === makerId) ?? node;
-        const now = this.inputsOf(ctx.prefix + maker.id, maker, ctx);
-        // Versions recorded before Oct 26 still list a refining step's own target; it isn't an input.
-        const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k] && !ownTarget(maker, k) && !(pinned && k.includes("@")));
-        if (diff.length > 0 && n.status !== "stale") {
-          // Name the Library change itself ("Bheem's look changed"), not just the reference that reads it.
-          const used = this.received(ctx.prefix + maker.id, maker, ctx).assets;
-          const facets = Object.keys({ ...v.assets, ...used }).filter((f) => v.assets?.[f] !== used[f]);
+        const reason = this.changedSince({ key, node, ctx }, v, pinned);
+        if (reason && n.status !== "stale") {
           this.reopen("something its work used changed");
-          this.rec.record({ type: "MarkedStale", node: key, reason: describe(diff, node, facets) });
+          this.rec.record({ type: "MarkedStale", node: key, reason });
           changed = true;
-        } else if (diff.length === 0 && n.status === "stale") {
+        } else if (!reason && n.status === "stale") {
           this.reopen("something its work used changed");
           this.rec.record({ type: "MarkedFresh", node: key });
           changed = true;
@@ -1694,6 +1718,25 @@ export class Scheduler {
       }
       if (!changed) return;
     }
+  }
+
+  /**
+   * What changed in a step's inputs since a version was made, in words, or
+   * nothing: compared with what the step that made it (an edit, maybe) reads
+   * now. `pinned` leaves Library facets out (a finished run keeps them, D-88).
+   */
+  private changedSince({ node, ctx }: Instance, v: Version, pinned: boolean): string | undefined {
+    if (!v.inputs) return undefined;
+    const makerId = v.madeBy ? v.madeBy.slice(ctx.prefix.length) : node.id;
+    const maker = ctx.graph.nodes.find((x) => x.id === makerId) ?? node;
+    const now = this.inputsOf(ctx.prefix + maker.id, maker, ctx);
+    // Versions recorded before Oct 26 still list a refining step's own target; it isn't an input.
+    const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k] && !ownTarget(maker, k) && !(pinned && k.includes("@")));
+    if (diff.length === 0) return undefined;
+    // Name the Library change itself ("Bheem's look changed"), not just the reference that reads it.
+    const used = this.received(ctx.prefix + maker.id, maker, ctx).assets;
+    const facets = Object.keys({ ...v.assets, ...used }).filter((f) => v.assets?.[f] !== used[f]);
+    return describe(diff, node, facets);
   }
 
   /** Makes ready each stale step that no other stale step in its recipe leads to. */

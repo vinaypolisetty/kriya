@@ -101,7 +101,7 @@ describe("a full fake episode from the terminal (Day 13)", () => {
     const status = (await kriya(cwd, "status", "part_recipe-1")).out;
     expect(status.split("\n")[0]).toBe("part_recipe-1 · part_recipe · completed");
     expect(status).not.toContain("↻");
-    expect((await kriya(cwd, "rebuild", "part_recipe-1")).out).toContain("Nothing is stale; there's nothing to rebuild");
+    expect((await kriya(cwd, "rebuild", "part_recipe-1")).out).toContain("Nothing is stale or out of date; there's nothing to rebuild");
   });
 });
 

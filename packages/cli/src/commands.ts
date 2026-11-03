@@ -496,7 +496,7 @@ async function rebuild(args: string[], io: IO): Promise<number> {
   try {
     const { rec, s, jobs } = await openRun(project, store, id, io);
     const started = s.rebuild();
-    if (started.length === 0) io.out("Nothing is stale; there's nothing to rebuild");
+    if (started.length === 0) io.out("Nothing is stale or out of date; there's nothing to rebuild");
     else io.out(`✓ Rebuilding from ${started.join(", ")}`);
     await drive(s, jobs, io);
     report(io, rec.state, s.inbox());

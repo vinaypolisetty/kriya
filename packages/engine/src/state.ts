@@ -90,8 +90,8 @@ export type NodeState = {
   retry?: { attempt: number; note: string };
   /** An arrow just came back into this for-each: set until it reads its list again. */
   walkBack?: boolean;
-  /** A version the creator asked for outside the recipe's flow (D-87), and the attempt it's for. */
-  asked?: { attempt: number; from?: string; instruction: string };
+  /** A version the creator asked for outside the recipe's flow (D-87), and the attempt it's for; no instruction when it's made again for a change (D-90). */
+  asked?: { attempt: number; from?: string; instruction?: string };
   /** The step's conversation, oldest first (D-87). */
   thread: ChatEntry[];
   /** For a map step: its items, in list order, and where they were read from. In a one-at-a-time map, `started` is how far this pass got and `walking` that it's a pass over items already made. */
@@ -179,7 +179,8 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
     const prev = state.nodes[e.node];
     if (prev && BUSY.includes(prev.status)) fail(e, `step '${e.node}' is busy (${prev.status})`);
     const n = prev ?? newNode();
-    const asked: NonNullable<NodeState["asked"]> = { attempt: n.attempts + 1, instruction: e.instruction };
+    const asked: NonNullable<NodeState["asked"]> = { attempt: n.attempts + 1 };
+    if (e.instruction !== undefined) asked.instruction = e.instruction;
     if (e.from !== undefined) asked.from = e.from;
     return withNode(state, e.node, { ...n, status: "ready", asked });
   }

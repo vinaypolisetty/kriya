@@ -201,10 +201,7 @@ function act(project: Project, s: Scheduler, key: string, a: ChatReply["actions"
     // A lock's why is the creator's own words (D-29): anything the chat wrote itself is left out.
     const why = a.why.trim() && message.includes(a.why.trim()) ? a.why.trim() : undefined;
     s.choose(key, id, why);
-    const stale = s.stale();
-    if (stale.length === 0) return `locked v${a.version}`;
-    s.rebuild();
-    return `locked v${a.version}; redoing ${stale.length} step${stale.length === 1 ? "" : "s"} that used the old one`;
+    return `locked v${a.version}${redo(s, "the old one")}`;
   }
   const from = a.from > 0 ? byNumber[a.from] : undefined;
   if (a.from > 0 && !from) return `couldn't make a new version: there's no v${a.from}`;
@@ -220,11 +217,14 @@ function act(project: Project, s: Scheduler, key: string, a: ChatReply["actions"
 }
 
 /** Redoes the run's stale work at once (in progress follows the change), and says how much. */
-function redo(s: Scheduler): string {
-  const stale = s.stale();
-  if (stale.length === 0) return "";
+function redo(s: Scheduler, what = "it"): string {
+  const stale = s.stale().length;
+  const waiting = s.outdated().length; // takes waiting for you, made with the old one, are made again too (D-90)
+  if (stale + waiting === 0) return "";
   s.rebuild();
-  return `; redoing ${stale.length} step${stale.length === 1 ? "" : "s"} that used it`;
+  const steps = stale ? `redoing ${stale} step${stale === 1 ? "" : "s"} that used ${what}` : "";
+  const takes = waiting ? `making new takes for the ${waiting === 1 ? "review" : `${waiting} reviews`} waiting for you` : "";
+  return `; ${[steps, takes].filter(Boolean).join(", and ")}`;
 }
 
 /** One facet changed for this run (D-88): every step here that used it goes stale and is redone; the Library is untouched. */
