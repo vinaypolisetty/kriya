@@ -12,7 +12,9 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "validate:examples": "pnpm --filter @kriya/engine exec tsx src/cli-validate.ts ../../examples",
-    "check:conventions": "tsx scripts/check-conventions.ts"
+    "check:conventions": "tsx scripts/check-conventions.ts",
+    "eval:capture": "pnpm --filter @kriya/cli exec tsx evals/capture.ts",
+    "eval:chat": "pnpm --filter @kriya/cli exec tsx evals/chat.eval.ts"
   },
   "devDependencies": {
     "tsx": "^4.23.15"

@@ -11,3 +11,6 @@ coverage/
 
 # Local run data: events database and media blobs
 .kriya/
+
+# The chat eval's snapshot of a real project (pnpm eval:capture): its pictures and story
+packages/cli/evals/.fixtures/

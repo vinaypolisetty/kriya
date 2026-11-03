@@ -104,6 +104,7 @@ No new runtime dependency without a reason in the PR description. Prefer the pla
 - **Every event** a test records should end with a replay check: `expect(replay(events())).toEqual(rec.state)`.
 - **Every bug fix** starts as a failing test that reproduces it, ideally in the same order of events that broke the real run (see `stale.test.ts`, "the real Part 3 order").
 - Tests use fakes written in the test, SQLite in memory, and the real example recipes. Stub `fetch` for providers.
+- **A real model's judgement is an eval, not a test**: `pnpm eval:chat` (see `packages/cli/README.md`). Tests never call a provider.
 - Name tests as sentences about behaviour: *"a retry on a branch puts its candidates there"*, not *"test branch 2"*.
 
 ## Docs

@@ -34,3 +34,14 @@ The full command reference is [docs/cli.md](../../docs/cli.md).
 ## Tests
 
 `pnpm --filter @kriya/cli test`. `commands.test.ts` runs the commands through `main()` on temporary projects made with `kriya init --example mohalla-mitra`, using fakes. `web.test.ts` starts the server on a free port and talks to it with `fetch`, including acting as an unpaired phone. `live.test.ts` drives a run whose clip is slow, to show a pick goes through meanwhile.
+
+### The chat eval
+
+The tests use a fake chat. Whether real Claude does the right thing in a step's chat is an eval, in [`evals/`](evals/): it calls Claude, costs money (about $2.50 a run) and isn't part of `pnpm test` or CI.
+
+```bash
+pnpm eval:capture ~/projects/mohalla-mitra draw=<run>:<step> finished=<run>:<step> list=<run>:<step> voice=<run>:<step>
+pnpm eval:chat [--repeat 3] [--only <case>] [--model <id>] [--effort <level>]
+```
+
+`capture.ts` snapshots four real briefs and their pictures from your project, read-only, into `evals/.fixtures/` (gitignored: a project's pictures and story are yours). `chat.eval.ts` runs each case a few times and checks the actions, never the words: a lock only when it's said, with the creator's own reason (D-29); a question does nothing; a version vs a character's facet; keep only after a yes; a finished run frozen; a list patched by key, the way a click would (D-89). A case passes only if every run does. Every answer it got is saved next to the snapshot. Run it when the chat's prompt, schema or brief changes, or the model.
