@@ -211,3 +211,59 @@ describe("a finished run keeps the Library it was made with (D-88)", () => {
     expect(replay(readRun(log, "run1"))).toEqual(rec.state);
   });
 });
+
+describe("a change reaches takes still waiting for you (D-90)", () => {
+  /** A shot of Mitra whose three panels wait for a pick, and a Library whose look can be redrawn. */
+  function waitingShot() {
+    const lib = { look: "v1" };
+    const version = (entity: string, facet: string) => (entity === "Mitra" && facet === "look" ? lib.look : "v1");
+    const assets = { facet: (entity: string, facet: string) => ({ version: version(entity, facet), value: `${entity}:${facet}:${version(entity, facet)}` }) };
+    const exec = fakes({ draw: panels }, { pick: () => undefined });
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(shotRecipe, rec, exec, graphs, { assets });
+    s.start("a".repeat(64), { item: { id: "P3-04", animate: false, characters: ["Mitra"], place: "Tap" } }, SERIES);
+    s.run();
+    expect(rec.state.nodes.pick!.status).toBe("awaiting_human");
+    return { s, rec, exec, lib, events: () => readRun(log, "run1") };
+  }
+
+  it("they aren't stale (nothing was locked), but they're out of date, and a rebuild makes them again", () => {
+    const { s, rec, exec, lib, events } = waitingShot();
+    lib.look = "v2"; // Mitra's look is redrawn
+    s.assetsChanged();
+    expect(s.stale()).toEqual([]);
+    expect(s.outdated()).toEqual([{ key: "draw", reason: "Mitra's look changed" }]);
+
+    expect(s.rebuild()).toEqual(["draw"]);
+    s.run();
+    const draw = rec.state.nodes.draw!;
+    expect(Object.keys(draw.versions)).toEqual(["1.1", "1.2", "1.3", "2.1", "2.2", "2.3"]);
+    expect(exec.calls.draw![1]!.assets).toMatchObject({ "Mitra.look": "v2" }); // made with the new look
+    expect(exec.calls.draw![1]!.instruction).toBeUndefined();
+    expect(intention(draw, draw.versions["2.1"]!)).toBe("made again");
+    // The pick still waits, now on the new panels; nothing was locked or chosen for you.
+    expect(rec.state.nodes.pick!.status).toBe("awaiting_human");
+    expect(draw.locked).toBeUndefined();
+    expect(s.outdated()).toEqual([]);
+    expect(replay(events())).toEqual(rec.state);
+  });
+
+  it("takes behind stale work wait for it: they're redone when it is", () => {
+    const exec = fakes(
+      { shot_list: () => [{ shots: [{ id: "P3-01", action: "Tanker", animate: false }, { id: "P3-02", action: "Valve", animate: false }], lines: [], hook: "?" }], draw: panels },
+      { approve_shots: () => ({ action: "approve" }), pick: () => undefined },
+    );
+    const part = graphs.find((g) => g.graph === "part_recipe")!;
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(part, rec, exec, graphs, LIBRARY);
+    s.start("a".repeat(64), { story_pages: "pages", part_no: 3 }, SERIES);
+    s.run();
+    expect(rec.state.nodes["per_shot[P3-01].pick"]!.status).toBe("awaiting_human");
+    // The series' rules (the shot list reads them) and style (the panels read it) both change.
+    s.updateContext("series", { ...SERIES.series, style: "watercolour", rules: "no songs at all" });
+    expect(s.stale().map((x) => x.key)).toContain("shot_list");
+    expect(s.outdated()).toEqual([]);
+  });
+});

@@ -150,9 +150,10 @@ export const EngineEvent = z.discriminatedUnion("type", [
    * The creator asked a step for a new version outside the recipe's flow (D-87): "make v2 at night".
    * `node` is the step that makes it (the edit step, for an edit); `from` is the version it starts from,
    * in the tree the new version goes into. Once it's made, the step goes back to rest: nothing is
-   * locked and no arrow is followed.
+   * locked and no arrow is followed. With no instruction, it's the step made again because what it
+   * used changed while its takes waited for you (D-90).
    */
-  on("VersionAsked", { node: NodeKey, from: z.string().optional(), instruction: z.string().min(1) }),
+  on("VersionAsked", { node: NodeKey, from: z.string().optional(), instruction: z.string().min(1).optional() }),
   /** The creator said something in a step's conversation (D-87). Allowed in a finished run: talking changes nothing. */
   on("ChatSaid", { node: NodeKey, text: z.string().min(1) }),
   /**
