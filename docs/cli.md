@@ -48,6 +48,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 
 ## How it behaves
 
+- **A version is named two ways**: by number, `v1`, `v2`… per step in the order they were made (what `kriya log`, `kriya chat` and the browser say), or by its id, `attempt.candidate` (`1.2`, what the inbox lists). Every command that takes a version (`show`, `lock`, `decide --pick`, `adopt`, `patch`) takes either.
 - **Every command is its own process.** Runs live in `.kriya/kriya.db`; close the terminal mid-episode and carry on tomorrow. Each command replays the run and calls `recover()` first, so a crash never loses work or pays twice (D-46).
 - **Models**: `models: fake` in `kriya.yaml` (the default) makes up outputs from each step's declared types, no keys, no cost. Real providers are chosen per kind of step, and kinds left out stay fake:
   ```yaml

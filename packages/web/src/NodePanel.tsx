@@ -186,14 +186,14 @@ function Decision({ d }: { d: DecisionTrace }) {
       <span>
         {d.by === "auto" ? "Pressed automatically, following the checks: " : "You pressed "}
         <b>{d.action}</b>
-        {d.selection.length > 0 && <> on {d.selection.join(", ")}</>}
+        {d.picks.length > 0 && <> on {d.picks.join(", ")}</>}
       </span>
       {d.note && <q className="small">{d.note}</q>}
       {d.on.length > 0 && (
         <ul className="on">
           {d.on.map((v) => (
             <li key={v.version} className={picked.has(v.version) ? "picked" : ""}>
-              <span className="mono">{v.version}</span>
+              <span className="mono">{v.name}</span>
               {v.check ? (
                 <span className={v.check.pass ? "tone-done" : "tone-fail"}>{v.check.pass ? "✓ passed" : `✗ ${v.check.issues.join("; ") || "failed"}`}</span>
               ) : (

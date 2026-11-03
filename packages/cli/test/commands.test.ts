@@ -327,19 +327,24 @@ describe("show: what a run made", () => {
     expect(out).toContain("Version 1.1 · 🔒 locked");
   });
 
-  it("log tells what happened, in order: drafts, who pressed what, the lock it made, the edit's note (Day 36)", async () => {
+  it("log tells what happened, in order: drafts, who pressed what, the lock it made, the edit's note (Day 36); versions are v1, v2… as the chat names them (D-87)", async () => {
     const cwd = await project();
     await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
     await kriya(cwd, "decide", "1", "approve");
     await kriya(cwd, "decide", "1", "edit", "--pick", "1.3", "--note", "add the gamcha");
 
     const approve = (await kriya(cwd, "log", "part_recipe-1", "approve_shots")).out.split("\n").map((l) => l.replace(/^ {2}\d\d:\d\d {2}/, ""));
-    expect(approve.slice(1)).toEqual(["Waiting for you", "You pressed approve", "Locked Break it into shots 1.1 by you", "Done", "→ on to Make each shot", "→ on to Voice each line"]);
+    expect(approve.slice(1)).toEqual(["Waiting for you", "You pressed approve", "Locked Break it into shots v1 by you", "Done", "→ on to Make each shot", "→ on to Voice each line"]);
     const pick = (await kriya(cwd, "log", "part_recipe-1", "per_shot[S1].pick")).out;
-    expect(pick).toContain('You pressed edit on 1.3 · note: "add the gamcha"');
+    expect(pick).toContain('You pressed edit on v3 · note: "add the gamcha"'); // the pick names the draw's versions
     const draw = (await kriya(cwd, "log", "part_recipe-1", "per_shot[S1].draw")).out;
-    expect(draw).toMatch(/Made 1\.1\n.*Made 1\.2\n.*Made 1\.3/);
-    expect(draw).toContain('Made 2.1 by Edit the image from 1.3 · asked: "add the gamcha"'); // the edit refines draw: its version shows here too
+    expect(draw).toMatch(/Made v1\n.*Made v2\n.*Made v3/);
+    expect(draw).toContain('Made v4 by Edit the image from v3 · asked: "add the gamcha"'); // the edit refines draw: its version (2.1) is the draw's v4
+
+    // The names the log uses are names the commands take.
+    expect((await kriya(cwd, "show", "part_recipe-1", "per_shot[S1].draw", "v4")).out).toContain("per_shot[S1].draw");
+    expect((await kriya(cwd, "decide", "1", "lock", "--pick", "v4")).code).toBe(0);
+    expect((await kriya(cwd, "status", "part_recipe-1")).out).toContain("per_shot[S1].draw · locked 2.1");
 
     const all = (await kriya(cwd, "log", "part_recipe-1")).out;
     expect(all).toContain("Run started: part_recipe with part_no=3, story_pages=x");
@@ -352,7 +357,7 @@ describe("show: what a run made", () => {
     const cwd = await project();
     await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
     expect((await kriya(cwd, "show", "part_recipe-1", "shotlist")).err).toBe("✗ run 'part_recipe-1' has no step 'shotlist' (it has: shot_list, approve_shots)");
-    expect((await kriya(cwd, "show", "part_recipe-1", "shot_list", "9.9")).err).toBe("✗ 'shot_list' has no version 9.9 (it has: 1.1)");
+    expect((await kriya(cwd, "show", "part_recipe-1", "shot_list", "9.9")).err).toBe("✗ there's no version '9.9'; this step has v1 (1.1)");
   });
 });
 

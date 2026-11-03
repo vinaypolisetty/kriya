@@ -6,7 +6,8 @@
  * and the browser tell one story.
  *
  * Pure: events in, lines out. Bookkeeping events (a step ready, a job resumed)
- * are left out; everything a person would ask "why?" about stays in.
+ * are left out; everything a person would ask "why?" about stays in. Versions
+ * are named v1, v2… per step, as the chat and the version cards name them (D-87).
  */
 import type { StoredEvent } from "@kriya/store";
 import { findGraph, type Graph } from "@kriya/engine";
@@ -17,6 +18,36 @@ export type TraceLine = { seq: number; at: string; key: string; text: string; to
 type P = Record<string, unknown> & { node?: string };
 const money = (usd: unknown) => (typeof usd === "number" && usd > 0 ? ` · $${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}` : "");
 const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+/**
+ * Each step's versions as v1, v2…, numbered as the engine's `numbers()` does: by
+ * attempt, then candidate, across branches. An id it hasn't seen stays as it is.
+ */
+function versionNames(events: StoredEvent[]): (node: string, id: unknown) => string {
+  const made = new Map<string, { id: string; attempt: number; candidate: number }[]>();
+  for (const e of events) {
+    const p = e.payload as P;
+    if (e.type !== "CandidateProduced" || !p.node) continue;
+    const list = made.get(p.node) ?? [];
+    list.push({ id: `${String(p.attempt)}.${String(p.candidate)}`, attempt: Number(p.attempt), candidate: Number(p.candidate) });
+    made.set(p.node, list);
+  }
+  const names = new Map<string, string>();
+  for (const [node, list] of made) {
+    list.sort((a, b) => a.attempt - b.attempt || a.candidate - b.candidate).forEach((v, i) => names.set(`${node} ${v.id}`, `v${i + 1}`));
+  }
+  return (node, id) => names.get(`${node} ${String(id)}`) ?? String(id);
+}
+
+/** The step a review screen shows, by screen id (`show: draw.image` reviews draw). A step that asks you itself reviews its own versions. */
+function reviewed(graphs: Graph[]): (key: string) => string {
+  const shows = new Map(graphs.flatMap((g) => g.nodes.flatMap((n) => (n.kind === "screen" && n.show ? [[n.id, n.show.split(/[.[@]/)[0]!] as const] : []))));
+  return (key) => {
+    const prefix = key.slice(0, key.lastIndexOf(".") + 1);
+    const shown = shows.get(key.slice(prefix.length));
+    return shown ? `${prefix}${shown}` : key;
+  };
+}
+
 const quote = (s: unknown) => (typeof s === "string" && s ? ` "${flat(s).length > 140 ? `${flat(s).slice(0, 137)}…` : flat(s)}"` : "");
 
 /**
@@ -30,6 +61,8 @@ export function trace(events: StoredEvent[], graphs: Graph[] = [], opts: { key?:
     const id = key.slice(key.lastIndexOf(".") + 1);
     return nodes.get(id)?.name ?? id;
   };
+  const v = versionNames(events);
+  const shows = reviewed(graphs);
   const refinedBy = new Map<string, string>(); // edit → draw, from versions it made
   for (const e of events) {
     const p = e.payload as P;
@@ -57,16 +90,16 @@ export function trace(events: StoredEvent[], graphs: Graph[] = [], opts: { key?:
         add(e, key, Number(p.attempt) > 1 ? `Attempt ${String(p.attempt)} started` : "Started", "info");
         break;
       case "CandidateProduced": {
-        const v = `${String(p.attempt)}.${String(p.candidate)}`;
-        const from = (p.parents as string[] | undefined)?.length ? ` from ${(p.parents as string[]).join(" + ")}` : "";
+        const made = v(key, `${String(p.attempt)}.${String(p.candidate)}`);
+        const from = (p.parents as string[] | undefined)?.length ? ` from ${(p.parents as string[]).map((x) => v(key, x)).join(" + ")}` : "";
         const how = p.made_by ? ` by ${nameOf(String(p.made_by))}` : "";
-        add(e, key, `Made ${v}${how}${from}${p.model ? ` · ${String(p.model)}` : ""}${money(p.cost_usd)}${p.instruction ? ` · asked:${quote(p.instruction)}` : ""}`, "model");
+        add(e, key, `Made ${made}${how}${from}${p.model ? ` · ${String(p.model)}` : ""}${money(p.cost_usd)}${p.instruction ? ` · asked:${quote(p.instruction)}` : ""}`, "model");
         break;
       }
       case "VerdictRecorded": {
         const issues = (p.issues as { type: string; what?: string }[] | undefined) ?? [];
         const who = p.by === "human" ? "You checked" : p.by === "code" ? "Checked" : "The judge checked";
-        add(e, key, p.pass ? `${who} ${String(p.version)}: passed` : `${who} ${String(p.version)}: failed · ${issues.map((i) => i.what ?? i.type.replace(/_/g, " ")).join("; ") || "no reason given"}`, p.pass ? "check" : "fail");
+        add(e, key, p.pass ? `${who} ${v(key, p.version)}: passed` : `${who} ${v(key, p.version)}: failed · ${issues.map((i) => i.what ?? i.type.replace(/_/g, " ")).join("; ") || "no reason given"}`, p.pass ? "check" : "fail");
         break;
       }
       case "Suspended":
@@ -77,12 +110,12 @@ export function trace(events: StoredEvent[], graphs: Graph[] = [], opts: { key?:
         break;
       case "HumanDecision": {
         pressed = { seq: e.seq, key };
-        const pick = (p.selection as string[] | undefined)?.length ? ` on ${(p.selection as string[]).join(", ")}` : "";
+        const pick = (p.selection as string[] | undefined)?.length ? ` on ${(p.selection as string[]).map((x) => v(shows(key), x)).join(", ")}` : "";
         add(e, key, `${p.by === "auto" ? "Pressed automatically" : "You pressed"} ${String(p.action)}${pick}${p.note ? ` · note:${quote(p.note)}` : ""}`, p.by === "auto" ? "auto" : "you");
         break;
       }
       case "Locked":
-        add(e, key, `Locked ${opts.key && key !== opts.key ? `${nameOf(key)} ` : ""}${String(p.version)} ${p.by === "auto" ? "automatically" : "by you"}${p.why ? ` ·${quote(p.why)}` : ""}`, p.by === "auto" ? "auto" : "you");
+        add(e, key, `Locked ${opts.key && key !== opts.key ? `${nameOf(key)} ` : ""}${v(key, p.version)} ${p.by === "auto" ? "automatically" : "by you"}${p.why ? ` ·${quote(p.why)}` : ""}`, p.by === "auto" ? "auto" : "you");
         break;
       case "Unlocked":
         add(e, key, "Unlocked", "you");
@@ -112,10 +145,10 @@ export function trace(events: StoredEvent[], graphs: Graph[] = [], opts: { key?:
         add(e, key, "Fresh again: its inputs match what it was made from", "info");
         break;
       case "StaleKept":
-        add(e, key, `You kept ${String(p.version)} as it is${p.why ? ` ·${quote(p.why)}` : ""}`, "you");
+        add(e, key, `You kept ${v(key, p.version)} as it is${p.why ? ` ·${quote(p.why)}` : ""}`, "you");
         break;
       case "BranchCreated":
-        add(e, key, `New branch '${String(p.branch)}' from ${String(p.from)}`, "you");
+        add(e, key, `New branch '${String(p.branch)}' from ${v(key, p.from)}`, "you");
         break;
       case "BranchSwitched":
         add(e, key, `Switched to branch '${String(p.branch)}'`, "you");
@@ -176,9 +209,11 @@ export type DecisionTrace = {
   action: string;
   by: "human" | "auto";
   selection: string[];
+  /** The picks as v1, v2… for showing: `selection` keeps the ids. */
+  picks: string[];
   note?: string;
   region?: string;
-  on: { version: string; model?: string; costUsd?: number; check?: { by: string; pass: boolean; issues: string[] } }[];
+  on: { version: string; /** v1, v2… */ name: string; model?: string; costUsd?: number; check?: { by: string; pass: boolean; issues: string[] } }[];
   locked?: string;
   next?: string;
 };
@@ -186,8 +221,8 @@ export type DecisionTrace = {
 /** Every decision in a run, oldest first; with `under`, only those inside that for-each item. */
 export function decisions(events: StoredEvent[], graphs: Graph[] = [], under = ""): DecisionTrace[] {
   const names = new Map(graphs.flatMap((g) => g.nodes.map((n) => [n.id, n.name ?? n.id] as const)));
-  // What each screen reviews, from its recipe: `show: draw.image` reviews draw.
-  const shows = new Map(graphs.flatMap((g) => g.nodes.flatMap((n) => (n.kind === "screen" && n.show ? [[n.id, n.show.split(/[.[@]/)[0]!] as const] : []))));
+  const shows = reviewed(graphs);
+  const v = versionNames(events);
   const nameOf = (key: string) => (key === "END" ? "the end" : (names.get(key.slice(key.lastIndexOf(".") + 1)) ?? key));
   // What each review screen showed: the versions of the step it reviews, made since its last answer.
   const made = new Map<string, DecisionTrace["on"]>(); // by the reviewed step's key
@@ -198,17 +233,17 @@ export function decisions(events: StoredEvent[], graphs: Graph[] = [], under = "
     const key = p.node ?? "";
     if (e.type === "CandidateProduced") {
       const list = made.get(key) ?? [];
-      list.push({ version: `${String(p.attempt)}.${String(p.candidate)}`, ...(p.model ? { model: String(p.model) } : {}), ...(typeof p.cost_usd === "number" ? { costUsd: p.cost_usd } : {}) });
+      const id = `${String(p.attempt)}.${String(p.candidate)}`;
+      list.push({ version: id, name: v(key, id), ...(p.model ? { model: String(p.model) } : {}), ...(typeof p.cost_usd === "number" ? { costUsd: p.cost_usd } : {}) });
       made.set(key, list);
     } else if (e.type === "VerdictRecorded") {
-      const v = made.get(key)?.find((x) => x.version === p.version);
+      const on = made.get(key)?.find((x) => x.version === p.version);
       const issues = ((p.issues as { type: string; what?: string }[] | undefined) ?? []).map((i) => i.what ?? i.type.replace(/_/g, " "));
-      if (v) v.check = { by: String(p.by ?? "llm"), pass: Boolean(p.pass), issues };
+      if (on) on.check = { by: String(p.by ?? "llm"), pass: Boolean(p.pass), issues };
     } else if (e.type === "HumanDecision") {
-      const prefix = key.slice(0, key.lastIndexOf(".") + 1);
       // A screen reviews the step it shows; a step that asks you itself (a clip to approve) reviews its own versions.
-      const reviewed = shows.get(key.slice(prefix.length));
-      const target = reviewed ? `${prefix}${reviewed}` : key;
+      const target = shows(key);
+      const selection = (p.selection as string[] | undefined) ?? [];
       open = {
         seq: e.seq,
         at: e.at,
@@ -217,7 +252,8 @@ export function decisions(events: StoredEvent[], graphs: Graph[] = [], under = "
         reviews: target,
         action: String(p.action),
         by: p.by === "auto" ? "auto" : "human",
-        selection: (p.selection as string[] | undefined) ?? [],
+        selection,
+        picks: selection.map((x) => v(target, x)),
         ...(typeof p.note === "string" && p.note ? { note: p.note } : {}),
         ...(typeof p.region === "string" ? { region: p.region } : {}),
         on: target ? [...(made.get(target) ?? [])] : [],
@@ -225,7 +261,7 @@ export function decisions(events: StoredEvent[], graphs: Graph[] = [], under = "
       if (key.startsWith(under)) out.push(open);
       if (target) made.delete(target); // the next review of it starts from what's made after this one
     } else if (open && e.type === "Locked" && e.seq - open.seq <= 3) {
-      open.locked = `${nameOf(key)} ${String(p.version)}`;
+      open.locked = `${nameOf(key)} ${v(key, p.version)}`;
     } else if (open && e.type === "EdgeFollowed" && p.from === open.key) {
       open.next = nameOf(String(p.to));
       open = undefined;

@@ -185,7 +185,7 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       const whole = (await (await fetch(`${web.url}/api/runs/part/trace?all=1`)).json()) as { lines: { text: string }[]; decisions: unknown[] };
       expect(whole.lines[0]!.text).toMatch(/^Run started: part_recipe with part_no=3, story_pages=x/);
       expect(whole.decisions).toEqual([
-        expect.objectContaining({ key: "approve_shots", step: "Approve the shot list", reviews: "shot_list", action: "approve", by: "human", on: [expect.objectContaining({ version: "1.1" })], locked: "Break it into shots 1.1", next: "Make each shot" }),
+        expect.objectContaining({ key: "approve_shots", step: "Approve the shot list", reviews: "shot_list", action: "approve", by: "human", on: [expect.objectContaining({ version: "1.1", name: "v1" })], locked: "Break it into shots v1", next: "Make each shot" }),
       ]);
       // A step's panel shows the decisions made on it, here or on the screen that reviews it.
       const step = (key: string) => fetch(`${web.url}/api/runs/part/trace?key=${key}`).then((r) => r.json() as Promise<{ decisions: { key: string }[] }>);

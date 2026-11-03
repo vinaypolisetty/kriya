@@ -110,9 +110,11 @@ export type DecisionTrace = {
   action: string;
   by: "human" | "auto";
   selection: string[];
+  /** The picks as v1, v2…; `selection` keeps the ids. */
+  picks: string[];
   note?: string;
   region?: string;
-  on: { version: string; model?: string; costUsd?: number; check?: { by: string; pass: boolean; issues: string[] } }[];
+  on: { version: string; name: string; model?: string; costUsd?: number; check?: { by: string; pass: boolean; issues: string[] } }[];
   locked?: string;
   next?: string;
 };
