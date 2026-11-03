@@ -16,8 +16,9 @@ React 19 and Vite. No router or state library: routes live in the URL hash, and 
 | [`Screen.tsx`](src/Screen.tsx) | The review: the big preview, candidates, checks, suggestion, note, marked area, buttons; batches. `embedded` is the one-tap version inside a box on the graph |
 | [`Region.tsx`](src/Region.tsx) | Drag on an image to mark an area (`x,y,w,h` fractions) |
 | [`Library.tsx`](src/Library.tsx) | The Library, read-only: entities by kind; one entity's facets and history |
+| [`Theme.tsx`](src/Theme.tsx) | The Theme picker: Auto (the device's), Light or Dark, kept in this browser |
 | [`api.ts`](src/api.ts) | API types, calls (`decide`, `retry`, `branchOff`, `switchBranch`), and `useLive(path)` |
-| [`style.css`](src/style.css) | Colour tokens on `:root` (light and dark), layout, the phone breakpoint at 760 px |
+| [`style.css`](src/style.css) | Colour tokens on `:root` (each `light-dark(light, dark)`), layout, the phone breakpoint at 760 px |
 
 ## Develop
 
@@ -30,7 +31,7 @@ pnpm --filter @kriya/web build          # what kriya web serves (packages/web/di
 ## Rules for changing it
 
 - New data comes from a route in `cli/src/web.ts`. Add its types and call to `api.ts`, and read it with `useLive` so it updates when any run changes.
-- Colours come from the CSS tokens, never hard-coded, so dark mode keeps working.
+- Colours come from the CSS tokens, never hard-coded, so both themes keep working. A new colour is a new token with its light and dark values side by side.
 - Every view works at 390 px wide, with touch targets of at least 40 px. Check the phone layout before calling a UI change done.
 - UI words follow the vocabulary: lock, stale, version, branch, Library.
 

@@ -18,6 +18,7 @@ import { answerTip, BASE, startRun, uploadFile, useLive, useLiveFlag, type Item,
 import { Graph, statusOf } from "./Graph";
 import { LibraryPage } from "./Library";
 import { Screen } from "./Screen";
+import { ThemePicker } from "./Theme";
 
 type Route = { page: "project" } | { page: "recipe"; file: string } | { page: "run"; run?: string; at: string } | { page: "inbox" } | { page: "review"; id: string } | { page: "library"; name?: string };
 
@@ -111,6 +112,7 @@ export function App() {
             {waiting ? `${waiting} waiting for you` : "Nothing waiting"}
           </a>
           <span className={live ? "live on" : "live"} title={live ? "Live: updates as runs change" : "Not connected to kriya web"}>{live ? "live" : "offline"}</span>
+          <ThemePicker />
         </div>
       </header>
       {runs.error && <p className="error">{runs.error}</p>}
@@ -166,6 +168,7 @@ function ProjectsHome({ folder, projects }: { folder: string; projects: ProjectC
           <span aria-hidden="true">›</span>
           <span className="mono muted">{folder}</span>
         </nav>
+        <ThemePicker />
       </header>
       <main className="project-home">
         <h2>Projects</h2>
