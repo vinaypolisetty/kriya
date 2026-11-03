@@ -439,6 +439,7 @@ button.choice:hover:not(:disabled) { border-color: var(--teal); box-shadow: 0 0 
 .choice.on { border-color: var(--teal); box-shadow: 0 0 0 2px var(--teal); }
 .choice img, .choice video { display: block; width: 100%; border-radius: 6px; }
 .choice pre { margin: 0; white-space: pre-wrap; font: inherit; }
+.embedded.decided .choice:disabled { opacity: 1; }
 .chosen { display: flex; justify-content: space-between; align-items: center; margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--teal-soft); color: var(--teal); font-weight: 600; }
 .not-right { display: grid; gap: 10px; }
 .box-picture { display: block; width: 320px; max-width: 100%; border-radius: 6px; }

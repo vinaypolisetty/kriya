@@ -97,6 +97,45 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
     }
   });
 
+  it("an answered review reads back as the same screen, with what was pressed; a step with no answer has nothing to show", async () => {
+    const { web } = await waitingShot();
+    try {
+      const before = (await get(web, "/api/inbox")).body.items[0]!;
+      const none = (await (await fetch(`${web.url}/api/runs/shot/review?key=pick`)).json()) as object;
+      expect(none).toEqual({});
+      await fetch(`${web.url}/api/decide`, { method: "POST", body: JSON.stringify({ run: "shot", key: "pick", action: "lock", selection: ["1.2"], note: "the clearest one" }) });
+      const after = (await (await fetch(`${web.url}/api/runs/shot/review?key=pick`)).json()) as { item: WebItem; answered: { action: string; by: string; selection: string[]; note: string } };
+      expect(after.item.id).toBe(before.id);
+      expect(after.item.title).toBe(before.title);
+      expect(after.item.shows).toEqual(before.shows);
+      expect(after.item.beside).toEqual(before.beside);
+      expect(after.answered).toMatchObject({ action: "lock", by: "human", selection: ["1.2"], note: "the clearest one" });
+      const missing = await fetch(`${web.url}/api/runs/nope/review?key=pick`);
+      expect(missing.status).toBe(400);
+      expect(((await missing.json()) as { error: string }).error).toBe("there's no run 'nope'");
+    } finally {
+      await web.close();
+    }
+  });
+
+  it("an item's box finds the review answered inside it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-web-"));
+    await kriya(dir, "init", "p3", "--example", "mohalla-mitra");
+    const cwd = join(dir, "p3");
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x", "--id", "part");
+    await kriya(cwd, "decide", "1", "approve");
+    const web = await startWeb(loadProject(cwd), { port: 0, io: { out: () => {}, err: () => {}, cwd } });
+    try {
+      await fetch(`${web.url}/api/decide`, { method: "POST", body: JSON.stringify({ run: "part", key: "per_shot[S1].pick", action: "lock", selection: ["1.1"] }) });
+      const r = (await (await fetch(`${web.url}/api/runs/part/review?key=${encodeURIComponent("per_shot[S1]")}`)).json()) as { item: WebItem; answered: { key: string } };
+      expect(r.answered.key).toBe("per_shot[S1].pick");
+      expect(r.item).toMatchObject({ key: "per_shot[S1].pick", item: "S1" });
+      expect(await (await fetch(`${web.url}/api/runs/part/review?key=${encodeURIComponent("per_shot[S2]")}`)).json()).toEqual({});
+    } finally {
+      await web.close();
+    }
+  });
+
   it("your answer wins: a screen that has since become automatic can't answer in your place (Day 23)", async () => {
     const { cwd, web } = await waitingShot();
     try {

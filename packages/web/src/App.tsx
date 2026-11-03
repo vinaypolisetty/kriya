@@ -14,7 +14,7 @@
  * /p/<folder>/, and everything above happens inside it.
  */
 import { useEffect, useState, type FormEvent } from "react";
-import { answerTip, BASE, startRun, uploadFile, useLive, useLiveFlag, type Item, type ProjectFile, type ProjectCard, type Run, type RunGraph, type Recipe, type Shown, type Tips } from "./api";
+import { answerTip, BASE, startRun, uploadFile, useLive, useLiveFlag, type Answered, type Item, type ProjectFile, type ProjectCard, type Run, type RunGraph, type Recipe, type Shown, type Tips } from "./api";
 import { Graph, statusOf } from "./Graph";
 import { LibraryPage } from "./Library";
 import { Screen } from "./Screen";
@@ -466,18 +466,26 @@ function TipCards() {
   );
 }
 
-/** One review, and the rest of its batch: after a decision the next one opens; the last goes back to the inbox. */
+/** One review, and the rest of its batch: after a decision it stays on screen, as you decided it, with a link to the next. */
 function ReviewPage({ id, onToast }: { id: string; onToast: (m: string) => void }) {
   const inbox = useLive<{ items: Item[] }>("/api/inbox");
   const [failed, setFailed] = useState<string>();
   const [batchOf, setBatchOf] = useState<Item[]>();
-  const item = inbox.data?.items.find((i) => i.id === id);
+  // What a decision says is left, and the review it was made on, so nothing flickers while the rest catches up.
+  const [left, setLeft] = useState<Item[]>();
+  const [last, setLast] = useState<Item>();
+  useEffect(() => setLeft(undefined), [inbox.data]);
+  const items = left ?? inbox.data?.items;
+  const waiting = items?.find((i) => i.id === id);
+  const cut = id.lastIndexOf(":");
+  const past = useLive<Answered>(items && !waiting ? `/api/runs/${encodeURIComponent(id.slice(0, cut))}/review?key=${encodeURIComponent(id.slice(cut + 1))}` : undefined);
+  const item = waiting ?? past.data?.item ?? (last?.id === id ? last : undefined);
   // The batch is fixed when you open it, so "Shot 2 of 5" keeps counting as items leave the inbox.
   useEffect(() => {
-    if (item && !batchOf?.some((b) => b.id === item.id)) setBatchOf(inbox.data!.items.filter((i) => i.batch === item.batch));
-  }, [item, batchOf, inbox.data]);
+    if (waiting && !batchOf?.some((b) => b.id === waiting.id)) setBatchOf(items!.filter((i) => i.batch === waiting.batch));
+  }, [waiting, batchOf, items]);
   if (failed) return <p className="error pad">{failed} <a href="#/inbox">Back to what's waiting</a></p>;
-  if (!inbox.data) return <p className="muted pad">Loading…</p>;
+  if (!items || (!item && !past.data && !past.error)) return <p className="muted pad">Loading…</p>;
   if (!item) return <p className="muted pad">This isn't waiting on you any more. <a href="#/inbox">See what is</a>.</p>;
   const batch = batchOf?.some((b) => b.id === item.id) ? batchOf : [item];
   return (
@@ -485,11 +493,15 @@ function ReviewPage({ id, onToast }: { id: string; onToast: (m: string) => void 
       key={item.id + item.shows.map((s) => s.version).join()}
       item={item}
       batch={batch}
+      decided={!waiting}
+      {...(!waiting && past.data?.answered ? { answer: past.data.answered } : {})}
+      left={items}
       onBack={() => go("/inbox")}
       onError={setFailed}
-      onDone={(m, next) => {
+      onDone={(m, rest) => {
         onToast(m);
-        go(next ? `/review/${encodeURIComponent(next.id)}` : "/inbox");
+        setLast(item);
+        setLeft(rest);
       }}
     />
   );

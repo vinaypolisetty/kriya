@@ -2,14 +2,18 @@
  * A review, phone first (the mocks' Review inbox, D-68): one big preview, the
  * candidates as a row to pick from, what the checks found, a note, and the
  * screen's buttons in a footer you can reach with a thumb. Reviews of the same
- * step across shots are a batch: after each decision the next one opens.
+ * step across shots are a batch: a decision stays on screen, with the next one
+ * a press away.
  * `embedded` is the same review inside its box on the graph, built for fewer
  * clicks: tap the one you want and that's the decision. Nothing is sent for a
  * few seconds, so a slip takes one tap to undo. Everything else ("not quite
  * right?") stays folded away.
+ *
+ * `decided` is a review after its answer, in either form: it stays as you saw
+ * it, your pick marked, with what you pressed in place of the buttons.
  */
 import { useEffect, useRef, useState } from "react";
-import { decide, type Button, type Item, type Media as File } from "./api";
+import { decide, type Button, type DecisionTrace, type Item, type Media as File } from "./api";
 import { Media } from "./App";
 import { parseRegion, Region } from "./Region";
 
@@ -21,30 +25,32 @@ const fieldName = (ref: string) => (ref.split(/[.@]/).pop() ?? ref).replace(/_/g
 /** How long a tap can still be undone before it's sent. */
 const UNDO_MS = 4000;
 
-export function Screen({ item, batch, embedded, onDone, onError, onBack }: { item: Item; batch: Item[]; embedded?: boolean; onDone: (message: string, next?: Item) => void; onError: (message: string) => void; onBack: () => void }) {
-  const [picked, setPicked] = useState<string | undefined>(item.suggested?.selection?.[0] ?? (item.shows.length === 1 ? item.shows[0]!.version : undefined));
+export function Screen({ item, batch, embedded, decided = false, answer, left = [], onDone, onError, onBack }: { item: Item; batch: Item[]; embedded?: boolean; decided?: boolean; answer?: DecisionTrace; left?: Item[]; onDone: (message: string, left: Item[]) => void; onError: (message: string) => void; onBack: () => void }) {
+  const [picked, setPicked] = useState<string | undefined>(answer?.selection[0] ?? item.suggested?.selection?.[0] ?? (item.shows.length === 1 ? item.shows[0]!.version : undefined));
   const [note, setNote] = useState("");
   const [region, setRegion] = useState("");
   const [sending, setSending] = useState<string>();
   const [error, setError] = useState<string>();
 
   const at = batch.findIndex((b) => b.id === item.id);
+  // Only what's still waiting: the shots before this one were answered on the way here.
+  const next = [...batch.slice(at + 1), ...batch.slice(0, at)].find((x) => left.some((i) => i.id === x.id));
   const shown = item.shows.find((s) => s.version === picked) ?? item.shows[0];
   // The main button: the one that locks, or on a review with nothing to lock, the one that just says yes.
   const lock = item.buttons.find((b) => b.locks) ?? item.buttons.find((b) => b.needs.length === 0);
   const others = item.buttons.filter((b) => b !== lock);
   const needsRegion = item.buttons.some((b) => b.needs.includes("region"));
   // An area can narrow an edit too ("only change inside it"), so it's offered wherever there's an image to mark.
-  const marks = needsRegion || item.buttons.some((b) => b.id === "edit");
+  const marks = !decided && (needsRegion || item.buttons.some((b) => b.id === "edit"));
   const missing = (b: Button) => b.needs.filter((n) => (n === "selection" ? !picked : n === "note" ? !note.trim() : !region.trim()));
 
   const press = async (b: Button, pick = picked) => {
     setSending(b.id);
     setError(undefined);
     try {
-      await decide({ run: item.run, key: item.key, action: b.id, ...(pick && b.needs.includes("selection") ? { selection: [pick] } : {}), ...(note.trim() ? { note: note.trim() } : {}), ...(region.trim() && (b.needs.includes("region") || b.id === "edit") ? { region: region.trim() } : {}) });
-      const next = batch.slice(at + 1).find((x) => x.id !== item.id) ?? batch.slice(0, at).find((x) => x.id !== item.id);
-      onDone(`${label(b)}${pick && b.needs.includes("selection") ? ` ${pick}` : ""} · ${item.item ?? item.key}`, next);
+      const rest = await decide({ run: item.run, key: item.key, action: b.id, ...(pick && b.needs.includes("selection") ? { selection: [pick] } : {}), ...(note.trim() ? { note: note.trim() } : {}), ...(region.trim() && (b.needs.includes("region") || b.id === "edit") ? { region: region.trim() } : {}) });
+      onDone(`${label(b)}${pick && b.needs.includes("selection") ? ` ${pick}` : ""} · ${item.item ?? item.key}`, rest);
+      setSending(undefined);
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       setError(m);
@@ -123,6 +129,15 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
       <input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="0,0,0.8,1" inputMode="decimal" />
     </label>
   );
+  const said = answer && (
+    <div className="checked ok">
+      ✓ {answer.by === "auto" ? "Pressed automatically: " : "You pressed "}
+      {LABELS[answer.action] ?? answer.action}
+      {answer.selection.length > 0 && ` ${answer.selection.join(", ")}`}
+      {answer.next && ` · on to ${answer.next}`}
+      {answer.note && <q className="small">{answer.note}</q>}
+    </div>
+  );
   const otherButtons = others.length > 0 && (
     <div className="others">
       {others.map((b) => {
@@ -138,10 +153,11 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
 
   if (embedded) {
     const tap = !!lock && item.shows.length > 1 && lock.needs.every((n) => n === "selection");
-    const wait = !!chosen || !!sending || item.working;
+    const wait = decided || !!chosen || !!sending || item.working;
+    const mine = decided ? picked : chosen;
     return (
-      <div className="review embedded">
-        {item.working && <span className="tone-work">working…</span>}
+      <div className={`review embedded${decided ? " decided" : ""}`}>
+        {!decided && item.working && <span className="tone-work">working…</span>}
         {item.branch && <span className="muted">On branch <b>{item.branch}</b>: only its versions are here. Switch in the step details.</span>}
         {besides}
         {tap ? (
@@ -150,13 +166,13 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
               const plays = s.media?.type.startsWith("video/") || s.media?.type.startsWith("audio/");
               const mark = s.verdict && <span className={s.verdict.pass ? "tone-done" : "tone-fail"}>{s.verdict.pass ? "✓ passed its checks" : `✗ ${s.verdict.issues.length} to look at`}</span>;
               return plays ? (
-                <div key={s.version} className={`choice${chosen === s.version ? " on" : ""}`}>
+                <div key={s.version} className={`choice${mine === s.version ? " on" : ""}`}>
                   <Media shown={s} />
                   {mark}
-                  <button type="button" className="primary" disabled={wait} onClick={() => choose(lock!, s.version)}>Use this</button>
+                  {!decided && <button type="button" className="primary" disabled={wait} onClick={() => choose(lock!, s.version)}>Use this</button>}
                 </div>
               ) : (
-                <button key={s.version} type="button" className={`choice${chosen === s.version ? " on" : ""}`} disabled={wait} onClick={() => choose(lock!, s.version)}>
+                <button key={s.version} type="button" className={`choice${mine === s.version ? " on" : ""}`} disabled={wait} onClick={() => choose(lock!, s.version)}>
                   <Media shown={s} />
                   {mark}
                 </button>
@@ -166,7 +182,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
         ) : (
           shown && <div className="big"><Media shown={shown} /></div>
         )}
-        {item.suggested && !chosen && (
+        {!decided && item.suggested && !chosen && (
           <div className="suggestion">
             <span>
               Suggested: <b>{LABELS[item.suggested.action] ?? item.suggested.action}</b>
@@ -175,7 +191,9 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
             <button type="button" className="link" onClick={useSuggestion}>Use it</button>
           </div>
         )}
-        {chosen ? (
+        {decided ? (
+          said
+        ) : chosen ? (
           <p className="chosen">
             <span>✓ Chosen</span>
             <button type="button" className="link" onClick={undo}>Undo</button>
@@ -187,7 +205,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
             </button>
           )
         )}
-        {!chosen && (others.length > 0 || noteField) && (
+        {!decided && !chosen && (others.length > 0 || noteField) && (
           <details className="box-more">
             <summary>Not quite right?</summary>
             <div className="not-right">
@@ -209,7 +227,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
       <header className="review-head">
         <div className="review-nav">
           <button type="button" className="link" onClick={onBack}>‹ Back</button>
-          {batch.length > 1 && <span className="muted">{`${item.item ? "Shot" : "Item"} ${at + 1} of ${batch.length} waiting`}</span>}
+          {batch.length > 1 && <span className="muted">{`${item.item ? "Shot" : "Item"} ${at + 1} of ${batch.length}${decided ? "" : " waiting"}`}</span>}
         </div>
         <h1>
           {item.item && <span className="mono muted">{item.item} · </span>}
@@ -266,7 +284,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
           </div>
         )}
 
-        {item.suggested && (
+        {!decided && item.suggested && (
           <div className="suggestion">
             <span>
               Suggested: <b>{LABELS[item.suggested.action] ?? item.suggested.action}</b>
@@ -276,19 +294,33 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
           </div>
         )}
 
-        {noteField}
+        {!decided && noteField}
         {regionField}
         {error && <p className="error">{error}</p>}
       </main>
 
-      <footer className="review-foot">
-        {lock && (
-          <button type="button" className="primary wide" disabled={!!sending || item.working || missing(lock).length > 0} onClick={() => void press(lock)}>
-            {sending === lock.id ? "…" : `${label(lock)}${picked && lock.needs.includes("selection") ? ` ${picked}` : ""}${cost(lock)}`}
-          </button>
-        )}
-        {otherButtons}
-      </footer>
+      {decided ? (
+        <footer className="review-foot">
+          {said}
+          <div className="others">
+            <a className="button" href={`#/run/${encodeURIComponent(item.run)}`}>See the run</a>
+            {next ? (
+              <a className="button primary" href={`#/review/${encodeURIComponent(next.id)}`}>Next: {next.item ?? next.title}</a>
+            ) : (
+              <a className={left.length ? "button primary" : "button"} href="#/inbox">{left.length ? `${left.length} waiting for you` : "Nothing waiting"}</a>
+            )}
+          </div>
+        </footer>
+      ) : (
+        <footer className="review-foot">
+          {lock && (
+            <button type="button" className="primary wide" disabled={!!sending || item.working || missing(lock).length > 0} onClick={() => void press(lock)}>
+              {sending === lock.id ? "…" : `${label(lock)}${picked && lock.needs.includes("selection") ? ` ${picked}` : ""}${cost(lock)}`}
+            </button>
+          )}
+          {otherButtons}
+        </footer>
+      )}
     </div>
   );
 }

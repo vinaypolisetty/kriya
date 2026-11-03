@@ -114,6 +114,8 @@ export type ProjectFile = { path: string; type: "image" | "video" | "audio"; byt
 export const startRun = (recipe: string, inputs: Record<string, string>) => call<{ id: string }>("/api/runs", { method: "POST", body: JSON.stringify({ recipe, inputs }) }).then((r) => r.id);
 /** Saves a file from this device in the project's uploads/ folder. */
 export const uploadFile = (file: File) => call<ProjectFile>(`/api/files?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+/** A review after its answer: the same screen, and what was pressed on it. */
+export type Answered = { item?: Item; answered?: DecisionTrace };
 
 export const decide = (d: Decision) => call<{ items: Item[] }>("/api/decide", { method: "POST", body: JSON.stringify(d) }).then((r) => r.items);
 

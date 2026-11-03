@@ -11,6 +11,8 @@
  *                          what happened, from the event log (Day 36): one step's lines in plain words
  *                          (`key`), how often each arrow was taken, and each review's last answer;
  *                          `all` gives every line in the scope and each decision with what it was made on
+ *   GET  /api/runs/<id>/review?key=per_shot[P3-04].pick
+ *                          a review already answered: the same screen as an inbox item, and the last answer
  *   GET  /api/inbox        what's waiting on you, with each candidate's checks and the suggested fix
  *   GET  /api/media/<sha>  an image, clip or voice line from the blob store
  *   POST /api/runs         start a run, like `kriya run`: { recipe, inputs: { name: "as typed" }, id? }; a file
@@ -62,7 +64,7 @@ import { openStore, type Store } from "@kriya/store";
 import { findGraph, type RunState } from "@kriya/engine";
 import { allInbox, drive, openRun, recipeId, startRun, type Entry, type IO } from "./commands.js";
 import { answerTip, projectTips } from "./kb.js";
-import { traceView } from "./trace.js";
+import { decisions, traceView } from "./trace.js";
 import { libraryAssets, MEDIA } from "./library.js";
 import { loadProject, UserError, type Project } from "./project.js";
 
@@ -283,12 +285,23 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     const entries = await allInbox(project, store, quiet, { readOnly: true });
     const states = new Map<string, RunState>();
     for (const e of entries) if (!states.has(e.run)) states.set(e.run, (await openRun(project, store, e.run, quiet, { readOnly: true })).rec.state);
-    return entries.map((e) => {
-      e = { ...e, beside: e.beside.map((b) => ({ ...b, value: projectFile(project, b.value) })) };
-      const item = web(e, busy.has(e.run), typeOf, estimates(project, states.get(e.run)!, e.key), project.kb.rules);
-      const branch = shownBranch(project, states.get(e.run)!, e.key);
-      return branch && branch !== "main" ? { ...item, branch } : item;
-    });
+    return entries.map((e) => webItem(project, states.get(e.run)!, e));
+  };
+  const webItem = (project: Project, state: RunState, e: Entry): WebItem => {
+    const item = web({ ...e, beside: e.beside.map((b) => ({ ...b, value: projectFile(project, b.value) })) }, busy.has(e.run), typeOf, estimates(project, state, e.key), project.kb.rules);
+    const branch = shownBranch(project, state, e.key);
+    return branch && branch !== "main" ? { ...item, branch } : item;
+  };
+
+  /** A review after its answer, so it can stay on screen: a step's, or the latest in the item it stands for. An agent's question goes with its turn, so a reply has only the answer. */
+  const answeredReview = async (id: string, key: string) => {
+    if (!store.events.runs().includes(id)) throw new BadRequest(`there's no run '${id}'`);
+    const project = current();
+    const answered = decisions(store.events.read(id), project.graphs).filter((d) => d.key === key || d.key.startsWith(`${key}[`) || d.key.startsWith(`${key}.`)).at(-1);
+    if (!answered) return {};
+    const { rec, s } = await openRun(project, store, id, quiet, { readOnly: true });
+    const shown = answered.action === "reply" ? undefined : s.review(answered.key);
+    return { answered, ...(shown ? { item: webItem(project, rec.state, { ...shown, run: id }) } : {}) };
   };
 
   const runs = async () => {
@@ -604,6 +617,8 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
       const opts = { at: url.searchParams.get("at") ?? "", ...(url.searchParams.get("key") ? { key: url.searchParams.get("key")! } : {}), all: url.searchParams.has("all") };
       return json(res, 200, traceView(store.events.read(id), current().graphs, opts));
     }
+    const reviewed = /^\/api\/runs\/([^/]+)\/review$/.exec(url.pathname);
+    if (req.method === "GET" && reviewed) return json(res, 200, await answeredReview(decodeURIComponent(reviewed[1]!), url.searchParams.get("key") ?? ""));
     const graph = /^\/api\/runs\/([^/]+)\/graph$/.exec(url.pathname);
     if (req.method === "GET" && graph) return json(res, 200, await runGraph(decodeURIComponent(graph[1]!), url.searchParams.get("at") ?? ""));
     if (req.method === "POST" && url.pathname === "/api/retry") {

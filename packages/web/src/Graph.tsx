@@ -16,7 +16,9 @@
  * and the layout makes room, so the boxes after it move along and the arrows
  * follow. A big run is a big graph, and that's fine. (With "Show all steps",
  * an item opens in its row.)
- * The next thing waiting on you opens by itself, and closes when it's decided.
+ * The next thing waiting on you opens by itself. Decided, it stays open as you
+ * saw it, until you close it, and the page stays where you are: only a box you
+ * click, or the first one on arriving, scrolls into view.
  *
  * The Inputs box and any step that made a video play it right in the box.
  *
@@ -25,7 +27,7 @@
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type PointerEvent } from "react";
 import { graphUrl, fileUrl } from "./App";
-import { useLive, useLiveAll, type GEdge, type GItem, type GNode, type Item, type RunGraph, type TraceView } from "./api";
+import { useLive, useLiveAll, type Answered, type GEdge, type GItem, type GNode, type Item, type RunGraph, type TraceView } from "./api";
 import { NodePanel, RunPanel } from "./NodePanel";
 import { Screen } from "./Screen";
 import { simplify, unfold, waitsOnYou } from "./simple";
@@ -161,7 +163,7 @@ type Drawn = { graph: RunGraph; happened: Happened; opened: Opened; bare: boolea
 /** What the event log says happened here: how often each arrow was taken (by index in `graph.edges`), each review's last answer. */
 type Happened = { taken?: number[]; answers: TraceView["answers"] };
 /** What's open in this graph: steps by id, for-each items by key with the step to start on. */
-type Opened = { steps: Set<string>; folded: Set<string>; items: Map<string, string | undefined>; toggle: (id: string) => void; toggleFold: (id: string) => void; toggleItem: (key: string, step?: string) => void; sync: (g: RunGraph) => void };
+type Opened = { steps: Set<string>; quiet: Set<string>; folded: Set<string>; items: Map<string, string | undefined>; toggle: (id: string) => void; toggleFold: (id: string) => void; toggleItem: (key: string, step?: string) => void; sync: (g: RunGraph) => void };
 
 const wants = (n: GNode) => n.waitingOnYou || !!n.items?.some(waitsOnYou);
 /** A moment still has a decision to come: it stays open, so you finish one before the next. */
@@ -177,26 +179,23 @@ function useOpened(graph: RunGraph, focus?: string): Opened {
   const [folded, setFolded] = useState(() => new Set<string>());
   const [items, setItems] = useState(() => new Map<string, string | undefined>());
   const shut = useRef(new Set<string>());
-  const auto = useRef(new Set<string>());
+  // Opened by itself while you were looking at something else: it doesn't take the page there.
+  const quiet = useRef(new Set<string>());
   const sync = (g: RunGraph) => {
     const moment = (n: GNode) => n.kind === "item" && !n.leaf;
     const work = g.nodes.filter((n) => !moment(n));
     const going = new Set(work.filter(wants).map((n) => n.id));
-    const finished = [...auto.current].filter((id) => !going.has(id));
-    finished.forEach((id) => auto.current.delete(id));
     const now = g.nodes.find((n) => moment(n) && unfinished(n))?.id;
     const first = work.find((n) => wants(n) && !shut.current.has(n.id) && (!n.after || n.after === now));
     setSteps((open) => {
-      const next = new Set([...open].filter((id) => !finished.includes(id)));
-      if (first && ![...next].some((id) => going.has(id))) {
-        next.add(first.id);
-        auto.current.add(first.id);
-      }
-      return next.size === open.size && [...next].every((id) => open.has(id)) ? open : next;
+      if (!first || [...open].some((id) => going.has(id))) return open;
+      if (open.size > 0) quiet.current.add(first.id);
+      return new Set([...open, first.id]);
     });
   };
   const toggle = (id: string) =>
     setSteps((o) => {
+      quiet.current.delete(id);
       if (!o.has(id)) return new Set([...o, id]);
       shut.current.add(id);
       return new Set([...o].filter((x) => x !== id));
@@ -207,7 +206,7 @@ function useOpened(graph: RunGraph, focus?: string): Opened {
       if (o.has(key) && !step) return new Map([...o].filter(([k]) => k !== key));
       return new Map([...o, [key, step]]);
     });
-  return { steps, folded, items, toggle, toggleFold, toggleItem, sync };
+  return { steps, quiet: quiet.current, folded, items, toggle, toggleFold, toggleItem, sync };
 }
 
 /** "Show all steps", remembered in this browser; items inside a run follow it. */
@@ -484,7 +483,7 @@ function StartBox({ graph, style, open, onToggle, drag, dragging, measure }: { g
   );
 }
 
-/** A review inside its box, or a for-each's next one: decided right on the graph, then the box closes and the run moves on. */
+/** A review inside its box, or a for-each's next one: decided right on the graph, then the run moves on and the box keeps what you saw. */
 function BoxReview({ n, run }: { n: GNode; run: string }) {
   const inbox = useLive<{ items: Item[] }>("/api/inbox");
   const item = inbox.data?.items.find((i) => i.id === `${run}:${n.key}` || i.id.startsWith(`${run}:${n.key}[`) || i.id.startsWith(`${run}:${n.key}.`));
@@ -567,9 +566,12 @@ function Box({ n, graph, style, answer, drag, dragging, opened, measure }: { n: 
   const clip = shown?.thumb?.type.startsWith("video/") ? shown.thumb : undefined;
   const picture = n.item?.thumb ?? (shown?.thumb?.type.startsWith("image/") ? shown.thumb : undefined);
   const fits = open || !!clip;
-  const inner = useMeasure(fits, measure, open);
+  const inner = useMeasure(fits, measure, open && !opened.quiet.has(n.id));
   const toggle = () => (moment ? opened.toggleFold(n.id) : opened.toggle(n.id));
   const asking = n.waitingOnYou || waitingItems > 0;
+  // Open and not waiting: the review that was answered here, if there was one.
+  const past = useLive<Answered>(open && !asking && !n.items && graph.run ? `/api/runs/${encodeURIComponent(graph.run)}/review?key=${encodeURIComponent(n.key)}` : undefined).data;
+  const reviewed = past?.item;
   return (
     <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, asking ? "you" : "", dragging ? "dragging" : "", open ? "open" : "", unfolded ? "unfolded" : "", fits ? "fits" : ""].join(" ")} {...(style ? { style } : {})} {...drag}>
       <div className="box-inner" ref={inner}>
@@ -621,11 +623,12 @@ function Box({ n, graph, style, answer, drag, dragging, opened, measure }: { n: 
               </ul>
             )}
             {asking && graph.run && <BoxReview n={n} run={graph.run} />}
+            {reviewed && <Screen key={reviewed.id + reviewed.shows.map((s) => s.version).join()} item={reviewed} batch={[reviewed]} embedded decided {...(past.answered ? { answer: past.answered } : {})} onBack={() => {}} onError={() => {}} onDone={() => {}} />}
             {n.leaf ? (
-              !asking && picture && <img className="box-picture" src={picture.url} alt="" />
+              !asking && !reviewed && picture && <img className="box-picture" src={picture.url} alt="" />
             ) : !graph.run ? (
               <p className="muted small">Not run yet. Its versions, checks and lock show up here once a run reaches it.</p>
-            ) : n.items || asking ? (
+            ) : n.items || asking || reviewed ? (
               <details className="box-more">
                 <summary>Step details</summary>
                 <NodePanel n={made} run={graph.run} />

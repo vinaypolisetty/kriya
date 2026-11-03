@@ -1088,20 +1088,27 @@ export class Scheduler {
 
   /** Everything waiting on a person right now, in run order. */
   inbox(): InboxItem[] {
-    return this.instances().flatMap(({ key, node, ctx }) => {
-      if (this.status(key) !== "awaiting_human") return [];
-      const q = node.kind === "agent" ? this.openQuestion(key) : undefined;
-      const screen = node.kind === "screen" ? node : q && node.kind === "agent" ? questionScreen(node, q.question) : isProducer(node) ? approvalScreen(node) : undefined;
-      if (!screen) return [];
-      return [{
-        key,
-        title: screen.name ?? screen.id,
-        review: screen.review,
-        shows: this.onShow(ctx, screen.show),
-        beside: this.beside(ctx, screen.beside),
-        buttons: screen.actions.map((a) => ({ id: a.id, ...(a.label ? { label: a.label } : {}), needs: a.needs, locks: a.locks })),
-      }];
-    });
+    return this.instances().flatMap((x) => (this.status(x.key) === "awaiting_human" ? (this.screenOf(x) ?? []) : []));
+  }
+
+  /** The review a step puts up, waiting or already answered: what a person sees, or saw. */
+  review(key: string): InboxItem | undefined {
+    const inst = this.instances().find((x) => x.key === key);
+    return inst && this.screenOf(inst);
+  }
+
+  private screenOf({ key, node, ctx }: Instance): InboxItem | undefined {
+    const q = node.kind === "agent" ? this.openQuestion(key) : undefined;
+    const screen = node.kind === "screen" ? node : q && node.kind === "agent" ? questionScreen(node, q.question) : isProducer(node) ? approvalScreen(node) : undefined;
+    if (!screen) return undefined;
+    return {
+      key,
+      title: screen.name ?? screen.id,
+      review: screen.review,
+      shows: this.onShow(ctx, screen.show),
+      beside: this.beside(ctx, screen.beside),
+      buttons: screen.actions.map((a) => ({ id: a.id, ...(a.label ? { label: a.label } : {}), needs: a.needs, locks: a.locks })),
+    };
   }
 
   /** What a screen shows next to its candidates (`beside: [item.hinglish, item.caption_en]`): locked or recorded values only. */
