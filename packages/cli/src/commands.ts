@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
 import { answerTip, preventFor, projectTips } from "./kb.js";
-import { chatFor, parseEdits, talk, threadLines } from "./chat.js";
+import { chatFor, parseEdits, recipeOf, talk, threadLines } from "./chat.js";
 import { trace } from "./trace.js";
 import { libraryAssets } from "./library.js";
 import { loadProject, namesOf, releaseOf, UserError, type Project } from "./project.js";
@@ -314,8 +314,7 @@ async function show(args: string[], io: IO): Promise<number> {
     const n = state.nodes[step];
     if (!n) throw new UserError(`run '${id}' has no step '${step}' (it has: ${s.steps().join(", ")})`);
     const ids = Object.keys(n.versions);
-    const v = n.versions[version ?? n.locked?.version ?? ids.at(-1) ?? ""];
-    if (version && !v) throw new UserError(`'${step}' has no version ${version} (it has: ${ids.join(", ") || "none yet"})`);
+    const v = n.versions[version ? versionNamed(n, version) : (n.locked?.version ?? ids.at(-1) ?? "")];
 
     io.out(`${id} › ${step} · ${line(step, n).replace(/^\S+ \S+ ?·? ?/, "") || n.status}`);
     if (n.history.length) {
@@ -436,7 +435,11 @@ async function decide(args: string[], io: IO): Promise<number> {
     const { rec, s, jobs } = await openRun(project, store, entry.run, io, { readOnly: true });
     // A button that needs a pick, with exactly one option on show: that's the pick.
     const needsPick = entry.buttons.find((b) => b.id === action)?.needs.includes("selection");
-    const pick = values.pick ?? (needsPick && entry.shows.length === 1 ? entry.shows[0]!.version : undefined);
+    // A pick names a version of the step the screen shows, as its id (1.2) or its number (v2).
+    const r = recipeOf(project, rec.state, entry.key);
+    const screen = r?.g.nodes.find((x) => x.id === entry.key.slice(r.prefix.length));
+    const shown = rec.state.nodes[screen?.kind === "screen" && screen.show ? `${r!.prefix}${screen.show.split(".")[0]}` : entry.key];
+    const pick = values.pick && shown ? versionNamed(shown, values.pick) : (values.pick ?? (needsPick && entry.shows.length === 1 ? entry.shows[0]!.version : undefined));
     s.answer(entry.key, {
       action,
       ...(pick ? { selection: [pick] } : {}),
@@ -473,7 +476,8 @@ async function lock(args: string[], io: IO): Promise<number> {
   const store = openStore(join(project.root, ".kriya"));
   try {
     const { rec, s, jobs } = await openRun(project, store, id, io);
-    s.lock(step, version, values.why);
+    const n = rec.state.nodes[step];
+    s.lock(step, n ? versionNamed(n, version) : version, values.why);
     io.out(`✓ Locked ${step} to ${version}`);
     const stale = s.stale();
     if (stale.length === 0) await drive(s, jobs, io); // nothing to redo: the run settles again
@@ -705,7 +709,8 @@ async function adopt(args: string[], io: IO): Promise<number> {
   const store = openStore(join(project.root, ".kriya"));
   try {
     const { rec, s } = await openRun(project, store, id, io);
-    const made = s.adopt(step, base, from, values.note);
+    const n = rec.state.nodes[step];
+    const made = s.adopt(step, n ? versionNamed(n, base) : base, n ? versionNamed(n, from) : from, values.note);
     io.out(`✓ Adopted into ${step}: ${made.join(", ")} (from ${base}, taking from ${from}). Nothing is locked yet`);
     report(io, rec.state, s.inbox());
     return 0;
