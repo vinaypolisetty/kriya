@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { decide, type Button, type Item, type Media as File } from "./api";
 import { Media } from "./App";
 import { parseRegion, Region } from "./Region";
+import { proposalsIn } from "./simple";
 
 const LABELS: Record<string, string> = { lock: "Lock", edit: "Edit", crop: "Crop", retry: "Try again", approve: "Approve", redo: "Redo", fix: "Fix", reply: "Reply" };
 const label = (b: Button) => LABELS[b.id] ?? b.label ?? b.id;
@@ -139,11 +140,13 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
   if (embedded) {
     const tap = !!lock && item.shows.length > 1 && lock.needs.every((n) => n === "selection");
     const wait = !!chosen || !!sending || item.working;
+    // A list's entries are nodes on the graph already, so the box only holds the decision about them.
+    const listed = !!proposalsIn(shown?.value);
     return (
-      <div className="review embedded">
+      <div className={listed ? "review embedded listed" : "review embedded"}>
         {item.working && <span className="tone-work">working…</span>}
         {item.branch && <span className="muted">On branch <b>{item.branch}</b>: only its versions are here. Switch in the step details.</span>}
-        {besides}
+        {listed ? besides && <details className="box-more"><summary>See what it looked at</summary>{besides}</details> : besides}
         {tap ? (
           <div className="choices" role="group" aria-label="Tap the one you want">
             {item.shows.map((s) => {
@@ -164,7 +167,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
             })}
           </div>
         ) : (
-          shown && <div className="big"><Media shown={shown} /></div>
+          shown && !listed && <div className="big"><Media shown={shown} /></div>
         )}
         {item.suggested && !chosen && (
           <div className="suggestion">

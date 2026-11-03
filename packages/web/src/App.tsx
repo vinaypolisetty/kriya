@@ -518,7 +518,7 @@ export function Media({ shown }: { shown: Shown }) {
 }
 
 /** Structured data in words: lists as lists, records as label and value. A block of bare numbers (a box in the frame) is left out. */
-function Readable({ v }: { v: unknown }) {
+export function Readable({ v }: { v: unknown }) {
   if (Array.isArray(v)) {
     return (
       <ul className="readable">

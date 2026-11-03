@@ -246,7 +246,8 @@ function RetryButton({ run, n }: { run: string; n: GNode }) {
       }}
     >
       {canChange && (
-        <>
+        <details className="box-more">
+          <summary>Change something first</summary>
           <label>
             <span>Tell it what to change</span>
             <span className="muted small">How to do it, not what to say: the words come from the step before and stay the same.</span>
@@ -280,7 +281,7 @@ function RetryButton({ run, n }: { run: string; n: GNode }) {
               ))}
             </fieldset>
           )}
-        </>
+        </details>
       )}
       <button type="submit" className="primary" disabled={state === "sending" || state === "sent"}>
         {state === "sent" ? "Trying again…" : failedItems ? `Try again: ${failedItems} failed item${failedItems === 1 ? "" : "s"}` : changed ? "Try again with this change" : "Try again"}

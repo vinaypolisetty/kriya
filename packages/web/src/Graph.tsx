@@ -24,11 +24,11 @@
  * with a run's moments as boxes of their own. "Show all steps" shows the recipe.
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type PointerEvent } from "react";
-import { graphUrl, fileUrl } from "./App";
+import { graphUrl, fileUrl, Readable } from "./App";
 import { useLive, useLiveAll, type GEdge, type GItem, type GNode, type Item, type RunGraph, type TraceView } from "./api";
 import { NodePanel, RunPanel } from "./NodePanel";
 import { Screen } from "./Screen";
-import { simplify, unfold, waitsOnYou } from "./simple";
+import { propose, proposalsIn, simplify, unfold, waitsOnYou } from "./simple";
 
 const W = 216;
 const H = 84;
@@ -74,7 +74,7 @@ function layout(g: RunGraph, sizes: Map<string, Size> = new Map(), bare = false)
   const COLUMN = bare ? BARE_COL : COL;
   const widthOf = (id: string) => {
     const node = g.nodes.find((n) => n.id === id);
-    return sizes.get(id)?.w ?? (node?.kind === "item" && !node.leaf && !node.unfolded ? ITEM_W : W);
+    return sizes.get(id)?.w ?? (node?.proposal || (node?.kind === "item" && !node.leaf && !node.unfolded) ? ITEM_W : W);
   };
 
   // Each column moves right by however much the open boxes before it are wider than a box.
@@ -244,7 +244,15 @@ export function Graph(props: GraphProps) {
   // Every moment's own steps, to unfold into this graph.
   const moments = all || graph.at || !graph.run ? [] : view.graph.nodes.filter((n) => n.kind === "item" && !n.leaf && !opened.folded.has(n.id)).map((n) => n.key);
   const inside = useLiveAll<RunGraph>(moments.map((key) => graphUrl(graph.run, key)));
-  const whole = useMemo(() => unfold(view, (n) => (opened.folded.has(n.id) ? undefined : inside.get(graphUrl(graph.run, n.key)))), [view, opened.folded, inside, graph.run]);
+  const reviews = useLive<{ items: Item[] }>(all || graph.at || !graph.run ? undefined : "/api/inbox").data;
+  const whole = useMemo(
+    () =>
+      propose(
+        unfold(view, (n) => (opened.folded.has(n.id) ? undefined : inside.get(graphUrl(graph.run, n.key)))),
+        (n) => proposalsIn(reviews?.items.find((i) => i.id === `${graph.run}:${n.key}`)?.shows[0]?.value),
+      ),
+    [view, opened.folded, inside, graph.run, reviews],
+  );
   useEffect(() => opened.sync(whole.graph), [whole.graph]);
   const happened: Happened = { ...(whole.taken ? { taken: whole.taken } : {}), answers: t?.answers ?? {} };
   const shown = { graph: whole.graph, happened, opened, bare: !all && !!graph.at, all };
@@ -327,16 +335,18 @@ function StepList({ graph, happened, opened, bare, all }: Drawn) {
 /** Box positions you dragged, per recipe, from this browser's storage (which may be off or empty). */
 type Moved = Record<string, { x: number; y: number }>;
 const layoutKey = (recipe: string) => `kriya.layout.${recipe}`;
+/** Only a recipe's own steps keep their place: moments and pages differ from run to run, so a saved spot would land on something else. */
+const fixedSteps = (moved: Moved): Moved => Object.fromEntries(Object.entries(moved).filter(([id]) => !/[[~/]/.test(id)));
 function loadMoved(recipe: string): Moved {
   try {
-    return JSON.parse(localStorage.getItem(layoutKey(recipe)) ?? "{}") as Moved;
+    return fixedSteps(JSON.parse(localStorage.getItem(layoutKey(recipe)) ?? "{}") as Moved);
   } catch {
     return {};
   }
 }
 function saveMoved(recipe: string, moved: Moved): void {
   try {
-    if (Object.keys(moved).length) localStorage.setItem(layoutKey(recipe), JSON.stringify(moved));
+    if (Object.keys(fixedSteps(moved)).length) localStorage.setItem(layoutKey(recipe), JSON.stringify(fixedSteps(moved)));
     else localStorage.removeItem(layoutKey(recipe));
   } catch {
     // Storage off (a private window): the layout lasts until the page closes.
@@ -492,6 +502,14 @@ function BoxReview({ n, run }: { n: GNode; run: string }) {
   return <Screen key={item.id + item.shows.map((s) => s.version).join()} item={item} batch={[item]} embedded onBack={() => {}} onError={() => {}} onDone={() => {}} />;
 }
 
+/** A failed drawing or page: why, and Try again, from the step inside it that failed. */
+function FailedWork({ n, run }: { n: GNode; run: string }) {
+  const g = useLive<RunGraph>(graphUrl(run, n.key));
+  const step = g.data?.nodes.find((x) => x.status === "failed");
+  if (g.error) return <p className="error">{g.error}</p>;
+  return step ? <NodePanel n={step} run={run} /> : <p className="muted small">Loading…</p>;
+}
+
 /** One for-each item's own graph, inside its row. */
 function ItemGraph({ run, at, focus }: { run: string; at: string; focus?: string | undefined }) {
   const g = useLive<RunGraph>(graphUrl(run, at));
@@ -562,16 +580,18 @@ function Box({ n, graph, style, answer, drag, dragging, opened, measure }: { n: 
   // A moment doesn't open inside itself: its steps are on the graph after it, and clicking folds them away.
   const moment = !!n.item && !n.leaf;
   const unfolded = !!n.unfolded;
-  const open = !moment && opened.steps.has(n.id);
+  // What failed starts open with its way out showing; a click still closes it.
+  const failed = n.status === "failed";
+  const open = !moment && opened.steps.has(n.id) !== failed;
   const waitingItems = n.items?.filter(waitsOnYou).length ?? 0;
   const clip = shown?.thumb?.type.startsWith("video/") ? shown.thumb : undefined;
   const picture = n.item?.thumb ?? (shown?.thumb?.type.startsWith("image/") ? shown.thumb : undefined);
   const fits = open || !!clip;
-  const inner = useMeasure(fits, measure, open);
+  const inner = useMeasure(fits, measure, open && !failed);
   const toggle = () => (moment ? opened.toggleFold(n.id) : opened.toggle(n.id));
   const asking = n.waitingOnYou || waitingItems > 0;
   return (
-    <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, asking ? "you" : "", dragging ? "dragging" : "", open ? "open" : "", unfolded ? "unfolded" : "", fits ? "fits" : ""].join(" ")} {...(style ? { style } : {})} {...drag}>
+    <div className={["box", `kind-${n.kind}`, `tone-${st.tone}`, asking ? "you" : "", dragging ? "dragging" : "", open ? "open" : "", unfolded ? "unfolded" : "", fits ? "fits" : "", n.proposal ? "proposal" : ""].join(" ")} {...(style ? { style } : {})} {...drag}>
       <div className="box-inner" ref={inner}>
         <button type="button" className="box-hit" onClick={toggle} aria-label={`${n.name}: ${asking ? "waiting for you" : st.label}`} aria-expanded={open || unfolded}>
           <span className="box-main">
@@ -621,7 +641,11 @@ function Box({ n, graph, style, answer, drag, dragging, opened, measure }: { n: 
               </ul>
             )}
             {asking && graph.run && <BoxReview n={n} run={graph.run} />}
-            {n.leaf ? (
+            {n.proposal ? (
+              <Readable v={n.proposal} />
+            ) : n.leaf && failed ? (
+              <FailedWork n={n} run={graph.run} />
+            ) : n.leaf ? (
               !asking && picture && <img className="box-picture" src={picture.url} alt="" />
             ) : !graph.run ? (
               <p className="muted small">Not run yet. Its versions, checks and lock show up here once a run reaches it.</p>

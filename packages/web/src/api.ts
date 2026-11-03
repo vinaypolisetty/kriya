@@ -42,6 +42,8 @@ export type GNode = {
   after?: string;
   /** On an `item` box: one piece of work with no steps to unfold, like one drawing or one page. */
   leaf?: boolean;
+  /** On a box the page made from a review's list: the entry it stands for, still waiting to be approved. */
+  proposal?: Record<string, unknown>;
   /** On an `item` box: its steps are on the graph after it. */
   unfolded?: boolean;
   /** On a review in the simple view: the step that made what's being reviewed, which folded into this box. */

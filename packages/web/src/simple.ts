@@ -6,7 +6,8 @@
  * boxes of their own, and each unfolds: its steps join the same graph, on a
  * row from the item's box to what follows, with no box inside a box. A
  * for-each inside an item is one box per piece of work: each drawing, each
- * page. A big run is a big graph, and that's fine.
+ * page. What a waiting review proposes is on the graph too, as a node per
+ * entry. A big run is a big graph, and that's fine.
  *
  * Pure, and only about what's drawn: the run itself is untouched. Anything
  * failed, blocked or stale always shows, and "Show all steps" shows the recipe
@@ -102,6 +103,46 @@ function fanOut({ graph: g, taken }: View): View {
     for (const from of out ?? [e.from]) for (const to of into ?? [e.to]) push({ ...e, from, to }, taken?.[i]);
   });
   if (!inner) for (const hub of fans) for (const it of hub.items!) push({ from: hub.id, to: it.key }, 1);
+  return { graph: { ...g, nodes, edges }, ...(taken ? { taken: counts } : {}) };
+}
+
+/** A review of a list of records with ids (the moments Claude found): each entry deserves a node, not a line in a box. */
+export const proposalsIn = (value: unknown): Record<string, unknown>[] | undefined =>
+  Array.isArray(value) && value.length > 0 && value.every((x) => !!x && typeof x === "object" && typeof (x as { id?: unknown }).id === "string") ? (value as Record<string, unknown>[]) : undefined;
+
+/** What a proposed entry says in one line: when, then the first thing that describes it. */
+function gist(p: Record<string, unknown>): string {
+  const words = ["what", "title", "name", "text"].map((k) => p[k]).find((v) => typeof v === "string") as string | undefined;
+  return [typeof p.t === "number" ? `at ${p.t}s` : "", words ?? ""].filter(Boolean).join(" · ");
+}
+
+/** Each entry a waiting review proposes, as a node after it: what you're approving is on the graph before it's approved. */
+export function propose({ graph: g, taken }: View, listOf: (n: GNode) => Record<string, unknown>[] | undefined): View {
+  let nodes = g.nodes;
+  let edges = g.edges;
+  let counts = taken ?? g.edges.map(() => 0);
+  for (const review of g.nodes) {
+    const list = review.waitingOnYou ? listOf(review) : undefined;
+    if (!list) continue;
+    const ids = list.map((p) => `${review.id}~${String(p.id)}`);
+    const next: GEdge[] = [];
+    const nextCounts: number[] = [];
+    edges.forEach((e, i) => {
+      for (const from of e.from === review.id && !e.back ? ids : [e.from]) {
+        next.push({ ...e, from });
+        nextCounts.push(counts[i] ?? 0);
+      }
+    });
+    for (const to of ids) {
+      next.push({ from: review.id, to });
+      nextCounts.push(0);
+    }
+    const made = list.map((p, i): GNode => ({ id: ids[i]!, key: ids[i]!, kind: "item", leaf: true, proposal: p, name: String(p.id), detail: gist(p), status: "proposed", waitingOnYou: false, costUsd: 0, versions: [] }));
+    const at = nodes.findIndex((n) => n.id === review.id) + 1;
+    nodes = [...nodes.slice(0, at), ...made, ...nodes.slice(at)];
+    edges = next;
+    counts = nextCounts;
+  }
   return { graph: { ...g, nodes, edges }, ...(taken ? { taken: counts } : {}) };
 }
 
