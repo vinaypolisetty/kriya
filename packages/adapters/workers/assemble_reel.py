@@ -3,7 +3,8 @@
 The Mohalla Mitra Part 3 assembler (reel_assembler_part3.py), with everything
 that was hardcoded for that episode read from the manifest instead:
 
-  * each shot is a segment, timed to its voice lines (at least `min` seconds)
+  * each shot is a segment, timed to its voice lines (at least `min` seconds),
+    plus any `lead` before the first line, `pause` between lines and `hold` after
   * stills pan and zoom (alternating drift); clips play, then hold their last frame
   * `fit: whole` shows each wide panel or clip entire, across the middle, over a
     blurred copy of itself, or on black with `background: black` (the default,
@@ -72,12 +73,12 @@ SEG = [f"s{i:02d}" for i in range(len(M["segments"]))] + ["end"]
 place, segdur = [], {}
 t = 0.0
 for i, seg in enumerate(M["segments"]):
-    cur = 0.3
+    cur = 0.3 + seg.get("lead", 0)
     for j, _ in enumerate(seg["lines"]):
         norm, s0, e0, _cap = V[f"{i}_{j}"]
         place.append((f"{i}_{j}", t + cur - s0, t + cur, t + cur - s0 + e0))
-        cur += (e0 - s0) + GAP
-    segdur[SEG[i]] = max(seg.get("min", 4.0), cur + 0.4)
+        cur += (e0 - s0) + GAP + (seg.get("pause", 0) if j < len(seg["lines"]) - 1 else 0)
+    segdur[SEG[i]] = max(seg.get("min", 4.0), cur + 0.4) + seg.get("hold", 0)
     t += segdur[SEG[i]]
 segdur["end"] = M.get("end_seconds", 3.8)
 TOTAL = t + segdur["end"]
@@ -245,9 +246,9 @@ if sections:
 mix = []
 for j, (c, a, b) in enumerate(sections):
     idx = nv + j
-    vin += ["-stream_loop", "-1", "-i", music[c]]
     s0 = max(0, a - 0.6)
     ln = (b + 0.6) - s0
+    vin += ["-stream_loop", "-1", "-t", f"{ln:.3f}", "-i", music[c]]  # -t: a looped input with no end can leave ffmpeg spinning
     fin = 2.0 if j == 0 else 1.2
     af.append(f"[{idx}]aresample=48000,aformat=channel_layouts=stereo,atrim=0:{ln:.3f},volume={M.get('music_gain_db', -9.5)}dB,"
               f"afade=t=in:d={fin},afade=t=out:st={ln - 1.2:.3f}:d=1.2,adelay={int(s0 * 1000)}|{int(s0 * 1000)}[m{j}]")

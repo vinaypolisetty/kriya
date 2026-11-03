@@ -194,6 +194,46 @@ edges:
     expect(reel.length).toBeLessThan(5e6);
   }, 120_000);
 
+  it.skipIf(!hasPillow || !FONT)("assemble_reel: beats give a shot time without words, and a shot the Reel doesn't have is ignored", async () => {
+    const reel = async (beats: string) => {
+      const g = recipe(`graph: part
+level: part
+inputs:
+  shots: json
+  lines: json
+  panels: json
+  voices: json
+nodes:
+  - id: assemble
+    kind: tool
+    tool: assemble_reel
+    uses: [inputs.shots, inputs.lines, inputs.panels, inputs.voices]
+    args: { shots: inputs.shots, lines: inputs.lines, panels: inputs.panels, voices: inputs.voices, max_mb: 5, beats: ${beats} }
+    out: { reel: video, seconds: number }
+edges:
+  - { from: assemble, to: END }
+`);
+      const media = memoryMedia();
+      const still = media.put(make("s.png", "-f", "lavfi", "-i", "testsrc=size=1280x720", "-frames:v", "1"));
+      const line = media.put(make("l.wav", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-ar", "24000", "-ac", "1"));
+      const lines = [{ id: "L1", caption_en: "One" }, { id: "L2", caption_en: "Two" }];
+      const { rec, done } = run(g, media, {}, () => undefined, {
+        shots: [{ id: "S1", lines: [{ id: "L1" }, { id: "L2" }] }],
+        lines,
+        panels: [still],
+        voices: [line, line],
+      });
+      await done;
+      return rec.state.nodes.assemble!;
+    };
+    const seconds = (a: Awaited<ReturnType<typeof reel>>) => (Object.values(a.versions)[0]!.output as { seconds: number }).seconds;
+    const plain = seconds(await reel("{ P9-01: { hold: 5 } }"));
+    const timed = seconds(await reel("{ S1: { lead: 1, pause: 2, hold: 3 } }"));
+    expect(timed - plain).toBeCloseTo(6, 1); // the pause falls once, between the two lines
+    const bad = await reel("{ S1: { wait: 2 } }");
+    expect(bad.failure).toContain("give seconds as lead, pause or hold");
+  }, 180_000);
+
   it("extract_frames: a frame every half second, with its time; a clip too long to look through fails plainly", async () => {
     const g = recipe(`graph: f
 level: clip

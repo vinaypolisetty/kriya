@@ -13,7 +13,11 @@
  *   `fit: whole` shows each wide panel entire over a blurred copy, instead of
  *   filling the tall frame and cropping the sides (`pan`, the default);
  *   `background: black` puts it on black instead of the blurred copy;
- *   `leave_out: [shot ids]` drops those shots and their lines from the cut.
+ *   `leave_out: [shot ids]` drops those shots and their lines from the cut;
+ *   `beats: { <shot id>: { lead, pause, hold } }` gives a shot seconds before
+ *   its first line, between its lines and after its last, for what happens
+ *   without words. A shot id the Reel doesn't have is ignored, so one recipe
+ *   can carry the beats of every part.
  * - `extract_frames`: small frames of a video every `every` seconds, with their
  *   times, for a vision step to look through (Claude sees frames, not video).
  * - `stills`: a full-size frame of the video at each item's `t`, added to the
@@ -141,6 +145,11 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
     const lineList = Array.isArray(lines) ? (lines as { id?: string }[]) : [];
     const leaveOut = arg(node, ctx, "leave_out") ?? [];
     if (!Array.isArray(leaveOut)) throw new ToolError(`'${node.id}' has leave_out: ${JSON.stringify(leaveOut)}; give a list of shot ids, e.g. leave_out: [P2-12]`);
+    const beats = (arg(node, ctx, "beats") ?? {}) as Record<string, Record<string, unknown>>;
+    for (const [id, beat] of Object.entries(beats)) {
+      const ok = typeof beat === "object" && beat !== null && Object.entries(beat).every(([k, v]) => ["lead", "pause", "hold"].includes(k) && typeof v === "number" && v >= 0);
+      if (!ok) throw new ToolError(`'${node.id}' has beats for ${id}: ${JSON.stringify(beat)}; give seconds as lead, pause or hold, e.g. ${id}: { lead: 2, hold: 1 }`);
+    }
     const segments = (shots as { id?: string; lines?: { id?: string }[]; music?: string }[]).flatMap((shot, i) => {
       if (shot.id != null && leaveOut.includes(shot.id)) return [];
       const clip = Array.isArray(clips) ? clips[i] : undefined;
@@ -153,7 +162,7 @@ const TOOLS: Record<(typeof MEDIA_TOOLS)[number], Run> = {
         const full: Record<string, unknown> = { ...l, ...lineList[at] };
         return [{ audio: file(o, audio, `v${i}_${at}`), caption: String(full.caption_en ?? full.caption ?? "") }];
       });
-      return [{ ...(clip != null ? { clip: file(o, clip, `c${i}`) } : { image: file(o, panel, `p${i}`) }), lines: said, ...(shot.music ? { music: shot.music } : {}) }];
+      return [{ ...(clip != null ? { clip: file(o, clip, `c${i}`) } : { image: file(o, panel, `p${i}`) }), lines: said, ...(shot.music ? { music: shot.music } : {}), ...(shot.id != null ? beats[shot.id] : {}) }];
     });
     const fit = arg(node, ctx, "fit") ?? "pan";
     if (fit !== "pan" && fit !== "whole") throw new ToolError(`'${node.id}' has fit: ${JSON.stringify(fit)}; use pan (fill the frame, crop the sides) or whole (show the whole picture)`);
