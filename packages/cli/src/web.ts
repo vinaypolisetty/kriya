@@ -432,7 +432,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     const brief = await live.change(run, (s) => hear(project, s, key, text), { carryOn: false });
     // Asked outside the line of writes: a chat thinking for a few seconds holds up no one else's decision (D-86).
     const r = await chatFor(project, projectMedia(project, store))(brief);
-    const did = await live.change(run, (s) => reply(s, key, brief.message, r), { carryOn: r.actions.length > 0 });
+    const did = await live.change(run, (s) => reply(project, s, key, brief.message, r), { carryOn: r.actions.length > 0 });
     return { text: r.text, did };
   };
 

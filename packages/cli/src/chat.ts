@@ -9,14 +9,21 @@
  * recorded with what was done (`ChatAnswered`). The chat never touches the run
  * itself.
  *
+ * A fact about a character, place or thing (a Library facet) changes for the
+ * whole run (D-88): an override at the run's level, never the Library itself,
+ * so other runs don't move. Only when the creator says to keep it is it written
+ * to the Library, for runs from then on; finished runs keep what they were made
+ * with.
+ *
  * A completed run is done and frozen: the chat talks about it, but nothing in
- * it is locked or made. In a run still going, a lock that leaves later work
- * stale has that work redone at once: in progress follows the change.
+ * it is locked, made or changed. In a run still going, a lock or a change that
+ * leaves work stale has that work redone at once: in progress follows the change.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { claudeChat, describeError, type Chat, type ChatBrief, type ChatReply, type Media } from "@kriya/adapters";
-import { findGraph, intention, numbers, type NodeState, type RunState, type Scheduler } from "@kriya/engine";
+import { findGraph, intention, numbers, suggest, type NodeState, type RunState, type Scheduler } from "@kriya/engine";
+import { MEDIA, writeFacet } from "./library.js";
 import { fakeChat } from "./fake.js";
 import { UserError, type Project } from "./project.js";
 
@@ -72,12 +79,28 @@ export function chatBrief(project: Project, state: RunState, key: string, messag
       ...(v.model ? { model: v.model } : {}),
       ...(v.verdicts.length ? { checks: checks(v.verdicts) } : {}),
     })),
+    facets: usedFacets(project, state, n),
+    library: [...project.library.entities.values()].map((e) => `${e.name}${e.kind ? ` (${e.kind})` : ""}: ${Object.keys(e.facets).join(", ")}`),
     story: { inputs: state.inputs, locked: lockedWork(state, key) },
     images: byNumber.filter((v) => shown.has(v.id)).flatMap((v) => Object.values(v.output).filter((x): x is string => typeof x === "string" && x.startsWith("blob:")).map((ref) => ({ n: num[v.id]!, ref }))),
     thread: n.thread.map((t) => ({ by: t.by, text: t.text })),
     message,
   };
 }
+
+/** The facets a step's versions used, as they read in this run now: the run's change, or the Library's. */
+function usedFacets(project: Project, state: RunState, n: NodeState): ChatBrief["facets"] {
+  const refs = [...new Set(Object.values(n.versions).flatMap((v) => Object.keys(v.assets ?? {})))];
+  return refs.map((ref) => {
+    const changed = state.overrides.run?.[ref];
+    if (changed !== undefined) return { ref, value: changed, from: "this run" as const };
+    const [entity, facet] = splitRef(ref);
+    return { ref, value: project.library.entities.get(entity)?.facets[facet] ?? null, from: "Library" as const };
+  });
+}
+
+/** `Chai stall.look` → `Chai stall`, `look`: names can have spaces and dots, facets can't. */
+const splitRef = (ref: string): [string, string] => [ref.slice(0, ref.lastIndexOf(".")), ref.slice(ref.lastIndexOf(".") + 1)];
 
 /** What the checks said about a version, in one line. */
 function checks(verdicts: NodeState["versions"][string]["verdicts"]): string {
@@ -108,7 +131,7 @@ export type Talked = { reply: ChatReply; did: string[] };
 export async function talk(project: Project, s: Scheduler, chat: Chat, key: string, text: string): Promise<Talked> {
   const brief = hear(project, s, key, text);
   const r = await chat(brief);
-  return { reply: r, did: reply(s, key, brief.message, r) };
+  return { reply: r, did: reply(project, s, key, brief.message, r) };
 }
 
 /** Records what the creator said and returns what the chat is told (the conversation before this message). */
@@ -121,12 +144,13 @@ export function hear(project: Project, s: Scheduler, key: string, text: string):
 }
 
 /** Does what the chat asked, the way a click would, and records its answer with what was done. */
-export function reply(s: Scheduler, key: string, message: string, r: ChatReply): string[] {
+export function reply(project: Project, s: Scheduler, key: string, message: string, r: ChatReply): string[] {
   const did = r.actions.map((a) => {
     try {
-      return act(s, key, a, message);
+      return act(project, s, key, a, message);
     } catch (e) {
-      return `couldn't ${a.do === "lock" ? `lock v${a.version}` : "make a new version"}: ${describeError(e)}`;
+      const what = a.do === "lock" ? `lock v${a.version}` : a.do === "make" ? "make a new version" : `${a.do} ${a.entity}'s ${a.facet}`;
+      return `couldn't ${what}: ${describeError(e)}`;
     }
   });
   s.answered(key, { text: r.text, did, model: r.model, cost_usd: r.cost_usd });
@@ -134,8 +158,10 @@ export function reply(s: Scheduler, key: string, message: string, r: ChatReply):
 }
 
 /** Does one thing the chat asked for, the way a click would, and says what was done. */
-function act(s: Scheduler, key: string, a: ChatReply["actions"][number], message: string): string {
-  if (s.state.status === "completed") return `didn't ${a.do === "lock" ? "lock" : "make"} anything: this run is finished, so it stays as it is`;
+function act(project: Project, s: Scheduler, key: string, a: ChatReply["actions"][number], message: string): string {
+  if (a.do === "keep") return keep(project, s, a.entity, a.facet);
+  if (s.state.status === "completed") return `didn't ${a.do} anything: this run is finished, so it stays as it is`;
+  if (a.do === "change") return change(project, s, a);
   const n = s.state.nodes[key]!;
   const byNumber = Object.fromEntries(Object.entries(numbers(n)).map(([id, k]) => [k, id]));
   if (a.do === "lock") {
@@ -153,6 +179,46 @@ function act(s: Scheduler, key: string, a: ChatReply["actions"][number], message
   if (a.from > 0 && !from) return `couldn't make a new version: there's no v${a.from}`;
   const maker = s.make(key, { ...(from ? { from } : {}), instruction: a.instruction, redo: a.how === "redo" });
   return `making a new version${from ? ` from v${a.from}` : ""}${maker !== key ? ` with ${maker.split(".").at(-1)}` : ""}: ${a.instruction}`;
+}
+
+/** Redoes the run's stale work at once (in progress follows the change), and says how much. */
+function redo(s: Scheduler): string {
+  const stale = s.stale();
+  if (stale.length === 0) return "";
+  s.rebuild();
+  return `; redoing ${stale.length} step${stale.length === 1 ? "" : "s"} that used it`;
+}
+
+/** One facet changed for this run (D-88): every step here that used it goes stale and is redone; the Library is untouched. */
+function change(project: Project, s: Scheduler, a: Extract<ChatReply["actions"][number], { do: "change" }>): string {
+  const e = project.library.entities.get(a.entity);
+  if (!e) throw new UserError(`there's no '${a.entity}' in the Library${suggest(a.entity, [...project.library.entities.keys()])}`);
+  const allowed = e.kind ? project.settings.kinds[e.kind] : undefined;
+  if (allowed && !allowed.includes(a.facet)) throw new UserError(`a ${e.kind} has no '${a.facet}'${suggest(a.facet, allowed)}`);
+  const value = a.value.trim();
+  if (!value) throw new UserError("say what it should be");
+  const now = s.state.overrides.run?.[`${a.entity}.${a.facet}`] ?? e.facets[a.facet];
+  let next: unknown;
+  if (!a.field) {
+    if (now && typeof now === "object") throw new UserError(`${a.entity}'s ${a.facet} has parts (${Object.keys(now).join(", ")}); say which one to change`);
+    next = value;
+  } else {
+    if (typeof now === "string") throw new UserError(`${a.entity}'s ${a.facet} is just words; change it whole`);
+    const old = (now as Record<string, unknown> | undefined)?.[a.field];
+    if (typeof old === "string" && MEDIA.test(old)) throw new UserError(`${a.entity}'s ${a.facet} ${a.field} is a file (${old}); change that in the Library yourself`);
+    next = { ...((now as Record<string, unknown> | undefined) ?? {}), [a.field]: value };
+  }
+  s.override("run", a.entity, a.facet, next);
+  return `changed ${a.entity}'s ${a.facet}${a.field ? ` ${a.field}` : ""} to "${value}" for this run${redo(s)}`;
+}
+
+/** This run's change to a facet, written to the Library for runs from now on (D-88). Finished runs keep theirs. */
+function keep(project: Project, s: Scheduler, entity: string, facet: string): string {
+  const value = s.state.overrides.run?.[`${entity}.${facet}`];
+  const e = project.library.entities.get(entity);
+  if (value === undefined || !e) throw new UserError(`${entity}'s ${facet} hasn't been changed in this run, so there's nothing to keep`);
+  writeFacet(project.root, e, facet, value);
+  return `kept ${entity}'s ${facet} in the Library (${e.file}): runs from now on start with it; finished runs keep theirs`;
 }
 
 /** The conversation so far, for the terminal. */

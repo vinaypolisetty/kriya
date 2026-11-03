@@ -2,7 +2,10 @@
  * A step's chat (D-87): the creator talks to one step of a run about its
  * versions, and the chat answers, and can do what a click could: lock a
  * version, or make a new one (an edit of a version, or the step made again
- * with an instruction). It never changes another step, the Library or the recipe.
+ * with an instruction). A fact about a character, place or thing (a Library
+ * facet: a voice, a look's words, how someone speaks) it changes for this run,
+ * then asks whether to keep it in the Library for future runs (D-88). It never
+ * changes another step or the recipe.
  *
  * One Claude call per message. The answer is constrained to words plus a list
  * of actions (structured outputs), so what it wants to do arrives as data that
@@ -36,6 +39,10 @@ export type ChatBrief = {
     model?: string;
     checks?: string;
   }[];
+  /** The Library facets this step's versions used, as they read in this run now: changed for this run, or the Library's. */
+  facets: { ref: string; value: unknown; from: "this run" | "Library" }[];
+  /** Everyone in the Library, `Name (kind): facet, facet`, so the chat can name a facet this step doesn't use. */
+  library: string[];
   /** The story so far: the run's inputs and every step's locked output. */
   story: { inputs: Record<string, unknown>; locked: { key: string; value: unknown }[] };
   /** Pictures to look at, by version number (image outputs only). */
@@ -47,7 +54,13 @@ export type ChatBrief = {
 };
 
 /** Something the chat asks to do. The caller checks it, then does it the way a click would. */
-export type ChatAction = { do: "lock"; version: number; why: string } | { do: "make"; from: number; instruction: string; how: "edit" | "redo" };
+export type ChatAction =
+  | { do: "lock"; version: number; why: string }
+  | { do: "make"; from: number; instruction: string; how: "edit" | "redo" }
+  /** One facet changed for this run: `field` names a part of it (`voice`, `words`), or is empty for a facet that's just words. */
+  | { do: "change"; entity: string; facet: string; field: string; value: string }
+  /** This run's change to a facet, kept in the Library for future runs. */
+  | { do: "keep"; entity: string; facet: string };
 
 export type ChatReply = { text: string; actions: ChatAction[]; model: string; cost_usd: number };
 
@@ -56,15 +69,17 @@ export type Chat = (brief: ChatBrief) => Promise<ChatReply>;
 
 const SYSTEM_CHAT = `You are the chat for one step of a kriya run: a production pipeline (a Reel, a report, an episode) where a person reviews each step's work and locks the version they want. You talk with the person about this step.
 
-Besides answering, you can act, but only on this step:
-- lock: make one of its versions the step's output. Only when the person clearly says so ("lock v3", "go with the night one"). If they only like a version, ask whether to lock it.
-- make: a new version. how "edit" changes an existing version and keeps everything else (only if the step can be edited); how "redo" makes the step again from its own prompt plus your instruction. A new version costs money, so make one when the person asks for a change, never to answer a question. Write the instruction as a short, concrete change for the model ("night, warm window light; keep the pose").
+Besides answering, you can act:
+- lock: make one of this step's versions its output. Only when the person clearly says so ("lock v3", "go with the night one"). If they only like a version, ask whether to lock it.
+- make: a new version of this step. how "edit" changes an existing version and keeps everything else (only if the step can be edited); how "redo" makes the step again from its own prompt plus your instruction. A new version costs money, so make one when the person asks for a change, never to answer a question. Write the instruction as a short, concrete change for the model ("night, warm window light; keep the pose").
+- change: a fact about a character, place or thing, not just this version: Mitra's voice, Bheem's look words, how someone speaks. These are Library facets. A change applies to this whole run: every step in it that used the facet is redone, not only this one. Set one field at a time (field is the part of the facet, like "voice" or "words"; empty when the facet is just words). Never change a file (a sheet, a sample): say the person has to change that in the Library. Use change when the person talks about the character or thing ("Mitra should sound older"); use make when it's about this one version ("make him smile here").
+- keep: after a change, ask whether to keep it for future runs (the next episodes). Only if they say yes, keep it: it's written to the Library. If they say no, do nothing: it stays in this run only. Runs already finished never change.
 
 Rules:
 - Versions are v1, v2, v3… Always call them that.
 - A lock's why is the person's own reason, copied word for word from their message (the reason only, not the command). If they gave none, leave it empty. Never write your own.
 - You can't change other steps, the Library or the recipe. When the person wants that, say what would need to change and where.
-- If the run is finished, it's done and frozen: talk, but don't lock or make; say so.
+- If the run is finished, it's done and frozen: talk, but don't lock, make or change; say so. You can still keep a change made earlier.
 - Answer from what's recorded (prompts, checks, pictures). If you can't tell, say so.
 - Be brief and plain. Answer in the person's language.`;
 
@@ -80,13 +95,17 @@ const REPLY_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["do", "version", "why", "instruction", "how"],
+        required: ["do", "version", "why", "instruction", "how", "entity", "facet", "field", "value"],
         properties: {
-          do: { type: "string", enum: ["lock", "make"] },
-          version: { type: "integer", description: "lock: the version to lock; make: the version to start from (0 for none)" },
+          do: { type: "string", enum: ["lock", "make", "change", "keep"] },
+          version: { type: "integer", description: "lock: the version to lock; make: the version to start from; otherwise 0" },
           why: { type: "string", description: "lock: the person's reason, word for word from their message, or empty" },
-          instruction: { type: "string", description: "make: what to change; empty for lock" },
-          how: { type: "string", enum: ["edit", "redo"], description: "make: edit a version, or make the step again; edit for lock" },
+          instruction: { type: "string", description: "make: what to change; otherwise empty" },
+          how: { type: "string", enum: ["edit", "redo"], description: "make: edit a version, or make the step again; otherwise edit" },
+          entity: { type: "string", description: "change, keep: the Library name, e.g. Mitra; otherwise empty" },
+          facet: { type: "string", description: "change, keep: the facet, e.g. voice; otherwise empty" },
+          field: { type: "string", description: "change: the part of the facet to set, e.g. words, or empty if the facet is just words" },
+          value: { type: "string", description: "change: the new value of that part; otherwise empty" },
         },
       },
     },
@@ -109,11 +128,14 @@ export function briefText(b: ChatBrief): string {
     ].join("\n"),
   );
   const locked = b.story.locked.map((x) => `- ${x.key}: ${clip(x.value, 600)}`);
+  const facets = b.facets.map((f) => `- ${f.ref} (${f.from === "this run" ? "changed for this run" : "from the Library"}): ${clip(f.value, 600)}`);
   return [
     `Step: ${b.step.name} (${b.step.key}, a ${b.step.kind} step). It makes: ${b.step.makes.join(", ") || "nothing"}.`,
     `What the recipe asks of it:\n${b.step.asks}`,
     `It ${b.canEdit ? "can" : "can't"} be edited (how: edit). The run is ${b.finished ? "finished, so it's frozen" : "in progress"}.`,
     `Its versions:\n${versions.join("\n") || "(none yet)"}`,
+    `Library facets it uses:\n${facets.join("\n") || "(none)"}`,
+    `In the Library: ${b.library.join("; ") || "(nobody yet)"}`,
     `The story so far. Inputs: ${clip(b.story.inputs, 3000)}\nLocked work:\n${locked.join("\n") || "(nothing locked yet)"}`,
   ].join("\n\n");
 }
@@ -149,15 +171,18 @@ export function claudeChat(opts: { client?: Anthropic; model?: string; effort?: 
     });
     if (m.stop_reason === "refusal") throw new Refusal("Claude declined to answer that");
     const text = m.content.flatMap((x) => (x.type === "text" ? [x.text] : [])).join("");
-    let got: { reply: string; actions: { do: string; version: number; why: string; instruction: string; how: string }[] };
+    let got: { reply: string; actions: { do: string; version: number; why: string; instruction: string; how: string; entity: string; facet: string; field: string; value: string }[] };
     try {
       got = JSON.parse(text) as typeof got;
     } catch {
       throw new Error("the chat's answer was cut off or garbled; say it again");
     }
-    const actions = got.actions.map((a): ChatAction =>
-      a.do === "lock" ? { do: "lock", version: a.version, why: a.why } : { do: "make", from: a.version, instruction: a.instruction, how: a.how === "redo" ? "redo" : "edit" },
-    );
+    const actions = got.actions.map((a): ChatAction => {
+      if (a.do === "lock") return { do: "lock", version: a.version, why: a.why };
+      if (a.do === "change") return { do: "change", entity: a.entity, facet: a.facet, field: a.field, value: a.value };
+      if (a.do === "keep") return { do: "keep", entity: a.entity, facet: a.facet };
+      return { do: "make", from: a.version, instruction: a.instruction, how: a.how === "redo" ? "redo" : "edit" };
+    });
     return { text: got.reply, actions, model: m.model, cost_usd: claudeCost(m) };
   };
 }

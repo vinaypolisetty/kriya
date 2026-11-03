@@ -188,3 +188,26 @@ describe("the conversation itself (D-87)", () => {
     expect(() => s.said("animate", "hello")).toThrow("step 'animate' hasn't started");
   });
 });
+
+describe("a finished run keeps the Library it was made with (D-88)", () => {
+  it("a new facet version leaves it alone; reopened, it catches up", () => {
+    let look = "v1";
+    const assets = { facet: (entity: string, facet: string) => ({ version: facet === "look" ? look : "v1", value: `${entity}:${facet}` }) };
+    const exec = fakes({ draw: panels }, { pick: (c) => (c.visit === 1 ? { action: "lock", selection: ["1.2"] } : undefined) });
+    const log = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(log, "run1");
+    const s = new Scheduler(shotRecipe, rec, exec, graphs, { assets });
+    s.start("a".repeat(64), { item: { id: "P3-04", animate: false, characters: ["Mitra"], place: "Tap" } }, SERIES);
+    s.run();
+    expect(rec.state.status).toBe("completed");
+
+    look = "v2"; // Mitra's look is redrawn in the Library
+    s.assetsChanged();
+    expect(rec.state.status).toBe("completed");
+    expect(readRun(log, "run1").filter((e) => e.type === "MarkedStale")).toEqual([]);
+
+    s.lock("draw", "1.3"); // the creator works on it again: now it reads today's Library
+    expect(rec.state.nodes.draw!.status).toBe("stale");
+    expect(replay(readRun(log, "run1"))).toEqual(rec.state);
+  });
+});
