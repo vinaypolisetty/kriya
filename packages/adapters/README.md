@@ -12,7 +12,7 @@ Depends on `@kriya/engine` and `@anthropic-ai/sdk`. Replicate is plain `fetch`.
 | [`anthropic.ts`](src/anthropic.ts) | `anthropicExecutors`: `llm.write` / `llm.vision` with structured outputs, `llm.research` with web search and fetch (D-74), the judge (`check`), agent turns; prices; `describeError` (D-54, D-63) |
 | [`chat.ts`](src/chat.ts) | `claudeChat`: a step's chat (D-87), one Claude call per message, answering with words and actions (lock, make, change a facet for the run, keep it, D-88) as structured output; `briefText`, the step in words |
 | [`replicate.ts`](src/replicate.ts) | `replicateExecutors`: `image.generate`, `image.edit`, `video.from_image`, `audio.speech`, `audio.music`; the job ledger; throttle handling (D-56, D-58, D-69) |
-| [`tools.ts`](src/tools.ts) | `mediaTools`: `crop`, `compress`, `assemble_reel`, `extract_frames`, `stills`, `attach`, `insert_caricatures`, run locally as jobs (D-62, D-80) |
+| [`tools.ts`](src/tools.ts) | `mediaTools`: `crop`, `compress`, `assemble_reel`, `extract_frames`, `stills`, `attach`, `insert_caricatures`, run locally as jobs (D-62, D-80); each result is pinned to a hash of the code and worker that made it (D-93) |
 | [`workers/assemble_reel.py`](workers/assemble_reel.py) | The Reel assembler: Python, Pillow and ffmpeg; reads a manifest, prints one JSON line |
 | [`workers/insert_caricatures.py`](workers/insert_caricatures.py) | Cuts caricatures into a video at their moments (group, one each, or over the frozen frame); same manifest-in, JSON-line-out shape |
 | [`fixes.ts`](src/fixes.ts) | The knowledge base: `suggestFix` (verdicts → crop < edit < retry < lock, D-64), the seed rules from Parts 1–3, and `tips` / `prevention` (what keeps failing → words for a step's prompt, D-76) |

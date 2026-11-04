@@ -9,7 +9,7 @@ Depends on `better-sqlite3`.
 | File | What it is |
 |---|---|
 | [`index.ts`](src/index.ts) | `openStore(dir)` → `{ db, events, blobs, library, close }` |
-| [`events.ts`](src/events.ts) | `SqliteEventLog`: append, read, atomic batches. Triggers refuse UPDATE and DELETE. Migrations by `user_version` (D-40) |
+| [`events.ts`](src/events.ts) | `SqliteEventLog`: append, read, atomic batches. Triggers refuse UPDATE and DELETE. With `after`, a write goes on top of that event or not at all (`BehindTheLog`, D-92). Migrations by `user_version` (D-40) |
 | [`blobs.ts`](src/blobs.ts) | `FsBlobStore` (files under `blobs/ab/cd/<sha256>`, write-once) and `MemoryBlobStore` for tests |
 | [`library.ts`](src/library.ts) | `SqliteFacetHistory`: every version of every facet seen, numbered v1, v2… |
 

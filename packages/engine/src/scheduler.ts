@@ -25,7 +25,7 @@ import { evaluate, parseCondition, type Expr } from "./condition.js";
 import { versionId } from "./events.js";
 import { applyEdits, type Edit } from "./patch.js";
 import type { Recorder } from "./recorder.js";
-import type { NodeState, NodeStatus, RunState, Verdict, Version } from "./state.js";
+import { numbers, type NodeState, type NodeStatus, type RunState, type Verdict, type Version } from "./state.js";
 import { promptRefs, startNodes } from "./validate.js";
 
 export type StepContext = {
@@ -63,8 +63,8 @@ export type StepContext = {
 export type Decision = { action: string; selection?: string[]; note?: string; region?: unknown; by?: "human" | "auto" };
 
 /** One thing waiting on a person: a screen, or a generated approval. */
-/** One candidate on a screen: its version, the shown field, and its checks (all passed or not, and the issues). */
-export type Shown = { version: string; value: unknown; verdict?: { pass: boolean; issues: Verdict["issues"] } };
+/** One candidate on a screen: its version, its number in its step (v2, D-87), the shown field, and its checks (all passed or not, and the issues). */
+export type Shown = { version: string; n: number; value: unknown; verdict?: { pass: boolean; issues: Verdict["issues"] } };
 
 /** What a judge said about one candidate (`check.rubric`). */
 export type Judged = { version: string; pass: boolean; issues: Verdict["issues"]; model?: string; cost_usd?: number };
@@ -301,6 +301,11 @@ export class Scheduler {
     this.assets = options.assets ?? { facet: () => undefined };
     this.tools = options.tools ?? { call: () => { throw new Error("no tools are set up"); } };
     this.blobs = options.blobs ?? memoryBlobs();
+  }
+
+  /** The run this scheduler carries on. */
+  get runId(): string {
+    return this.rec.runId;
   }
 
   /** The run as recorded so far (read it; change it only through the methods below). */
@@ -1770,11 +1775,12 @@ export class Scheduler {
     const [root, ...path] = show.split(".");
     const t = this.rec.state.nodes[ctx.prefix + root];
     if (!t) return [];
+    const num = numbers(t);
     return onBranch(t).map((v) => {
       let value: unknown = v.output;
       for (const k of path) value = value != null && typeof value === "object" ? (value as Record<string, unknown>)[k] : undefined;
       const verdict = summary(v);
-      return verdict ? { version: v.id, value, verdict } : { version: v.id, value };
+      return { version: v.id, n: num[v.id]!, value, ...(verdict ? { verdict } : {}) };
     });
   }
 

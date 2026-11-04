@@ -29,10 +29,13 @@
  *
  * A tool's args may name one of the step's `uses` to get its value
  * (`reel: assemble.reel`); anything else is passed as written.
+ *
+ * Each result records which code made it (rule 6, D-93): `local:assemble_reel@3f2a9c1b7e4d`,
+ * a hash of this module, the helpers it measures with, and the tool's worker.
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import type { Executors, Node, StepContext } from "@kriya/engine";
@@ -45,6 +48,26 @@ export const MEDIA_TOOLS = ["crop", "compress", "assemble_reel", "extract_frames
 
 const WORKER = fileURLToPath(new URL("../workers/assemble_reel.py", import.meta.url));
 const CUTAWAYS = fileURLToPath(new URL("../workers/insert_caricatures.py", import.meta.url));
+
+/** The code every tool runs: this module and what it measures and names files with, as .ts or .js, however it's loaded. */
+const HERE = fileURLToPath(import.meta.url);
+const CODE = [HERE, ...["duration", "files"].map((m) => fileURLToPath(new URL(`./${m}${extname(HERE)}`, import.meta.url)))];
+const WORKERS: Partial<Record<(typeof MEDIA_TOOLS)[number], string>> = { assemble_reel: WORKER, insert_caricatures: CUTAWAYS };
+
+/** A short hash of these files' bytes, in order: the version of the code they hold. */
+export function versionOf(files: string[], read: (file: string) => Uint8Array = readFileSync): string {
+  const h = createHash("sha256");
+  for (const f of files) h.update(read(f)).update("\0");
+  return h.digest("hex").slice(0, 12);
+}
+
+const versions = new Map<string, string>();
+/** Which code a tool runs, as `local:<tool>@<hash>` (rule 6): read once per process, so a Reel says which assembler cut it. */
+export function toolModel(tool: (typeof MEDIA_TOOLS)[number]): string {
+  let v = versions.get(tool);
+  if (!v) versions.set(tool, (v = versionOf([...CODE, ...(WORKERS[tool] ? [WORKERS[tool]!] : [])])));
+  return `local:${tool}@${v}`;
+}
 
 /** The most frames `extract_frames` hands a vision step: past this the clip is too long to look through. */
 const MAX_FRAMES = 120;
@@ -81,7 +104,7 @@ export function mediaTools(opts: ToolOptions): Pick<Executors, "produce"> & { ha
           mkdirSync(dir, { recursive: true });
           try {
             const output = await TOOLS[node.tool as (typeof MEDIA_TOOLS)[number]](node, ctx, { ...opts, dir });
-            return { outputs: [output], meta: [{ model: `local:${node.tool}`, cost_usd: 0 }] };
+            return { outputs: [output], meta: [{ model: toolModel(node.tool as (typeof MEDIA_TOOLS)[number]), cost_usd: 0 }] };
           } finally {
             rmSync(dir, { recursive: true, force: true });
           }

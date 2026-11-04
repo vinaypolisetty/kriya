@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase, SqliteEventLog } from "@kriya/store";
 import { loadText, Recorder, Scheduler, type Executors, type Graph } from "@kriya/engine";
-import { describeError, durationOf, Jobs, mediaTools, settle, sniff, type Media } from "../src/index.js";
+import { describeError, durationOf, Jobs, mediaTools, settle, sniff, toolModel, versionOf, type Media } from "../src/index.js";
 
 /** Real media made with ffmpeg: tools are tested on real files, not stand-ins. */
 const hasFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;
@@ -98,6 +98,28 @@ edges:
   - { from: pick, to: END, when: "action == 'lock'" }
 `);
 
+describe("which code a tool ran (G-11, D-93)", () => {
+  it("each result names its tool and a hash of the code it ran; a tool with a worker has its own", () => {
+    expect(toolModel("crop")).toMatch(/^local:crop@[0-9a-f]{12}$/);
+    expect(toolModel("crop")).toBe(toolModel("crop"));
+    const hash = (m: string) => m.split("@")[1];
+    expect(hash(toolModel("compress"))).toBe(hash(toolModel("crop"))); // the same code
+    expect(hash(toolModel("assemble_reel"))).not.toBe(hash(toolModel("crop"))); // + the assembler
+    expect(hash(toolModel("insert_caricatures"))).not.toBe(hash(toolModel("assemble_reel")));
+  });
+
+  it("a changed worker is a new version", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kriya-version-"));
+    const [code, worker] = [join(dir, "tools.ts"), join(dir, "assemble_reel.py")];
+    writeFileSync(code, "export const x = 1;");
+    writeFileSync(worker, "FIT = 'pan'");
+    const before = versionOf([code, worker]);
+    expect(versionOf([code, worker])).toBe(before);
+    writeFileSync(worker, "FIT = 'whole'");
+    expect(versionOf([code, worker])).not.toBe(before);
+  });
+});
+
 describe.skipIf(!hasFfmpeg)("media tools on real files (Day 19)", () => {
   it("crop: the region marked on the screen, in fractions or pixels, becomes the panel's next version", async () => {
     for (const [region, size] of [["0.25,0,0.5,1", [160, 180]], ["10,20,100,50", [100, 50]]] as const) {
@@ -106,7 +128,7 @@ describe.skipIf(!hasFfmpeg)("media tools on real files (Day 19)", () => {
       const { rec, done } = run(cropShot, media, { draw: () => [{ image: panel }] }, (_s, n) => (n === 1 ? { action: "crop", selection: ["1.1"], region } : undefined));
       await done;
       const cropped = rec.state.nodes.draw!.versions["2.1"]!;
-      expect(cropped).toMatchObject({ parents: ["1.1"], madeBy: "crop", model: "local:crop", costUsd: 0 });
+      expect(cropped).toMatchObject({ parents: ["1.1"], madeBy: "crop", model: toolModel("crop"), costUsd: 0 });
       expect(pngSize(media.get(cropped.output.image as string))).toEqual(size);
     }
   });

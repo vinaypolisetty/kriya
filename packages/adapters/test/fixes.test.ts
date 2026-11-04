@@ -4,7 +4,7 @@ import { loadText, readRun, Recorder, replay, Scheduler, type Executors, type Ju
 import { prevention, SEED_RULES, suggestFix, tips, type Failure } from "../src/index.js";
 
 const PICK = { actions: [{ id: "lock", needs: ["selection" as const], locks: true }, { id: "edit", needs: ["selection" as const, "note" as const], locks: false }, { id: "crop", needs: ["selection" as const, "region" as const], locks: false }, { id: "retry", needs: ["note" as const], locks: false }] };
-const shown = (version: string, issues: NonNullable<Shown["verdict"]>["issues"]): Shown => ({ version, value: `img${version}`, verdict: { pass: issues.length === 0, issues } });
+const shown = (version: string, issues: NonNullable<Shown["verdict"]>["issues"]): Shown => ({ version, n: Number(version.split(".")[1]), value: `img${version}`, verdict: { pass: issues.length === 0, issues } });
 
 describe("the fix policy: what to press, from the checks (Day 21)", () => {
   it("a candidate that passed is locked", () => {
@@ -44,7 +44,7 @@ describe("the fix policy: what to press, from the checks (Day 21)", () => {
   });
 
   it("no checks, or no button for the fix: no suggestion", () => {
-    expect(suggestFix(PICK, [{ version: "1.1", value: "x" }])).toBeUndefined();
+    expect(suggestFix(PICK, [{ version: "1.1", n: 1, value: "x" }])).toBeUndefined();
     expect(suggestFix({ actions: [PICK.actions[0]!] }, [shown("1.1", [{ type: "missing_character", what: "Bheem is missing" }])])).toBeUndefined();
   });
 });

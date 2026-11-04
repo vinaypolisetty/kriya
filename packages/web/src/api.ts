@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 export type Issue = { type: string; what?: string; where?: string; fix?: string; keep?: string };
 export type Verdict = { pass: boolean; issues: Issue[] };
 export type Media = { url: string; type: string };
-export type Shown = { version: string; value: unknown; media?: Media; verdict?: Verdict };
+/** A version on a review: its id, and its number in its step (v2, as the log and the chat name it). */
+export type Shown = { version: string; n: number; value: unknown; media?: Media; verdict?: Verdict };
 export type Button = { id: string; label?: string; needs: ("selection" | "note" | "region")[]; locks: boolean; estimateUsd?: number };
 export type Suggestion = { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
 export type Item = { id: string; run: string; key: string; title: string; review: string; buttons: Button[]; shows: Shown[]; beside: { ref: string; value: unknown; media?: Media[] }[]; suggested?: Suggestion; batch: string; item?: string; branch?: string };
