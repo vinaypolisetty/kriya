@@ -71,7 +71,7 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       expect(body.items).toHaveLength(1);
       const item = body.items[0]!;
       expect(item).toMatchObject({ id: "shot:pick", run: "shot", key: "pick", review: "pick_one" });
-      expect(item.shows.map((s) => [s.version, s.verdict?.pass])).toEqual([["1.1", true], ["1.2", true], ["1.3", true]]);
+      expect(item.shows.map((s) => [s.version, s.n, s.verdict?.pass])).toEqual([["1.1", 1, true], ["1.2", 2, true], ["1.3", 3, true]]);
       expect(item.buttons.map((b) => b.id)).toEqual(["lock", "edit", "crop", "retry"]);
       expect(item.suggested).toMatchObject({ action: "lock", selection: ["1.1"] });
       expect(store.events.read("shot").length).toBe(before);
@@ -251,6 +251,8 @@ describe("versions and branches from the browser (Day 26, D-71)", () => {
     try {
       expect((await post(web, "/api/branch", { run: "shot", key: "draw", name: "darker", from: "1.2" })).status).toBe(200);
       expect(await shown(web)).toEqual(["1.2"]);
+      // Alone on the branch, it's still v2: numbers are per step, across branches, as the log and the chat say.
+      expect((await get(web, "/api/inbox")).body.items[0]!.shows[0]!.n).toBe(2);
       expect((await get(web, "/api/inbox")).body.items[0]!.branch).toBe("darker");
       const g = (await (await fetch(`${web.url}/api/runs/shot/graph`)).json()) as { nodes: { id: string; branch?: string; branches?: unknown; versions: { id: string; branch: string; parents: string[] }[] }[] };
       const draw = g.nodes.find((n) => n.id === "draw")!;
