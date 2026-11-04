@@ -1,15 +1,18 @@
 /** One step of a run, inside its box on the graph: its state, why, what it made, and its conversation (D-87). */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { branchOff, retry, say, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunGraph, type TraceLine, type TraceView } from "./api";
 import { statusOf } from "./Graph";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 
-export function NodePanel({ n, run }: { n: GNode; run: string }) {
+/** Whether a step has a conversation: one that makes things, once it has started. */
+export const talks = (n: GNode, run: string) => !!run && (n.kind === "model" || n.kind === "agent" || n.kind === "tool") && n.status !== "not_started";
+
+/** `chat={false}` when the box shows the conversation elsewhere: under a review, where it's used most. */
+export function NodePanel({ n, run, chat = true }: { n: GNode; run: string; chat?: boolean }) {
   const st = statusOf(n.status);
   const latest = Math.max(0, ...n.versions.map((v) => Number(v.id.split(".")[0])));
   const locked = n.versions.find((v) => v.id === n.locked?.version);
-  const talks = run && (n.kind === "model" || n.kind === "agent" || n.kind === "tool") && n.status !== "not_started";
   return (
     <aside className="panel" aria-label={`Step ${n.name}`}>
       <p className={`pill tone-${st.tone}`}>{n.waitingOnYou ? "Waiting for you" : st.label}</p>
@@ -27,7 +30,7 @@ export function NodePanel({ n, run }: { n: GNode; run: string }) {
       {n.costUsd > 0 && <p className="muted mono">Spent {usd(n.costUsd)}</p>}
 
       {n.versions.length > 0 && <VersionTree n={n} run={run} latest={latest} />}
-      {talks && <Chat run={run} n={n} />}
+      {chat && talks(n, run) && <Chat run={run} n={n} />}
       {run && <Happened run={run} n={n} />}
     </aside>
   );
@@ -38,11 +41,17 @@ export function NodePanel({ n, run }: { n: GNode; run: string }) {
  * ("make v2 at night", "lock v3, the smile reads"). The chat answers and does
  * what a click could; what it did is listed under its answer.
  */
-function Chat({ run, n }: { run: string; n: GNode }) {
+export function Chat({ run, n }: { run: string; n: GNode }) {
   const [text, setText] = useState("");
   const [sent, setSent] = useState<string>();
   const [error, setError] = useState<string>();
   const thread = n.thread ?? [];
+  // A long talk scrolls (under a review it's capped): keep the newest in view.
+  const end = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    const ol = end.current;
+    if (ol) ol.scrollTop = ol.scrollHeight;
+  }, [thread.length, sent]);
   const send = async () => {
     const said = text.trim();
     if (!said || sent) return;
@@ -62,7 +71,7 @@ function Chat({ run, n }: { run: string; n: GNode }) {
       <h3>Talk to this step</h3>
       {thread.length === 0 && !sent && <p className="muted small">Ask about its versions, or say what you want: "make v2 at night", "lock v3, the smile reads".</p>}
       {(thread.length > 0 || sent) && (
-        <ol className="thread">
+        <ol className="thread" ref={end}>
           {thread.map((t, i) => (
             <li key={i} className={`said ${t.by}`}>
               <p>{t.text}</p>
