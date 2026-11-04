@@ -46,7 +46,7 @@ The dependency arrows only point one way. **`engine` imports nothing from the ot
 
 - **[`events.ts`](../packages/engine/src/events.ts)**: every engine action is one of a closed set of event types, each a strict Zod schema. Payloads are plain recorded data: outputs, decisions, verdicts, costs. Never a clock or a live object.
 - **[`state.ts`](../packages/engine/src/state.ts)**: `apply(state, event)` is a pure function, and run state is `events.reduce(apply, empty)`. `apply` also *refuses* events that can't happen (locking a version that doesn't exist), so a damaged log fails loudly.
-- **[`recorder.ts`](../packages/engine/src/recorder.ts)**: the only way to write. `record()` applies the event first and appends it second, so live state always equals replayed state. `begin` / `commit` / `rollback` group events into one SQLite transaction.
+- **[`recorder.ts`](../packages/engine/src/recorder.ts)**: the only way to write. `record()` applies the event first and appends it second, so live state always equals replayed state. `begin` / `commit` / `rollback` group events into one SQLite transaction. Every write names the run's last event as the recorder last saw it, and the log refuses a write made behind another process's (D-92), so two writers can't interleave.
 - **[`scheduler.ts`](../packages/engine/src/scheduler.ts)**: reads the graph and the recorded state, and decides what happens next. It reaches outside only through the `Executors`, `Tools`, `Blobs` and `Assets` interfaces it defines.
 
 Because state is a fold, three things come for free: crash recovery (replay the log), audit ("why is this locked?" is in the log), and tests that compare live state with replay after every event (`replay.test.ts`, `durable.test.ts`).

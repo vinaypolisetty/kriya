@@ -87,7 +87,7 @@ export type WebItem = {
   buttons: (Entry["buttons"][number] & { estimateUsd?: number })[];
   /** What the recipe puts beside the candidates: the line to be said, its caption, the shot's action; files as media to show. */
   beside: (Entry["beside"][number] & { media?: { url: string; type: string }[] })[];
-  shows: { version: string; value: unknown; media?: { url: string; type: string }; verdict?: Entry["shows"][number]["verdict"] }[];
+  shows: { version: string; n: number; value: unknown; media?: { url: string; type: string }; verdict?: Entry["shows"][number]["verdict"] }[];
   suggested?: { action: string; selection?: string[]; note?: string; region?: unknown; why: string };
   /** The branch of the step on show, when it's not main: the review shows only that branch's candidates (D-71). */
   branch?: string;
@@ -718,7 +718,7 @@ function web(e: Entry, typeOf: (hash: string) => string | undefined, cost: Recor
     }),
     shows: e.shows.map((x) => {
       const media = mediaIn(x.value, typeOf);
-      return { version: x.version, value: x.value, ...(media ? { media } : {}), ...(x.verdict ? { verdict: x.verdict } : {}) };
+      return { version: x.version, n: x.n, value: x.value, ...(media ? { media } : {}), ...(x.verdict ? { verdict: x.verdict } : {}) };
     }),
     ...(s ? { suggested: s } : {}),
     batch: `${e.run}:${e.key.replace(/\[[^\]]*\]/g, "[]")}`,

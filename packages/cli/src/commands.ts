@@ -438,10 +438,12 @@ async function inbox(io: IO): Promise<number> {
     if (entries.length === 0) io.out("Nothing is waiting on you.");
     entries.forEach((e, i) => {
       io.out(`${String(i + 1).padStart(2)}  ${e.run} · ${e.key}: ${e.title}`);
-      for (const s of e.shows) io.out(`      ${s.version}  ${preview(s.value)}${s.verdict ? `  ${verdictLine(s.verdict)}` : ""}`);
+      for (const s of e.shows) io.out(`      v${s.n}  ${preview(s.value)}${s.verdict ? `  ${verdictLine(s.verdict)}` : ""}`);
       io.out(`      buttons: ${e.buttons.map(button).join(" · ")}`);
       const s = suggestFix({ actions: e.buttons }, e.shows, project.kb.rules);
-      if (s) io.out(`      suggested: ${s.why}\n        kriya decide ${i + 1} ${s.action}${s.selection ? ` --pick ${s.selection[0]}` : ""}${s.region ? ` --region ${String(s.region)}` : ""}${s.note ? ` --note ${JSON.stringify(s.note)}` : ""}`);
+      // Versions by number, as the log and the chat name them; --pick takes either.
+      const name = (id: string) => `v${e.shows.find((x) => x.version === id)?.n ?? id}`;
+      if (s) io.out(`      suggested: ${s.why}\n        kriya decide ${i + 1} ${s.action}${s.selection ? ` --pick ${name(s.selection[0]!)}` : ""}${s.region ? ` --region ${String(s.region)}` : ""}${s.note ? ` --note ${JSON.stringify(s.note)}` : ""}`);
     });
     const found = projectTips(store, project.graphs, project.kb);
     if (found.length) io.out(`\n💡 ${found.length === 1 ? "A tip" : `${found.length} tips`}: ${found[0]!.symptom} (${found[0]!.step}, ${found[0]!.hits} times). See: kriya tips`);
@@ -638,7 +640,8 @@ async function check(args: string[], io: IO): Promise<number> {
       return r.value as Judged[];
     });
     s.recordVerdicts(step, judged);
-    for (const j of judged) io.out(`  ${j.version}  ${verdictLine(j)}`);
+    const num = numbers(rec.state.nodes[step]!);
+    for (const j of judged) io.out(`  v${num[j.version] ?? j.version}  ${verdictLine(j)}`);
     const spent = judged.reduce((a, j) => a + (j.cost_usd ?? 0), 0);
     if (spent) io.out(`  spent ${usd(spent)}`);
     report(io, rec.state, s.inbox());
@@ -1029,7 +1032,7 @@ export async function openRun(project: Project, store: Store, id: string, io: IO
 
 /** A run's log to read from, and nowhere to write: what's recorded on it stays in this process. */
 function lookingAt(events: EventSink): EventSink {
-  return { read: (run, after) => events.read(run, after), append: () => 0, appendMany: () => {} };
+  return { read: (run, after) => events.read(run, after), append: () => 0, appendMany: () => 0 };
 }
 
 function report(io: IO, state: RunState, waiting: InboxItem[]): void {

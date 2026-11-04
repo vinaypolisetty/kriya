@@ -6,12 +6,16 @@
 import { EngineEvent, parseEvent, type EngineEventInput } from "./events.js";
 import { apply, replay, type RunState } from "./state.js";
 
-/** What the engine needs from storage. `@kriya/store`'s SqliteEventLog fits this. */
+/**
+ * What the engine needs from storage. `@kriya/store`'s SqliteEventLog fits this.
+ * `after` is the run's last event as the writer last saw it: a log that gives
+ * events their `seq` refuses a write when the run has moved on since (G-6).
+ */
 export interface EventSink {
-  append(runId: string, type: string, payload: unknown): number;
-  read(runId: string, afterSeq?: number): { type: string; payload: unknown }[];
-  /** Atomic: all of them or none. Without it, a batch is appended one by one. */
-  appendMany?(runId: string, events: { type: string; payload: unknown }[]): void;
+  append(runId: string, type: string, payload: unknown, after?: number): number;
+  read(runId: string, afterSeq?: number): { type: string; payload: unknown; seq?: number }[];
+  /** Atomic: all of them or none. Without it, a batch is appended one by one. Returns the last one's `seq`. */
+  appendMany?(runId: string, events: { type: string; payload: unknown }[], after?: number): number;
 }
 
 export class Recorder {
@@ -20,23 +24,33 @@ export class Recorder {
   private pending: { type: string; payload: unknown }[] | undefined;
   private committed: RunState | undefined;
 
+  /**
+   * The run's last event as this recorder knows it: every write says so, and
+   * the log refuses one made behind another process's (G-6). Undefined for a
+   * log that doesn't number its events.
+   */
+  private head: number | undefined;
+
   private constructor(
     private readonly log: EventSink,
     readonly runId: string,
     state: RunState | undefined,
+    head: number | undefined,
   ) {
     this.current = state;
+    this.head = head;
   }
 
   /** A new run with nothing recorded yet. */
   static start(log: EventSink, runId: string): Recorder {
     if (log.read(runId).length > 0) throw new Error(`run '${runId}' already has events; use Recorder.resume`);
-    return new Recorder(log, runId, undefined);
+    return new Recorder(log, runId, undefined, 0);
   }
 
   /** Picks up an existing run by replaying its log. */
   static resume(log: EventSink, runId: string): Recorder {
-    return new Recorder(log, runId, replay(readRun(log, runId)));
+    const rows = log.read(runId);
+    return new Recorder(log, runId, replay(rows.map((r) => parseEvent(r.type, r.payload))), rows.at(-1)?.seq);
   }
 
   get state(): RunState {
@@ -50,7 +64,7 @@ export class Recorder {
     checkJson(payload, type);
     const next = apply(this.current, e);
     if (this.pending) this.pending.push({ type, payload });
-    else this.log.append(this.runId, type, payload);
+    else this.head = this.log.append(this.runId, type, payload, this.head);
     this.current = next;
     return next;
   }
@@ -76,8 +90,8 @@ export class Recorder {
     if (!batch) return;
     try {
       if (batch.length > 0) {
-        if (this.log.appendMany) this.log.appendMany(this.runId, batch);
-        else for (const e of batch) this.log.append(this.runId, e.type, e.payload);
+        if (this.log.appendMany) this.head = this.log.appendMany(this.runId, batch, this.head);
+        else for (const e of batch) this.head = this.log.append(this.runId, e.type, e.payload, this.head);
       }
     } catch (err) {
       this.rollback();

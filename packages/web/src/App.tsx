@@ -504,7 +504,7 @@ export function Thumb({ shown }: { shown: Shown }) {
     <figure className={v ? (v.pass ? "thumb pass" : "thumb fail") : "thumb"}>
       <Media shown={shown} />
       <figcaption>
-        <span>{shown.version}</span>
+        <span>v{shown.n}</span>
         {v && <span title={v.issues.map((i) => i.what ?? i.type).join("\n")}>{v.pass ? "✓" : `✗ ${v.issues.length}`}</span>}
       </figcaption>
     </figure>
@@ -513,7 +513,7 @@ export function Thumb({ shown }: { shown: Shown }) {
 
 export function Media({ shown }: { shown: Shown }) {
   const m = shown.media;
-  if (m?.type.startsWith("image/")) return <img src={m.url} alt={`version ${shown.version}`} loading="lazy" />;
+  if (m?.type.startsWith("image/")) return <img src={m.url} alt={`v${shown.n}`} loading="lazy" />;
   if (m?.type.startsWith("audio/")) return <audio src={m.url} controls preload="none" />;
   if (m?.type.startsWith("video/")) return <video src={m.url} controls preload="metadata" />;
   return typeof shown.value === "string" ? <pre className="text">{shown.value}</pre> : <Readable v={shown.value} />;

@@ -32,7 +32,7 @@ async function answerFirst(cwd: string): Promise<string> {
   const inbox = (await kriya(cwd, "inbox")).out;
   const first = inbox.split("\n")[0]!;
   const button = /buttons: (\w+)/.exec(inbox)![1]!;
-  const pick = /^\s+(\d+\.\d+)\s/m.exec(inbox)?.[1];
+  const pick = /^\s+(v\d+)\s/m.exec(inbox)?.[1];
   const r = await kriya(cwd, "decide", "1", button, ...(pick ? ["--pick", pick] : []));
   expect(r.code, r.err).toBe(0);
   return first;
@@ -70,7 +70,7 @@ describe("a full fake episode from the terminal (Day 13)", () => {
     await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
     await kriya(cwd, "decide", "1", "approve");
     expect((await kriya(cwd, "decide", "1", "edit", "--pick", "1.3", "--note", "add the gamcha")).code).toBe(0);
-    expect((await kriya(cwd, "inbox")).out).toMatch(/per_shot\[S1\]\.pick: Pick one panel\n\s+2\.1\s+fake:\/\/image\/per_shot\[S1\]\.edit/);
+    expect((await kriya(cwd, "inbox")).out).toMatch(/per_shot\[S1\]\.pick: Pick one panel\n\s+v4\s+fake:\/\/image\/per_shot\[S1\]\.edit/);
     expect((await kriya(cwd, "decide", "1", "lock")).code).toBe(0);
   });
 
@@ -114,7 +114,7 @@ describe("adopt from the terminal (Day 14)", () => {
     const r = await kriya(cwd, "adopt", "part_recipe-1", "per_shot[S1].draw", "1.2", "1.3", "--note", "use its sky");
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("✓ Adopted into per_shot[S1].draw: 2.1 (from 1.2, taking from 1.3). Nothing is locked yet");
-    expect((await kriya(cwd, "inbox")).out).toMatch(/per_shot\[S1\]\.pick: Pick one panel\n\s+2\.1\s+fake:\/\/image\/per_shot\[S1\]\.edit/);
+    expect((await kriya(cwd, "inbox")).out).toMatch(/per_shot\[S1\]\.pick: Pick one panel\n\s+v4\s+fake:\/\/image\/per_shot\[S1\]\.edit/);
     expect((await kriya(cwd, "decide", "1", "lock")).code).toBe(0);
     expect((await kriya(cwd, "status", "part_recipe-1")).out).toContain("per_shot[S1].draw · locked 2.1");
   });
@@ -739,17 +739,17 @@ describe("checks from the terminal (Day 20)", () => {
     const cwd = await project();
     const shot = JSON.stringify({ id: "P3-04", characters: ["Mitra"], place: "Chai stall", action: "Mitra writes", lines: [], animate: false });
     await kriya(cwd, "run", "shot_recipe", "--input", `item=${shot}`, "--id", "shot");
-    expect((await kriya(cwd, "inbox")).out).toMatch(/1\.1 {2}fake:\/\/image\/draw\/v1\.1 {2}✓ checks passed/);
+    expect((await kriya(cwd, "inbox")).out).toMatch(/ {6}v1 {2}fake:\/\/image\/draw\/v1\.1 {2}✓ checks passed/);
     const r = await kriya(cwd, "check", "shot", "draw");
     expect(r.code, r.err).toBe(0);
-    expect(r.out).toContain("⏳ judging 3 candidates…\n  1.1  ✓ checks passed\n  1.2  ✓ checks passed\n  1.3  ✓ checks passed");
+    expect(r.out).toContain("⏳ judging 3 candidates…\n  v1  ✓ checks passed\n  v2  ✓ checks passed\n  v3  ✓ checks passed");
     expect((await kriya(cwd, "check", "shot", "pick")).err).toBe("✗ 'pick' has no rubric to check against; add check: { rubric: [...] } to it");
   });
   it("the inbox suggests what to press, as a command; a when_confident screen presses it itself (Day 21)", async () => {
     const cwd = await project();
     const shot = JSON.stringify({ id: "P3-04", characters: ["Mitra"], place: "Chai stall", action: "Mitra writes", lines: [], animate: false });
     await kriya(cwd, "run", "shot_recipe", "--input", `item=${shot}`, "--id", "shot");
-    expect((await kriya(cwd, "inbox")).out).toContain("      suggested: 1.1 passed its checks\n        kriya decide 1 lock --pick 1.1");
+    expect((await kriya(cwd, "inbox")).out).toContain("      suggested: v1 passed its checks\n        kriya decide 1 lock --pick v1");
 
     const recipe = join(cwd, "recipes", "shot.yaml");
     writeFileSync(recipe, readFileSync(recipe, "utf8").replace("    review: pick_one\n", "    review: pick_one\n    trust: when_confident\n"));
