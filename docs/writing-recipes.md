@@ -63,11 +63,11 @@ $ kriya run post --input item="why chai tastes better in a clay cup"
   running · 1 waiting on you
 $ kriya inbox
  1  post-1 · pick: Pick a draft
-      1.1  body (fake) for draft
-      1.2  body (fake) for draft
+      v1  body (fake) for draft
+      v2  body (fake) for draft
       buttons: lock (--pick) 🔒 · retry (--note)
 $ kriya decide 1 retry --note "shorter, and funnier"
-$ kriya decide 1 lock --pick 2.1
+$ kriya decide 1 lock --pick v3      # the retry's draft
 ✓ lock on pick
   completed
 ```

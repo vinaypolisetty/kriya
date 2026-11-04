@@ -17,7 +17,7 @@ cd p3
 kriya run part_recipe --input part_no=3 --input story_pages=@pages-7-9.txt
 kriya inbox                                # what's waiting on you, numbered
 kriya decide 1 approve                     # answer item 1
-kriya decide 1 edit --pick 1.3 --note "add the gamcha"
+kriya decide 1 edit --pick v3 --note "add the gamcha"
 kriya decide 1 lock                        # one option on show: no --pick needed
 kriya status part_recipe-1                 # every step, in recipe order
 kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better"
@@ -29,7 +29,8 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 |---|---|
 | `kriya init <folder> [--example <name>]` | Starts a project; `kriya init --examples` lists the examples (`mohalla-mitra`, `earnings-report`). An example brings its recipes, its settings (context, Library kinds) and sample files, and the command prints how to run it |
 | `kriya run <recipe> [--input name=value]… [--id name]` | Starts a run. `@file` reads a value from a file |
-| `kriya status [run]` | All runs, or one run's steps |
+| `kriya status [run]` | All runs, or one run's steps. Looking never spends (D-91): `status`, `show`, `inbox` and `log` only read the log, so they're safe at any time. A step started and not finished shows as "in progress"; if nothing else is carrying the run on, `kriya resume` does |
+| `kriya resume <run>` | Carries a run on: asks again for anything in flight (with the same idempotency key, so nothing is paid twice), picks up a changed Library, and runs until it waits on you or finishes. For after a crash, a closed terminal, or a key added to `.env` |
 | `kriya show <run> [step] [version]` | What a run made: every step with its versions, model and cost; or one step's full output (YAML), with an agent's turns and tool calls |
 | `kriya inbox` | Everything waiting on you, across runs |
 | `kriya decide <item> <button> [--pick v] [--note text] [--region x,y,w,h]` | Answers an inbox item, by number or `run:step` |
@@ -48,7 +49,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
 
 ## How it behaves
 
-- **A version is named two ways**: by number, `v1`, `v2`… per step in the order they were made (what `kriya log`, `kriya chat` and the browser say), or by its id, `attempt.candidate` (`1.2`, what the inbox lists). Every command that takes a version (`show`, `lock`, `decide --pick`, `adopt`, `patch`) takes either.
+- **A version is named two ways**: by number, `v1`, `v2`… per step in the order they were made (what `kriya log`, `kriya inbox`, `kriya chat` and the browser say), or by its id, `attempt.candidate` (`1.2`). Every command that takes a version (`show`, `lock`, `decide --pick`, `adopt`, `patch`) takes either.
 - **Every command is its own process.** Runs live in `.kriya/kriya.db`; close the terminal mid-episode and carry on tomorrow. Each command replays the run and calls `recover()` first, so a crash never loses work or pays twice (D-46).
 - **Models**: `models: fake` in `kriya.yaml` (the default) makes up outputs from each step's declared types, no keys, no cost. Real providers are chosen per kind of step, and kinds left out stay fake:
   ```yaml
@@ -65,8 +66,8 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
     video.from_image: { params: { resolution: 720p } }   # $0.10 a second instead of $0.15
     audio.speech: { params: { language_code: hi-IN } }
   ```
-  A clip starts from the one image its step uses (the locked panel). A voice step's prompt is the words to say; the speaker's `@voice` picks the voice, and everything else it uses (the line's emotion, `@speech`, the voice's words) says how, followed by any style the step gives in `params`. Clips and audio are measured from their bytes, so `out: { seconds: number }` gets the real length. Any Replicate model works: name its input `fields:` (`prompt`, `images`, `voice`, `style`) if they differ, and its `price_usd` or `price_per_second_usd`. `kriya show` prints the prompt and references each version got, copies images, clips and audio to `.kriya/view/` and prints the paths to open. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, the next command asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key and run any command to carry on), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
-- **The fix loop**: `kriya inbox` shows what the checks suggest, as a command to copy (`suggested: 1.2 is closest: … kriya decide 1 edit --pick 1.2 --note "…"`). A screen with `trust: when_confident` presses it itself for up to 3 rounds (locks a panel that passed, or crops, edits or retries), then asks you; `kriya show` marks those decisions and locks `auto`.
+  A clip starts from the one image its step uses (the locked panel). A voice step's prompt is the words to say; the speaker's `@voice` picks the voice, and everything else it uses (the line's emotion, `@speech`, the voice's words) says how, followed by any style the step gives in `params`. Clips and audio are measured from their bytes, so `out: { seconds: number }` gets the real length. Any Replicate model works: name its input `fields:` (`prompt`, `images`, `voice`, `style`) if they differ, and its `price_usd` or `price_per_second_usd`. `kriya show` prints the prompt and references each version got, copies images, clips and audio to `.kriya/view/` and prints the paths to open. Optional `claude: { model, effort }` sets the defaults (`claude-opus-5-5`, `high`); a step can pin its own `model:`. Commands wait while Claude works (`⏳ waiting on Claude…`); if you close the terminal, `kriya resume <run>` (or any command that changes the run) asks again. The key is needed only when a step actually calls Claude: without one, that step doesn't start (add the key, then `kriya resume <run>`), and `status` / `inbox` still work. Missing Library facets are faked too. A fake agent calls its first tool once, then answers; fake tools just echo what they were asked. Tool results are kept in `.kriya/blobs/`. An agent's `ask_human` question shows in `kriya inbox`; answer it with `kriya decide <n> reply --note "…"`.
+- **The fix loop**: `kriya inbox` shows what the checks suggest, as a command to copy (`suggested: v2 is closest: … kriya decide 1 edit --pick v2 --note "…"`). A screen with `trust: when_confident` presses it itself for up to 3 rounds (locks a panel that passed, or crops, edits or retries), then asks you; `kriya show` marks those decisions and locks `auto`.
 - **Checks**: a step's `check:` (a rubric for a Claude judge, limits on numbers) runs on every candidate; `kriya inbox` shows `✓ checks passed`, or `✗` with each issue, where it is and the fix. With fake models the judge passes everything; code limits always run for real.
 - **Tools** (`crop`, `compress`, `assemble_reel`, `extract_frames`, `stills`, `attach`, `first`, `insert_caricatures`) are fake by default. To run them here with ffmpeg:
   ```yaml
@@ -77,7 +78,7 @@ kriya lock part_recipe-1 "per_shot[S1].draw" 1.1 --why "the first one was better
     series:
       music: { main: music/main-theme.mp3, villain: music/villain.mp3 }   # by cue; each shot's `music` picks one
   ```
-  `kriya decide <n> crop --pick 1.2 --region 0.1,0,0.8,1` crops a panel (fractions of the image, or pixels); the crop becomes the panel's next version. `assemble_reel` times each shot to its voice lines, pans over stills, plays clips and holds their last frame, adds captions (`caption_en`) and an end card (the hook), ducks the music under the voices, and keeps the copy under `max_mb`. Tools cost nothing and are recorded with the code they ran, `local:assemble_reel@3f2a9c1b7e4d` (D-93), which `kriya show` prints on each version.
+  `kriya decide <n> crop --pick v2 --region 0.1,0,0.8,1` crops a panel (fractions of the image, or pixels); the crop becomes the panel's next version. `assemble_reel` times each shot to its voice lines, pans over stills, plays clips and holds their last frame, adds captions (`caption_en`) and an end card (the hook), ducks the music under the voices, and keeps the copy under `max_mb`. Tools cost nothing and are recorded with the code they ran, `local:assemble_reel@3f2a9c1b7e4d` (D-93), which `kriya show` prints on each version.
 - **`kriya.yaml`** holds the project's name, the models, the tools, the inherited context (e.g. `series: { style, rules, cast }`) and the Library's `kinds:`.
 - **The Library** is the `library/` folder: one YAML file per character, place or track, with its `name` (what recipes use, like `item.speaker`), its `kind`, and its facets (D-61):
   ```yaml

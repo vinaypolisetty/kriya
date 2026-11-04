@@ -50,7 +50,7 @@ function slowClips() {
     (_run, e) => failures.push(e),
   );
   const state = () => Recorder.resume(log, "run1").state;
-  return { live, clips, made, failures, state };
+  return { live, clips, made, failures, state, log };
 }
 
 /** Settles every promise already resolved, so background work gets its turn. */
@@ -93,6 +93,30 @@ describe("the runs kriya web carries on (D-86)", () => {
     await live.idle();
     await live.change("run1", (s) => s.answer("voices[L1].listen", { action: "approve", by: "human" }));
     expect(made.opened).toBe(opened + 1);
+    expect(failures).toEqual([]);
+  });
+
+  it("a terminal writes on a run while its clip is being made: the next write starts over from the log, and the clip still comes back (G-6)", async () => {
+    const { live, clips, made, failures, state, log } = slowClips();
+    await live.change("run1", (s) => s.answer("approve_shots", { action: "approve", by: "human" }));
+    await live.change("run1", (s) => s.answer("per_shot[P3-02].pick", { action: "lock", selection: ["1.1"], by: "human" }));
+    await tick();
+    const clip = clips.get("P3-02")!;
+
+    Recorder.resume(log, "run1").record({ type: "ChatSaid", node: "per_shot[P3-01].draw", text: "why so dark?" }); // kriya chat, in a terminal
+    const opened = made.opened;
+    await live.change("run1", (s) => s.answer("per_shot[P3-01].pick", { action: "lock", selection: ["1.2"], by: "human" }));
+    expect(made.opened).toBe(opened + 1);
+    expect(state().nodes["per_shot[P3-01].draw"]?.locked?.version).toBe("1.2");
+    expect(state().nodes["per_shot[P3-01].draw"]?.thread).toMatchObject([{ by: "you", text: "why so dark?" }]);
+
+    // The old scheduler's clip arrives and is let go quietly; the new one asked again, and its clip is the one recorded.
+    clip();
+    await tick();
+    expect(clips.get("P3-02")).not.toBe(clip);
+    clips.get("P3-02")!();
+    await live.idle();
+    expect(state().nodes["per_shot[P3-02].animate"]?.status).toBe("awaiting_human");
     expect(failures).toEqual([]);
   });
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDatabase, SqliteEventLog } from "../src/events.js";
+import { BehindTheLog, openDatabase, SqliteEventLog } from "../src/events.js";
 import { openStore } from "../src/index.js";
 
 const memoryLog = () => {
@@ -35,6 +35,20 @@ describe("event log", () => {
     const first = log.append("run1", "A", {});
     log.append("run1", "B", {});
     expect(log.read("run1", first).map((e) => e.type)).toEqual(["B"]);
+  });
+
+  it("with `after`, writes only on top of the run's last event, and otherwise saves nothing (G-6)", () => {
+    const { log } = memoryLog();
+    const a = log.append("run1", "A", {}, 0); // a run with nothing yet: its last event is 0
+    log.append("run2", "X", {}); // another run's events don't count
+    const b = log.append("run1", "B", {}, a);
+    expect(() => log.append("run1", "C", {}, a)).toThrow(BehindTheLog);
+    expect(() => log.appendMany("run1", [{ type: "C", payload: {} }, { type: "D", payload: {} }], a)).toThrow("run 'run1' was changed somewhere else (another terminal or kriya web) while this was working on it, so nothing was saved. Do it again: kriya reads the run afresh");
+    expect(() => log.append("run3", "A", {}, b)).toThrow(BehindTheLog);
+    expect(log.read("run1").map((e) => e.type)).toEqual(["A", "B"]);
+    expect(log.read("run3")).toEqual([]);
+    const d = log.appendMany("run1", [{ type: "C", payload: {} }, { type: "D", payload: {} }], b);
+    expect(log.read("run1").at(-1)).toMatchObject({ seq: d, type: "D" });
   });
 
   it("refuses to change or delete events", () => {

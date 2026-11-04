@@ -18,6 +18,8 @@ const label = (b: Button) => LABELS[b.id] ?? b.label ?? b.id;
 const cost = (b: Button) => (b.estimateUsd ? ` · ~$${b.estimateUsd.toFixed(2)}` : "");
 /** `item.caption_en` → "caption en": the field, in words. */
 const fieldName = (ref: string) => (ref.split(/[.@]/).pop() ?? ref).replace(/_/g, " ");
+/** A version on show by its number, as the log and the chat name it: `1.3` → v3. */
+const named = (item: Item, id: string) => `v${item.shows.find((s) => s.version === id)?.n ?? id}`;
 /** How long a tap can still be undone before it's sent. */
 const UNDO_MS = 4000;
 
@@ -106,7 +108,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
         <button key={s.version} type="button" role="radio" aria-checked={picked === s.version} className={["option", picked === s.version ? "on" : "", s.verdict ? (s.verdict.pass ? "pass" : "fail") : ""].join(" ")} onClick={() => setPicked(s.version)}>
           {s.media?.type.startsWith("image/") && <img src={s.media.url} alt="" />}
           <span>
-            {s.version} {s.verdict ? (s.verdict.pass ? "✓" : `✗${s.verdict.issues.length}`) : ""}
+            v{s.n} {s.verdict ? (s.verdict.pass ? "✓" : `✗${s.verdict.issues.length}`) : ""}
           </span>
         </button>
       ))}
@@ -179,14 +181,14 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
           <div className="suggestion">
             <span>
               Suggested: <b>{LABELS[item.suggested.action] ?? item.suggested.action}</b>
-              {item.suggested.selection ? ` ${item.suggested.selection[0]}` : ""}
+              {item.suggested.selection ? ` ${named(item, item.suggested.selection[0]!)}` : ""}
             </span>
             <button type="button" className="link" disabled={wait} onClick={takeSuggestion}>Use it</button>
           </div>
         )}
         {chosen ? (
           <p className="chosen">
-            <span>✓ {chosen} chosen: sends in a few seconds</span>
+            <span>✓ {named(item, chosen)} chosen: sends in a few seconds</span>
             <button type="button" className="link" onClick={undo}>Undo</button>
           </p>
         ) : (
@@ -201,7 +203,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
             <summary>Not quite right?</summary>
             <div className="not-right">
               {others.some((b) => b.needs.includes("selection")) && options}
-              {marks && shown?.media?.type.startsWith("image/") && <Region src={shown.media.url} alt={`version ${shown.version}`} value={region} onChange={setRegion} />}
+              {marks && shown?.media?.type.startsWith("image/") && <Region src={shown.media.url} alt={`v${shown.n}`} value={region} onChange={setRegion} />}
               {noteField}
               {regionField}
               {otherButtons}
@@ -237,7 +239,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
       <main className="review-main">
         {shown && (
           <div className={["big", shown.verdict ? (shown.verdict.pass ? "pass" : "fail") : ""].join(" ")}>
-            {marks && shown.media?.type.startsWith("image/") ? <Region src={shown.media.url} alt={`version ${shown.version}`} value={region} onChange={setRegion} /> : <Media shown={shown} />}
+            {marks && shown.media?.type.startsWith("image/") ? <Region src={shown.media.url} alt={`v${shown.n}`} value={region} onChange={setRegion} /> : <Media shown={shown} />}
           </div>
         )}
         {marks && shown?.media?.type.startsWith("image/") && (
@@ -278,7 +280,7 @@ export function Screen({ item, batch, embedded, onDone, onError, onBack }: { ite
           <div className="suggestion">
             <span>
               Suggested: <b>{LABELS[item.suggested.action] ?? item.suggested.action}</b>
-              {item.suggested.selection ? ` ${item.suggested.selection[0]}` : ""}
+              {item.suggested.selection ? ` ${named(item, item.suggested.selection[0]!)}` : ""}
             </span>
             <button type="button" className="link" onClick={useSuggestion}>Use it</button>
           </div>
