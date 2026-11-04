@@ -298,6 +298,11 @@ export class Scheduler {
     this.blobs = options.blobs ?? memoryBlobs();
   }
 
+  /** The run this scheduler carries on. */
+  get runId(): string {
+    return this.rec.runId;
+  }
+
   /** The run as recorded so far (read it; change it only through the methods below). */
   get state(): RunState {
     return this.rec.state;

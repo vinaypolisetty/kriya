@@ -9,7 +9,7 @@ Depends on every other package, plus `yaml`, `zod` and `qrcode` (the phone-pairi
 | File | What it is |
 |---|---|
 | [`main.ts`](src/main.ts) | The executable: real terminal in, exit code out |
-| [`commands.ts`](src/commands.ts) | Every command (`main()`), `openRun` (replay, re-check the Library, recover), `drive`, and `executors()`, which routes each step to Claude, Replicate, a tool or a fake |
+| [`commands.ts`](src/commands.ts) | Every command (`main()`), `openRun` (replay; to carry on, re-check the Library and recover), `drive`, and `executors()`, which routes each step to Claude, Replicate, a tool or a fake |
 | [`project.ts`](src/project.ts) | `kriya.yaml` (models, context, Library kinds, tools), `recipes/`, the release hash |
 | [`library.ts`](src/library.ts) | `library/*.yaml` → entities and facets; facet versions by content hash; `Assets` for the engine; `writeFacet`, a change kept from a run (D-88) |
 | [`kb.ts`](src/kb.ts) | `kb.yaml`: the project's own rules and its answers to tips; failures by step from every run's checks; `preventFor`, the words applied tips add to a prompt (D-76) |
@@ -21,7 +21,7 @@ Depends on every other package, plus `yaml`, `zod` and `qrcode` (the phone-pairi
 
 ## How a command works
 
-Each command is its own process. It loads the project, opens `.kriya/`, and calls `openRun()`, which replays the run, applies Library changes and calls `recover()`. Then it does its one thing, drives the run until it waits, prints a short report, and closes the store. Nothing is kept in memory between commands, so a closed terminal loses nothing. `kriya web` does the same per request, and sends every write through `LiveRuns` (`live.ts`, D-86): writes are recorded one at a time, and a run whose models are still working keeps its one scheduler, which takes the next write, because two schedulers on one run would disagree. Work in flight never holds a write up.
+Each command is its own process. It loads the project, opens `.kriya/`, and calls `openRun()`, which replays the run. Looking never spends (D-91): `status`, `show` and `inbox` only replay, and work out what a Library change made stale without recording it. A command that changes a run (`decide`, `lock`, `retry`, `rebuild`, `keep`, `chat`, and `resume`, whose only job this is) applies Library changes, calls `recover()`, drives the run until it waits, and prints a short report. Then it closes the store. Nothing is kept in memory between commands, so a closed terminal loses nothing. `kriya web` does the same per request, and sends every write through `LiveRuns` (`live.ts`, D-86): writes are recorded one at a time, and a run whose models are still working keeps its one scheduler, which takes the next write, because two schedulers on one run would disagree. Work in flight never holds a write up.
 
 The full command reference is [docs/cli.md](../../docs/cli.md).
 

@@ -1,8 +1,10 @@
 /**
  * The kriya commands. Each one is a separate process: it opens the run from
- * `.kriya/kriya.db`, calls `recover()` (so a closed terminal or a crash loses
- * nothing), does one thing, and exits. Written as functions so tests can call
- * them directly.
+ * `.kriya/kriya.db`, does one thing, and exits. Looking never spends (D-91):
+ * status, show, inbox and the rest only replay the log. A command that changes
+ * a run (decide, lock, retry, rebuild, resume…) carries it on, calling
+ * `recover()` first, so a closed terminal or a crash loses nothing. Written as
+ * functions so tests can call them directly.
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
@@ -10,7 +12,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse, stringify } from "yaml";
-import { findGraph, formatProblems, numbers, Recorder, Scheduler, suggest, type Blobs, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
+import { findGraph, formatProblems, numbers, Recorder, Scheduler, suggest, type Blobs, type EventSink, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
 import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, TIP_AFTER, MissingKey, MissingToken, replicateExecutors, settle, type FixRule, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
@@ -28,7 +30,8 @@ const HELP = `kriya: run recipes with people in the loop
   kriya init <folder> [--example <name>]          start a project (examples: kriya init --examples)
   kriya run <recipe> [--input name=value]… [--id name]
                                                   start a run (models from kriya.yaml: fake, anthropic, replicate)
-  kriya status [run]                              your runs, or one run's steps
+  kriya status [run]                              your runs, or one run's steps (looking never spends)
+  kriya resume <run>                              carry a run on after a crash or a closed terminal
   kriya show <run> [step] [version]               what a run made: every step, or one step's full output
   kriya log <run> [step]                          what happened, in order: drafts, checks, buttons pressed and by whom, locks
   kriya inbox                                     what's waiting on you
@@ -58,6 +61,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
       case "init": return await init(rest, io);
       case "run": return await run(rest, io);
       case "status": return await status(rest, io);
+      case "resume": return await resume(rest, io);
       case "show": return await show(rest, io);
       case "log": return await log(rest, io);
       case "inbox": return await inbox(io);
@@ -224,16 +228,17 @@ async function status(args: string[], io: IO): Promise<number> {
     if (!id) {
       if (runs.length === 0) io.out("No runs yet. Start one with: kriya run <recipe>");
       for (const r of runs) {
-        const { rec, s, changed } = await openRun(project, store, r, io, { quiet: true });
+        const { rec, s, changed } = await openRun(project, store, r, io, { quiet: true, look: true });
         io.out(`${r.padEnd(24)} ${recipeId(project, rec.state.graph).padEnd(16)} ${summary(rec.state, s.inbox().length)}${changed ? " · recipes changed" : ""}`);
       }
       return 0;
     }
-    const { rec, s } = await openRun(project, store, id, io);
+    const { rec, s } = await openRun(project, store, id, io, { look: true });
     io.out(`${id} · ${recipeId(project, rec.state.graph)} · ${summary(rec.state, s.inbox().length)}`);
     for (const key of s.steps()) io.out(`  ${line(key, rec.state.nodes[key]!)}`);
     const failed = s.steps().filter((k) => rec.state.nodes[k]!.status === "failed" && !s.steps().some((o) => o.startsWith(`${k}[`) && rec.state.nodes[o]!.status === "failed"));
     if (failed.length) io.out(`  Try again: ${failed.map((k) => `kriya retry ${id} '${k}'`).join("  ·  ")}`);
+    if (inFlight(rec.state) > 0) io.out(`  If nothing else is carrying it on (kriya web, another terminal): kriya resume ${id}`);
     return 0;
   } finally {
     store.close();
@@ -258,7 +263,42 @@ function summary(state: RunState, waiting: number): string {
   const stale = Object.values(state.nodes).filter((n) => n.status === "stale").length;
   if (state.status !== "running") return [state.status, stale ? `${stale} stale` : ""].filter(Boolean).join(" · ");
   const blocked = Object.values(state.nodes).filter((n) => n.status === "blocked").length;
-  return ["running", waiting ? `${waiting} waiting on you` : "", blocked ? `${blocked} blocked` : "", stale ? `${stale} stale` : ""].filter(Boolean).join(" · ");
+  const going = inFlight(state);
+  return ["running", going ? `${going} in progress` : "", waiting ? `${waiting} waiting on you` : "", blocked ? `${blocked} blocked` : "", stale ? `${stale} stale` : ""].filter(Boolean).join(" · ");
+}
+
+/**
+ * Steps started and not finished: being made, checked or fixed, or waiting on a
+ * model job. Another process may be carrying them on; if not, `kriya resume` does.
+ */
+function inFlight(state: RunState): number {
+  return Object.values(state.nodes).filter((n) => n.status === "running" || n.status === "checking" || n.status === "fixing" || n.status === "waiting_external").length;
+}
+
+// ── resume ──────────────────────────────────────────────────────────────────
+
+/**
+ * Carries a run on (D-91): asks again for anything in flight, picks up a
+ * changed Library, and runs until it waits on you or finishes. The one command
+ * whose whole job is to carry on; looking at a run never does.
+ */
+async function resume(args: string[], io: IO): Promise<number> {
+  const [id] = args;
+  if (!id) throw new UserError("say which run: kriya resume <run> (kriya status lists them)");
+  const project = checkedProject(io);
+  const store = openStore(join(project.root, ".kriya"));
+  try {
+    const was = (await openRun(project, store, id, io, { quiet: true })).rec.state.status;
+    if (was !== "running") {
+      io.out(`${id} is ${was}; there's nothing to carry on`);
+      return 0;
+    }
+    const { rec, s } = await openRun(project, store, id, io, { carryOn: true });
+    report(io, rec.state, s.inbox());
+    return 0;
+  } finally {
+    store.close();
+  }
 }
 
 // ── show ────────────────────────────────────────────────────────────────────
@@ -298,7 +338,7 @@ async function show(args: string[], io: IO): Promise<number> {
   const project = checkedProject(io);
   const store = openStore(join(project.root, ".kriya"));
   try {
-    const { rec, s } = await openRun(project, store, id, io);
+    const { rec, s } = await openRun(project, store, id, io, { look: true });
     const state = rec.state;
     if (!step) {
       io.out(`${id} · ${recipeId(project, state.graph)} · ${summary(state, s.inbox().length)} · spent ${usd(state.costUsd)}`);
@@ -432,7 +472,7 @@ async function decide(args: string[], io: IO): Promise<number> {
     const entry = /^\d+$/.test(item) ? entries[Number(item) - 1] : entries.find((e) => `${e.run}:${e.key}` === item);
     if (!entry) throw new UserError(`there's no inbox item '${item}'. See them with: kriya inbox`);
     // Your answer is recorded before anything else runs, so an automatic screen can't answer in your place.
-    const { rec, s, jobs } = await openRun(project, store, entry.run, io, { readOnly: true });
+    const { rec, s, jobs } = await openRun(project, store, entry.run, io);
     // A button that needs a pick, with exactly one option on show: that's the pick.
     const needsPick = entry.buttons.find((b) => b.id === action)?.needs.includes("selection");
     // A pick names a version of the step the screen shows, as its id (1.2) or its number (v2).
@@ -448,8 +488,7 @@ async function decide(args: string[], io: IO): Promise<number> {
       by: "human",
     });
     io.out(`✓ ${action} on ${entry.key}`);
-    s.recover();
-    await drive(s, jobs, io);
+    await drive(s, jobs, io, true);
     report(io, rec.state, s.inbox());
     return 0;
   } finally {
@@ -457,10 +496,11 @@ async function decide(args: string[], io: IO): Promise<number> {
   }
 }
 
-export async function allInbox(project: Project, store: Store, io: IO, opts: { readOnly?: boolean } = {}): Promise<Entry[]> {
+/** What's waiting on you across every run, read from their logs: nothing is carried on. */
+export async function allInbox(project: Project, store: Store, io: IO): Promise<Entry[]> {
   const entries: Entry[] = [];
   for (const r of store.events.runs()) {
-    const { s, rec } = await openRun(project, store, r, io, { quiet: true, ...opts });
+    const { s, rec } = await openRun(project, store, r, io, { quiet: true, look: true });
     if (rec.state.status === "running") entries.push(...s.inbox().map((i) => ({ ...i, run: r })));
   }
   return entries;
@@ -475,7 +515,7 @@ async function lock(args: string[], io: IO): Promise<number> {
   const project = checkedProject(io);
   const store = openStore(join(project.root, ".kriya"));
   try {
-    const { rec, s, jobs } = await openRun(project, store, id, io);
+    const { rec, s, jobs } = await openRun(project, store, id, io, { carryOn: true });
     const n = rec.state.nodes[step];
     s.lock(step, n ? versionNamed(n, version) : version, values.why);
     io.out(`✓ Locked ${step} to ${version}`);
@@ -498,7 +538,7 @@ async function rebuild(args: string[], io: IO): Promise<number> {
   const project = checkedProject(io);
   const store = openStore(join(project.root, ".kriya"));
   try {
-    const { rec, s, jobs } = await openRun(project, store, id, io);
+    const { rec, s, jobs } = await openRun(project, store, id, io, { carryOn: true });
     const started = s.rebuild();
     if (started.length === 0) io.out("Nothing is stale or out of date; there's nothing to rebuild");
     else io.out(`✓ Rebuilding from ${started.join(", ")}`);
@@ -518,7 +558,7 @@ async function keep(args: string[], io: IO): Promise<number> {
   const project = checkedProject(io);
   const store = openStore(join(project.root, ".kriya"));
   try {
-    const { rec, s, jobs } = await openRun(project, store, id, io);
+    const { rec, s, jobs } = await openRun(project, store, id, io, { carryOn: true });
     s.keep(step, values.why);
     io.out(`✓ Kept ${step} as it is`);
     await drive(s, jobs, io);
@@ -536,7 +576,7 @@ async function retry(args: string[], io: IO): Promise<number> {
   const project = checkedProject(io);
   const store = openStore(join(project.root, ".kriya"));
   try {
-    const { rec, s, jobs } = await openRun(project, store, id, io);
+    const { rec, s, jobs } = await openRun(project, store, id, io, { carryOn: true });
     const leaveOut = values["leave-out"]!;
     io.out(`✓ Retrying ${s.retry(step, { ...(values.note ? { note: values.note } : {}), leaveOut }).join(", ")}${values.note ? `, asking: "${values.note}"` : ""}${leaveOut.length ? `, without ${leaveOut.join(", ")}` : ""}`);
     await drive(s, jobs, io);
@@ -768,7 +808,7 @@ async function chatCommand(args: string[], io: IO): Promise<number> {
   const project = checkedProject(io);
   const store = openStore(join(project.root, ".kriya"));
   try {
-    const { rec, s, jobs } = await openRun(project, store, id, io, { readOnly: true });
+    const { rec, s, jobs } = await openRun(project, store, id, io);
     const n = rec.state.nodes[step];
     if (!n) throw new UserError(`there's no step '${step}' in ${id} yet${suggest(step, Object.keys(rec.state.nodes))}`);
     if (words.length === 0) {
@@ -779,10 +819,7 @@ async function chatCommand(args: string[], io: IO): Promise<number> {
     const { reply, did } = await talk(project, s, chatFor(project, projectMedia(project, store)), step, words.join(" "));
     io.out(`kriya: ${reply.text}`);
     for (const d of did) io.out(`  · ${d}`);
-    if (rec.state.status === "running") {
-      s.recover();
-      await drive(s, jobs, io);
-    }
+    if (rec.state.status === "running") await drive(s, jobs, io, true);
     report(io, rec.state, s.inbox());
     return 0;
   } finally {
@@ -923,11 +960,25 @@ function fileLedger(project: Project): Ledger {
 }
 
 /** Runs until nothing is in flight: model calls are awaited and delivered, then the run carries on. */
-export async function drive(s: Scheduler, jobs: Jobs, io: IO): Promise<void> {
-  s.run();
-  if (jobs.size > 0) io.out("  ⏳ waiting on the models…");
-  await settle(s, jobs, describeError);
+/**
+ * Runs until the run waits on you or finishes; `recover` first asks again for
+ * anything in flight. A step that needs a key that isn't there stops it,
+ * saying how to carry on once the key is in.
+ */
+export async function drive(s: Scheduler, jobs: Jobs, io: IO, recover = false): Promise<void> {
+  try {
+    if (recover) s.recover();
+    s.run();
+    if (jobs.size > 0) io.out("  ⏳ waiting on the models…");
+    await settle(s, jobs, describeError);
+  } catch (e) {
+    if (e instanceof MissingKey || e instanceof MissingToken) throw new NeedsKey(`${e.message}, then carry the run on: kriya resume ${s.runId}`);
+    throw e;
+  }
 }
+
+/** A run stopped at a step whose provider has no key in .env. */
+class NeedsKey extends UserError {}
 
 /** Tool results as JSON files in `.kriya/blobs/`, named by content hash, so a resumed agent reads them back. */
 function jsonBlobs(store: Store): Blobs {
@@ -942,34 +993,43 @@ function jsonBlobs(store: Store): Blobs {
 }
 
 /**
- * Opens a run in this process: replays its log and asks again for anything in
- * flight. `readOnly` only replays (the web inbox reads often; it must never
- * call a model or write).
+ * Opens a run in this process by replaying its log. Nothing runs and nothing is
+ * recorded (D-91: looking never spends); what the caller then records (an
+ * answer, a lock) is written. `look` is for reading only: it also works out
+ * what a changed Library made stale, and keeps that in memory, so status shows
+ * it while the log stays as it was. `carryOn` picks up a changed Library, asks
+ * again for anything in flight and runs until the run waits on you or
+ * finishes: for commands that change a run, and `kriya resume`.
  */
-export async function openRun(project: Project, store: Store, id: string, io: IO, opts: { quiet?: boolean; readOnly?: boolean } = {}): Promise<{ rec: Recorder; s: Scheduler; jobs: Jobs; changed: boolean }> {
+export async function openRun(project: Project, store: Store, id: string, io: IO, opts: { quiet?: boolean; look?: boolean; carryOn?: boolean } = {}): Promise<{ rec: Recorder; s: Scheduler; jobs: Jobs; changed: boolean }> {
   if (store.events.read(id).length === 0) throw new UserError(`there's no run '${id}'. See your runs with: kriya status`);
-  const rec = Recorder.resume(store.events, id);
+  const rec = Recorder.resume(opts.look ? lookingAt(store.events) : store.events, id);
   const changed = rec.state.release !== releaseOf(project.graphs, rec.state.graph);
   if (changed && !opts.quiet) {
     io.err(`! ${id}: its recipes changed since it started; it carries on with the current ones (run upgrades come later)`);
   }
   const { s, jobs } = scheduler(project, rec.state.graph, rec, store);
-  if (opts.readOnly) return { rec, s, jobs, changed };
+  if (opts.look) s.assetsChanged();
+  if (!opts.carryOn) return { rec, s, jobs, changed };
   // A sheet redrawn or a look reworded since the last command: the work that used it goes stale;
   // a look added since then lets the steps waiting for it go on.
   s.assetsChanged();
   s.unblock();
   if (rec.state.status === "running") {
     try {
-      s.recover();
-      await drive(s, jobs, io);
+      await drive(s, jobs, io, true);
     } catch (e) {
-      // A step waiting on Claude with no key: say so, and still show and answer everything else.
-      if (!(e instanceof MissingKey) && !(e instanceof MissingToken)) throw e;
+      // A step waiting on Claude with no key: say so, and still do what was asked.
+      if (!(e instanceof NeedsKey)) throw e;
       io.err(`! ${id}: ${e.message}`);
     }
   }
   return { rec, s, jobs, changed };
+}
+
+/** A run's log to read from, and nowhere to write: what's recorded on it stays in this process. */
+function lookingAt(events: EventSink): EventSink {
+  return { read: (run, after) => events.read(run, after), append: () => 0, appendMany: () => {} };
 }
 
 function report(io: IO, state: RunState, waiting: InboxItem[]): void {
