@@ -726,7 +726,11 @@ describe("looking never spends (G-4, D-91)", () => {
     const store = openStore(join(cwd, ".kriya"));
     try {
       const before = store.events.read("part_recipe-1").length;
-      expect((await kriya(cwd, "status", "part_recipe-1")).out).toContain("↻ per_shot[S1].draw · stale: Mitra's look changed");
+      const status = (await kriya(cwd, "status", "part_recipe-1")).out;
+      expect(status).toContain("↻ per_shot[S1].draw · stale: Mitra's look changed");
+      // per_shot reads "running" while its shots wait for you; nothing is in flight, so no resume to suggest.
+      expect(status.split("\n")[0]).toBe("part_recipe-1 · part_recipe · running · 6 waiting on you · 1 stale");
+      expect(status).not.toContain("kriya resume");
       expect(store.events.read("part_recipe-1").length).toBe(before);
     } finally {
       store.close();

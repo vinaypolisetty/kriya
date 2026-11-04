@@ -270,9 +270,13 @@ function summary(state: RunState, waiting: number): string {
 /**
  * Steps started and not finished: being made, checked or fixed, or waiting on a
  * model job. Another process may be carrying them on; if not, `kriya resume` does.
+ * A for-each reads "running" while its items run or wait for you: only the items count.
  */
 function inFlight(state: RunState): number {
-  return Object.values(state.nodes).filter((n) => n.status === "running" || n.status === "checking" || n.status === "fixing" || n.status === "waiting_external").length;
+  const keys = Object.keys(state.nodes);
+  return Object.entries(state.nodes).filter(
+    ([k, n]) => (n.status === "running" || n.status === "checking" || n.status === "fixing" || n.status === "waiting_external") && !keys.some((o) => o.startsWith(`${k}[`)),
+  ).length;
 }
 
 // ── resume ──────────────────────────────────────────────────────────────────
