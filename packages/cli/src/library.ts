@@ -143,6 +143,13 @@ export function libraryAssets(library: Library, root: string, store: Store | und
 
   return {
     resolve: resolveFacet,
+    // A picture, clip or sound in the project that a step's value names, like the series' music (D-94): kept by content.
+    file(value) {
+      if (!MEDIA.test(value)) return undefined;
+      const file = resolve(root, value);
+      if (!file.startsWith(root + "/") || !existsSync(file) || !statSync(file).isFile()) return undefined;
+      return fileHash(file);
+    },
     facet(entity, facet) {
       const r = resolveFacet(entity, facet);
       if (!r || "missing" in r) return fake ? { version: "fake", value: library.entities.get(entity)?.facets[facet] ?? `fake:${entity}.${facet}` } : undefined;

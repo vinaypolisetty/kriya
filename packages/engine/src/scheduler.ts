@@ -230,10 +230,15 @@ export function memoryBlobs(): Blobs {
 export interface Assets {
   /** The locked version of one facet of one entity, e.g. ("Bheem", "look"), or undefined if it doesn't exist yet. */
   facet(entity: string, facet: string): { version: string; value: unknown } | undefined;
+  /**
+   * The content hash of a project file a step's value names (`music/main-theme.mp3`), or undefined when the
+   * string isn't one (D-94). A step records it as an input, so a file swapped under the same name makes its work stale.
+   */
+  file?(value: string): string | undefined;
 }
 
 /** What a step receives, by its context mode (D-47). */
-type Received = { uses: Record<string, unknown>; assets: Record<string, string>; missing: string[]; parent: boolean };
+type Received = { uses: Record<string, unknown>; assets: Record<string, string>; files: Record<string, string>; missing: string[]; parent: boolean };
 
 /** One recipe being run: the top level, or one item of a map. */
 type Context = { prefix: string; graph: Graph; inputs: Record<string, unknown> };
@@ -1657,7 +1662,9 @@ export class Scheduler {
     // A refining step's reads from the screen reviewing its target (`pick.selected`, `pick.note`) aren't inputs:
     // they're its parent and instruction, recorded on the version, and they move as soon as its own result is locked.
     const reviewer = "refines" in node && node.refines ? this.reviewer(node.refines, ctx)?.id : undefined;
-    for (const [r, v] of Object.entries(this.received(key, node, ctx).uses)) {
+    const got = this.received(key, node, ctx);
+    for (const [path, h] of Object.entries(got.files)) out[`file:${path}`] = h;
+    for (const [r, v] of Object.entries(got.uses)) {
       if (reviewer && r.split(/[.@[]/)[0] === reviewer) continue;
       // `so_far` is a look at the moment, not an input: redoing shot 2 shouldn't mark the movie made after shots 3, 4 and 5 stale.
       if (r.startsWith(`${SO_FAR}.`)) continue;
@@ -1731,7 +1738,12 @@ export class Scheduler {
     const maker = ctx.graph.nodes.find((x) => x.id === makerId) ?? node;
     const now = this.inputsOf(ctx.prefix + maker.id, maker, ctx);
     // Versions recorded before Oct 26 still list a refining step's own target; it isn't an input.
-    const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter((k) => now[k] !== v.inputs![k] && !ownTarget(maker, k) && !(pinned && k.includes("@")));
+    // A file's bytes are counted from D-94 on: a version made before then didn't record them, and isn't stale for it.
+    // A finished run keeps the files it used, as it keeps its Library facets (D-88).
+    const file = (k: string) => k.startsWith("file:");
+    const diff = [...new Set([...Object.keys(now), ...Object.keys(v.inputs)])].filter(
+      (k) => now[k] !== v.inputs![k] && !ownTarget(maker, k) && !(pinned && (k.includes("@") || file(k))) && !(file(k) && !(k in v.inputs!)),
+    );
     if (diff.length === 0) return undefined;
     // Name the Library change itself ("Bheem's look changed"), not just the reference that reads it.
     const used = this.received(ctx.prefix + maker.id, maker, ctx).assets;
@@ -1824,8 +1836,11 @@ export class Scheduler {
     refs = [...new Set([...refs, ...mentions])];
 
     const scope = this.scope(ctx);
-    const got: Received = { uses: {}, assets: {}, missing: [], parent: mode !== "isolated" };
+    const got: Received = { uses: {}, assets: {}, files: {}, missing: [], parent: mode !== "isolated" };
     for (const ref of refs) got.uses[ref] = ref.startsWith(`${SO_FAR}.`) ? this.soFar(ref, ctx) : this.resolve(ref, key, scope, got);
+    // Files named in what it reads (the series' music): a facet's files are in its version already.
+    const file = this.assets.file?.bind(this.assets);
+    if (file) for (const [ref, v] of Object.entries(got.uses)) if (!ref.includes("@")) filesIn(v, file, got.files);
     return got;
   }
 
@@ -2175,6 +2190,15 @@ function clean<T extends object>(o: T): T {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 }
 
+/** Every project file named in a value, by its content hash: the strings `file` knows as files. */
+function filesIn(value: unknown, file: (value: string) => string | undefined, into: Record<string, string>): void {
+  if (typeof value === "string") {
+    const h = file(value);
+    if (h) into[value] = h;
+  } else if (Array.isArray(value)) for (const v of value) filesIn(v, file, into);
+  else if (value && typeof value === "object") for (const v of Object.values(value)) filesIn(v, file, into);
+}
+
 /** Content hash of a JSON value, with object keys sorted so the same data always hashes the same. */
 function hash(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
@@ -2267,6 +2291,7 @@ function describe(changed: string[], node: Node, facets: string[] = []): string 
     if (k === "over") return `'${(node as { over?: string }).over}' changed`;
     const [kind, name] = [k.slice(0, k.indexOf(":")), k.slice(k.indexOf(":") + 1)];
     if (kind === "item") return `item ${name} changed`;
+    if (kind === "file") return `${name} changed`;
     return `'${name}' changed`;
   });
   const named = facets.map((f) => {

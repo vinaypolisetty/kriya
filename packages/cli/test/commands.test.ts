@@ -683,6 +683,85 @@ describe("the Library (Day 18)", () => {
   });
 });
 
+describe("files a step reads are kept by content (G-12, D-94)", () => {
+  /** A recipe that scores a part to the series' music, then writes its caption: the score is locked while the caption waits. */
+  const SCORED = `graph: scored
+level: part
+inherits: [series]
+description: Pick music for a part, then write its caption.
+inputs:
+  item: text
+nodes:
+  - id: score
+    kind: model
+    name: Pick the music
+    capability: llm.write
+    prompt: "Pick a cue for {{item}} from {{series.music}}"
+    uses: [item, series.music]
+    out: { cue: text }
+  - id: caption
+    kind: model
+    name: Write the caption
+    capability: llm.write
+    prompt: "A caption for {{item}}"
+    uses: [item, score.cue]
+    out: { caption: text }
+edges:
+  - { from: score, to: caption }
+  - { from: caption, to: END }
+`;
+  async function scored() {
+    const cwd = await project();
+    writeFileSync(join(cwd, "recipes", "scored.yaml"), SCORED);
+    mkdirSync(join(cwd, "music"));
+    writeFileSync(join(cwd, "music", "main-theme.mp3"), "the old theme");
+    await kriya(cwd, "run", "scored", "--input", "item=the tanker", "--id", "part");
+    const r = await kriya(cwd, "decide", "1", "approve");
+    expect(r.code, `${r.err}\n${(await kriya(cwd, "inbox")).out}`).toBe(0); // the score is locked; the caption waits
+    return cwd;
+  }
+
+  it("the version records the track's hash and keeps its bytes; swapping the track makes it stale, by name", async () => {
+    const cwd = await scored();
+    const store = openStore(join(cwd, ".kriya"));
+    try {
+      const v = Object.values(Recorder.resume(store.events, "part").state.nodes.score!.versions)[0]!;
+      const sha = createHash("sha256").update("the old theme").digest("hex");
+      expect(v.inputs!["file:music/main-theme.mp3"]).toBe(sha);
+      expect(store.blobs.get(sha)?.toString()).toBe("the old theme");
+    } finally {
+      store.close();
+    }
+    writeFileSync(join(cwd, "music", "main-theme.mp3"), "a new theme");
+    expect((await kriya(cwd, "lock", "part", "score", "v1")).out).toContain("↻ score: music/main-theme.mp3 changed");
+  });
+
+  it("a finished run keeps the track it used, until it's worked on again (as with the Library, D-88)", async () => {
+    const cwd = await scored();
+    expect((await kriya(cwd, "decide", "1", "approve")).out).toContain("completed");
+    writeFileSync(join(cwd, "music", "main-theme.mp3"), "a new theme");
+    expect((await kriya(cwd, "status", "part")).out).not.toContain("stale");
+    expect((await kriya(cwd, "lock", "part", "score", "v1")).out).toContain("↻ score: music/main-theme.mp3 changed");
+  });
+
+  it("a run made before kriya kept files isn't stale for them", async () => {
+    const cwd = await scored();
+    const store = openStore(join(cwd, ".kriya"));
+    try {
+      // The same log as a run from before D-94: no file inputs on its versions.
+      for (const e of store.events.read("part")) {
+        const p = e.payload as { inputs?: Record<string, string> };
+        const inputs = p.inputs && Object.fromEntries(Object.entries(p.inputs).filter(([k]) => !k.startsWith("file:")));
+        store.events.append("old", e.type, inputs ? { ...p, inputs } : p);
+      }
+    } finally {
+      store.close();
+    }
+    writeFileSync(join(cwd, "music", "main-theme.mp3"), "a new theme");
+    expect((await kriya(cwd, "lock", "old", "score", "v1")).out).not.toContain("stale");
+  });
+});
+
 describe("checks from the terminal (Day 20)", () => {
   it("the inbox shows each panel's verdict, and kriya check judges the candidates again", async () => {
     const cwd = await project();
