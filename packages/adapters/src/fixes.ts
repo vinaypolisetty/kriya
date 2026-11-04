@@ -60,7 +60,7 @@ export function suggestFix(screen: Pick<ScreenNode, "actions">, shows: Shown[], 
 
   const passed = checked.find((s) => s.verdict!.pass);
   const lock = screen.actions.find((a) => a.locks);
-  if (passed) return lock ? { action: lock.id, selection: [passed.version], why: `${passed.version} passed its checks` } : undefined;
+  if (passed) return lock ? { action: lock.id, selection: [passed.version], why: `v${passed.n} passed its checks` } : undefined;
 
   // Each candidate's repair is its costliest issue's fix: a crop can't bring back a missing character.
   const plans = checked.map((s) => {
@@ -74,11 +74,11 @@ export function suggestFix(screen: Pick<ScreenNode, "actions">, shows: Shown[], 
 
   if (best.fix === "crop") {
     const keep = best.steps.find((p) => p.keep)?.keep;
-    if (keep && has("crop")) return { action: "crop", selection: [best.s.version], region: keep, why: `${best.s.version}: ${what}; crop to ${keep}` };
+    if (keep && has("crop")) return { action: "crop", selection: [best.s.version], region: keep, why: `v${best.s.n}: ${what}; crop to ${keep}` };
     best.fix = "edit"; // no area to keep: an edit removes it instead
   }
   if (best.fix === "edit" && has("edit")) {
-    return { action: "edit", selection: [best.s.version], note: best.steps.map((p) => p.note).join(" "), why: `${best.s.version} is closest: ${what}` };
+    return { action: "edit", selection: [best.s.version], note: best.steps.map((p) => p.note).join(" "), why: `v${best.s.n} is closest: ${what}` };
   }
   if (has("retry")) return { action: "retry", note: `Fix: ${plans.flatMap((p) => p.s.verdict!.issues.map((i) => i.what ?? i.type)).filter((x, i, a) => a.indexOf(x) === i).join("; ")}`, why: `no candidate is close: ${what}` };
   return undefined;

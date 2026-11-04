@@ -43,7 +43,7 @@ describe("kriya chat", () => {
     const cwd = await part();
     const r = await kriya(cwd, "chat", "part_recipe-1", DRAW, "make v2 at night");
     expect(r.out).toContain("· making a new version from v2 with edit: make v2 at night");
-    expect((await kriya(cwd, "inbox")).out).toMatch(/per_shot\[S1\]\.pick: Pick one panel\n\s+2\.1\s+fake:\/\/image\/per_shot\[S1\]\.edit/);
+    expect((await kriya(cwd, "inbox")).out).toMatch(/per_shot\[S1\]\.pick: Pick one panel\n\s+v4\s+fake:\/\/image\/per_shot\[S1\]\.edit/);
   });
 
   it("locks by word: the waiting pick is answered with that version and your reason", async () => {
@@ -60,8 +60,10 @@ describe("kriya chat", () => {
     while (!(await kriya(cwd, "inbox")).out.startsWith("Nothing is waiting on you.")) {
       const inbox = (await kriya(cwd, "inbox")).out;
       const button = /buttons: (\w+)/.exec(inbox)![1]!;
-      const pick = /^\s+(\d+\.\d+)\s/m.exec(inbox)?.[1];
-      await kriya(cwd, "decide", "1", button, ...(pick ? ["--pick", pick] : []));
+      const pick = /^\s+(v\d+)\s/m.exec(inbox)?.[1];
+      // A decide that fails would leave the inbox as it is: fail here rather than loop for ever.
+      const r = await kriya(cwd, "decide", "1", button, ...(pick ? ["--pick", pick] : []));
+      expect(r.code, r.err).toBe(0);
     }
     const r = await kriya(cwd, "chat", "part_recipe-1", DRAW, "lock v3");
     expect(r.out).toContain("· didn't lock anything: this run is finished, so it stays as it is");
@@ -170,17 +172,17 @@ describe("changes wider than a step: this run, then the Library if you keep it (
     const r = await kriya(cwd, "chat", "p3", "voices[L1].speak", "set Mitra.voice.words to older, hoarse");
     expect(r.out).toContain('· changed Mitra\'s voice words to "older, hoarse" for this run; making new takes for the 3 reviews waiting for you');
     const inbox = (await kriya(cwd, "inbox")).out;
-    for (const line of ["L1", "L2", "L3"]) expect(inbox).toContain(`2.1  fake://audio/voices[${line}].speak/v2.1`);
-    expect(inbox).toContain("1.1  {\"clip\":\"fake://video/per_shot[S1].animate/v1.1\"}"); // the clips don't use a voice
+    for (const line of ["L1", "L2", "L3"]) expect(inbox).toContain(`v2  fake://audio/voices[${line}].speak/v2.1`);
+    expect(inbox).toContain("v1  {\"clip\":\"fake://video/per_shot[S1].animate/v1.1\"}"); // the clips don't use a voice
     expect((await kriya(cwd, "rebuild", "p3")).out).toContain("Nothing is stale or out of date");
   });
 
   it("the Library edited by hand reaches them too, on a rebuild, like stale work", async () => {
     const cwd = await cast();
     writeFileSync(join(cwd, "library", "mitra.yaml"), MITRA.replace("calm and dry", "older, hoarse"));
-    expect((await kriya(cwd, "inbox")).out).toContain("1.1  fake://audio/voices[L1].speak/v1.1"); // nothing moves by itself
+    expect((await kriya(cwd, "inbox")).out).toContain("v1  fake://audio/voices[L1].speak/v1.1"); // nothing moves by itself
     expect((await kriya(cwd, "rebuild", "p3")).out).toContain("✓ Rebuilding from voices[L1].speak, voices[L2].speak, voices[L3].speak");
-    expect((await kriya(cwd, "inbox")).out).toContain("2.1  fake://audio/voices[L1].speak/v2.1");
+    expect((await kriya(cwd, "inbox")).out).toContain("v2  fake://audio/voices[L1].speak/v2.1");
   });
 
   it("refuses plainly: a file, someone not in the Library, a finished run, nothing to keep", async () => {
