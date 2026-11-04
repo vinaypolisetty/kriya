@@ -7,9 +7,15 @@
  * Two schedulers on one run would disagree, so a run has at most one while it
  * carries on, and every write to it goes to that one. When nothing is in
  * flight it is let go, and the next write opens the run afresh from its log.
+ *
+ * A terminal can still write on a run this server is carrying on; the log
+ * then refuses the server's next write (G-6). That write starts over from the
+ * log on a new scheduler, which asks again for the work in flight (with the
+ * same idempotency keys), and the old one is let go.
  */
 import { describeError, settle, type Jobs } from "@kriya/adapters";
 import type { Scheduler } from "@kriya/engine";
+import { BehindTheLog } from "@kriya/store";
 
 type Opened = { s: Scheduler; jobs: Jobs };
 
@@ -33,9 +39,19 @@ export class LiveRuns {
    */
   change<T>(run: string, edit: (s: Scheduler) => T, opts: { carryOn: boolean } = { carryOn: true }): Promise<T> {
     return this.inTurn(async () => {
-      const now = this.live.get(run);
-      const { s, jobs } = now ?? (await this.open(run));
-      const out = edit(s);
+      let now = this.live.get(run);
+      let { s, jobs } = now ?? (await this.open(run));
+      let out: T;
+      try {
+        out = edit(s);
+      } catch (e) {
+        if (!(e instanceof BehindTheLog) || !now) throw e;
+        // Something else wrote on the run since this scheduler read it: start over from the log.
+        this.live.delete(run);
+        now = undefined;
+        ({ s, jobs } = await this.open(run));
+        out = edit(s);
+      }
       if (opts.carryOn) {
         // Already carrying on: its loop waits for the jobs this starts too.
         if (now) s.run();
@@ -83,9 +99,10 @@ export class LiveRuns {
         do await settle(s, jobs, describeError);
         while (jobs.size > 0);
       } catch (e) {
-        this.failed(run, e);
+        // Let go for a scheduler opened afresh (see above): that one carries on.
+        if (!(e instanceof BehindTheLog && this.live.get(run) !== entry)) this.failed(run, e);
       } finally {
-        this.live.delete(run);
+        if (this.live.get(run) === entry) this.live.delete(run);
       }
     })();
   }

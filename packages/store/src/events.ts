@@ -15,13 +15,28 @@ export type StoredEvent = {
   at: string;
 };
 
+/**
+ * A write from a process whose view of a run is out of date: something else
+ * (another terminal, `kriya web`) recorded on the run since this one read it
+ * (G-6). Nothing was saved; reading the run again and redoing it is safe.
+ */
+export class BehindTheLog extends Error {
+  constructor(readonly runId: string) {
+    super(`run '${runId}' was changed somewhere else (another terminal or kriya web) while this was working on it, so nothing was saved. Do it again: kriya reads the run afresh`);
+  }
+}
+
 export interface EventLog {
-  /** Appends one event and returns its sequence number (strictly increasing across the log). */
-  append(runId: string, type: string, payload: unknown): number;
+  /**
+   * Appends one event and returns its sequence number (strictly increasing across the log).
+   * With `after`, only if the run's last event is still that one (0: it has none yet);
+   * otherwise it throws `BehindTheLog` and saves nothing.
+   */
+  append(runId: string, type: string, payload: unknown, after?: number): number;
   /** A run's events in order, optionally only those after `afterSeq`. */
   read(runId: string, afterSeq?: number): StoredEvent[];
-  /** Appends several events atomically: all of them or none. */
-  appendMany(runId: string, events: { type: string; payload: unknown }[]): void;
+  /** Appends several events atomically: all of them or none, with `after` as for `append`. Returns the last one's sequence number. */
+  appendMany(runId: string, events: { type: string; payload: unknown }[], after?: number): number;
   /** Every run in the log, oldest first. */
   runs(): string[];
 }
@@ -80,6 +95,7 @@ export function openDatabase(path: string): Database.Database {
 export class SqliteEventLog implements EventLog {
   private readonly insert: Database.Statement;
   private readonly select: Database.Statement;
+  private readonly last: Database.Statement;
 
   constructor(
     private readonly db: Database.Database,
@@ -87,18 +103,25 @@ export class SqliteEventLog implements EventLog {
   ) {
     this.insert = db.prepare("INSERT INTO events (run_id, type, payload, at) VALUES (?, ?, ?, ?)");
     this.select = db.prepare("SELECT seq, run_id, type, payload, at FROM events WHERE run_id = ? AND seq > ? ORDER BY seq");
+    this.last = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE run_id = ?");
   }
 
-  append(runId: string, type: string, payload: unknown): number {
-    const json = JSON.stringify(payload);
-    if (json === undefined) throw new Error(`event '${type}' has a payload that can't be saved as JSON`);
-    return Number(this.insert.run(runId, type, json, this.now()).lastInsertRowid);
+  append(runId: string, type: string, payload: unknown, after?: number): number {
+    return this.appendMany(runId, [{ type, payload }], after);
   }
 
-  appendMany(runId: string, events: { type: string; payload: unknown }[]): void {
-    this.db.transaction(() => {
-      for (const e of events) this.append(runId, e.type, e.payload);
-    })();
+  appendMany(runId: string, events: { type: string; payload: unknown }[], after?: number): number {
+    // IMMEDIATE takes the write lock before the check, so no other process can write between the two.
+    return this.db.transaction(() => {
+      if (after !== undefined && (this.last.get(runId) as { seq: number }).seq !== after) throw new BehindTheLog(runId);
+      let seq = after ?? 0;
+      for (const e of events) {
+        const json = JSON.stringify(e.payload);
+        if (json === undefined) throw new Error(`event '${e.type}' has a payload that can't be saved as JSON`);
+        seq = Number(this.insert.run(runId, e.type, json, this.now()).lastInsertRowid);
+      }
+      return seq;
+    }).immediate();
   }
 
   /** Every run in the log, oldest first. */

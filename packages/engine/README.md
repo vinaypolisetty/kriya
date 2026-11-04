@@ -14,7 +14,7 @@ Depends on `zod` and `yaml` only. Imports no other `@kriya` package.
 | [`condition.ts`](src/condition.ts) | The edge condition language: tokenizer, parser, evaluator. No calls, no clock |
 | [`events.ts`](src/events.ts) | Every event type as a strict schema. Payloads are recorded data only |
 | [`state.ts`](src/state.ts) | `apply(state, event)`: pure, refuses impossible events. `replay(events)` |
-| [`recorder.ts`](src/recorder.ts) | The only writer: check + apply, then append; transactions; refuses values JSON would change |
+| [`recorder.ts`](src/recorder.ts) | The only writer: check + apply, then append; transactions; refuses values JSON would change; each write names the last event it saw, so a write behind another process's is refused (D-92) |
 | [`scheduler.ts`](src/scheduler.ts) | Which step runs next; edges, loops, joins, for-each items, in turn or all at once; locks, stale, branches, retry, keep; the `Executors` interface |
 | [`patch.ts`](src/patch.ts) | `applyEdits(output, edits, shape)`: a version's output changed by item key (add, update, remove, move, set), checked against the step's types; pure (D-89) |
 | [`cli-validate.ts`](src/cli-validate.ts) | `pnpm validate:examples` |
