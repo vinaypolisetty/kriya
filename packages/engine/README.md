@@ -44,7 +44,7 @@ What it asks of the outside world:
 | `Executors` (`produce`, `decide`, `check?`, `turn?`) | `adapters` (Claude, Replicate, tools), `cli/fake.ts`, test fakes | model, tool and agent steps; screens; judges |
 | `Tools` | `cli/fake.ts` (real agent tools aren't built yet); `adapters/anthropic.ts` describes them to Claude | an agent's tools |
 | `Blobs` | `cli` (`.kriya/blobs/`) | tool results by content hash |
-| `Assets` | `cli/library.ts` | Library facets and their versions |
+| `Assets` | `cli/library.ts` | Library facets and their versions; the content hash of a project file a step reads (D-94) |
 | `EventSink` | `store`'s `SqliteEventLog` | appending and reading events |
 
 ## Rules for changing it
