@@ -234,12 +234,12 @@ class Crash extends Error {}
 class CrashingLog implements EventSink {
   writes = 0;
   constructor(private readonly inner: SqliteEventLog, private readonly crashAt: number) {}
-  append(runId: string, type: string, payload: unknown): number {
-    return this.inner.append(runId, type, payload);
+  append(runId: string, type: string, payload: unknown, after?: number): number {
+    return this.inner.append(runId, type, payload, after);
   }
-  appendMany(runId: string, events: { type: string; payload: unknown }[]): void {
+  appendMany(runId: string, events: { type: string; payload: unknown }[], after?: number): number {
     if (++this.writes === this.crashAt) throw new Crash(`crash at write ${this.crashAt}`);
-    this.inner.appendMany(runId, events);
+    return this.inner.appendMany(runId, events, after);
   }
   read(runId: string, afterSeq?: number) {
     return this.inner.read(runId, afterSeq);

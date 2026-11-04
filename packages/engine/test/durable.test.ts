@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
-import { openDatabase, SqliteEventLog } from "@kriya/store";
+import { BehindTheLog, openDatabase, SqliteEventLog } from "@kriya/store";
 import { loadDir } from "../src/load.js";
 import { Recorder, readRun, replay, Scheduler, type Decision, type Executors, type EventSink, type RunState, type StepContext } from "../src/index.js";
 
@@ -90,12 +90,12 @@ class Crash extends Error {}
 class CrashingLog implements EventSink {
   writes = 0;
   constructor(private readonly inner: SqliteEventLog, private readonly crashAt: number) {}
-  append(runId: string, type: string, payload: unknown): number {
-    return this.inner.append(runId, type, payload);
+  append(runId: string, type: string, payload: unknown, after?: number): number {
+    return this.inner.append(runId, type, payload, after);
   }
-  appendMany(runId: string, events: { type: string; payload: unknown }[]): void {
+  appendMany(runId: string, events: { type: string; payload: unknown }[], after?: number): number {
     if (++this.writes === this.crashAt) throw new Crash(`crash at write ${this.crashAt}`);
-    this.inner.appendMany(runId, events);
+    return this.inner.appendMany(runId, events, after);
   }
   read(runId: string, afterSeq?: number) {
     return this.inner.read(runId, afterSeq);
@@ -178,6 +178,37 @@ describe("crash and resume: no duplicate calls", () => {
   it("the log is still exactly replayable", () => {
     const r = crashAndResume(10);
     expect(replay(r.events)).toEqual(r.state);
+  });
+});
+
+describe("one writer per run (G-6)", () => {
+  it("a scheduler whose view is out of date is refused: nothing is saved and it goes back; one opened afresh carries on", () => {
+    const provider = new Provider();
+    const db = new SqliteEventLog(openDatabase(":memory:"));
+    const rec = Recorder.start(db, "run1");
+    const s = new Scheduler(part, rec, executors(provider), graphs, LIBRARY);
+    s.start(RELEASE, INPUTS, SERIES);
+    s.run();
+    const ticket = Object.values(rec.state.nodes).find((n) => n.status === "waiting_external")!.ticket!;
+
+    // Two processes open the run, a terminal and kriya web, and both hear the job finish.
+    const open = () => {
+      const r = Recorder.resume(db, "run1");
+      return { r, s: new Scheduler(part, r, executors(provider), graphs, LIBRARY) };
+    };
+    const terminal = open();
+    const web = open();
+    terminal.s.deliver(ticket, provider.result(ticket));
+    const logged = db.read("run1").length;
+    const was = web.r.state;
+    expect(() => web.s.deliver(ticket, provider.result(ticket))).toThrow(BehindTheLog);
+    expect(db.read("run1")).toHaveLength(logged);
+    expect(web.r.state).toBe(was);
+
+    const fresh = open();
+    drive(fresh.s, fresh.r, provider);
+    expect(fresh.r.state.status).toBe("completed");
+    expect(replay(readRun(db, "run1"))).toEqual(fresh.r.state);
   });
 });
 
