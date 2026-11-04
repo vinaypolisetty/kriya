@@ -53,7 +53,7 @@ Because state is a fold, three things come for free: crash recovery (replay the 
 
 ## The life of a run
 
-What happens on `kriya run part_recipe`, then `kriya decide 1 lock`, then a crash, then the next command:
+What happens on `kriya run part_recipe`, then `kriya decide 1 lock`, then a crash, then `kriya resume`:
 
 1. **Load the project.** [`cli/project.ts`](../packages/cli/src/project.ts) reads `kriya.yaml`, then `recipes/*.yaml` through [`engine/load.ts`](../packages/engine/src/load.ts), which runs the schema and [`validate.ts`](../packages/engine/src/validate.ts) and reports problems with file:line. [`cli/library.ts`](../packages/cli/src/library.ts) reads `library/`. A recipe with errors never starts.
 2. **Open the store.** `openStore(".kriya")` gives the event log, the blob store and the Library history.
@@ -64,7 +64,7 @@ What happens on `kriya run part_recipe`, then `kriya decide 1 lock`, then a cras
 7. **Settle.** [`settle()`](../packages/adapters/src/jobs.ts) awaits each job and delivers it: `deliver` (outputs), `deliverTurn` (an agent turn), `deliverVerdicts` (a judge), or `failJob` (a plain reason). Then `run()` again.
 8. **Wait for a person.** A `screen` step asks `Executors.decide()`. With no answer yet, the step suspends and shows up in `inbox()`. The process exits; nothing is lost.
 9. **Answer.** `kriya decide` (or `POST /api/decide`) replays the run, records the `HumanDecision` **first** (D-66), then recovers and carries on.
-10. **Crash and resume.** Every command calls `openRun()`. It replays the log (`Recorder.resume`), re-checks the Library (`assetsChanged`, `unblock`), and calls `recover()`, which repeats only the outside calls that were in flight, **with the same idempotency key** (`run/step#attempt`). Replicate predictions are also in a job ledger, so a repeated call polls the same prediction instead of paying again.
+10. **Crash and resume.** Every command calls `openRun()`, which replays the log (`Recorder.resume`). Looking stops there (D-91). A command that changes a run, or `kriya resume`, then re-checks the Library (`assetsChanged`, `unblock`) and calls `recover()`, which repeats only the outside calls that were in flight, **with the same idempotency key** (`run/step#attempt`). Replicate predictions are also in a job ledger, so a repeated call polls the same prediction instead of paying again.
 
 ## Where state lives
 

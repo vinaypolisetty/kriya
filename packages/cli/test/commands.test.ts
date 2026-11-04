@@ -247,7 +247,7 @@ edges:
     return { bodies, url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, close: () => server.close() };
   }
 
-  it("without a key: the run stops before calling, status still works, and adding the key carries on", async () => {
+  it("without a key: the run stops before calling, status still works, and with the key resume carries on", async () => {
     const saved = { key: process.env.ANTHROPIC_API_KEY, token: process.env.ANTHROPIC_AUTH_TOKEN, url: process.env.ANTHROPIC_BASE_URL };
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_AUTH_TOKEN;
@@ -256,19 +256,21 @@ edges:
       const cwd = await claudeProject();
       const r = await kriya(cwd, "run", "brief", "--input", "topic=water tankers");
       expect(r.code).toBe(1);
-      expect(r.err).toBe("✗ this step needs Claude, and there's no key. Put ANTHROPIC_API_KEY=… in .env at the project root (see .env.example), then run the command again");
+      expect(r.err).toBe("✗ this step needs Claude, and there's no key. Put ANTHROPIC_API_KEY=… in .env at the project root (see .env.example), then carry the run on: kriya resume brief-1");
       expect(api.bodies).toHaveLength(0);
 
       const st = await kriya(cwd, "status", "brief-1");
       expect(st.code).toBe(0);
-      expect(st.err).toContain("! brief-1: this step needs Claude, and there's no key.");
-      expect(st.out.split("\n")[0]).toBe("brief-1 · brief · running");
+      expect(st.err).toBe("");
+      expect(st.out.split("\n")[0]).toBe("brief-1 · brief · running · 1 in progress");
 
       process.env.ANTHROPIC_API_KEY = "test-key";
       process.env.ANTHROPIC_BASE_URL = api.url;
-      const done = await kriya(cwd, "status", "brief-1"); // any command picks the run up again
+      expect((await kriya(cwd, "status", "brief-1")).out).not.toContain("completed"); // looking doesn't carry it on (D-91)
+      expect(api.bodies).toHaveLength(0);
+      const done = await kriya(cwd, "resume", "brief-1");
       expect(done.out).toContain("⏳ waiting on the models…");
-      expect(done.out).toContain("brief-1 · brief · completed");
+      expect(done.out).toContain("  completed");
       expect(api.bodies).toHaveLength(3);
     } finally {
       api.close();
@@ -680,6 +682,55 @@ describe("the Library (Day 18)", () => {
     const cwd = await project();
     writeFileSync(join(cwd, "kriya.yaml"), `${readFileSync(join(cwd, "kriya.yaml"), "utf8")}library:\n  Mitra.look: x\n`);
     expect((await kriya(cwd, "status")).err).toContain("✗ kriya.yaml: the Library moved to the library/ folder, one file per entity");
+  });
+});
+
+describe("looking never spends (G-4, D-91)", () => {
+  it("status, show, inbox, log and a decision on another run record nothing on a run cut off mid-attempt; resume carries it on", async () => {
+    const cwd = await project();
+    const shot = JSON.stringify({ id: "P3-04", characters: ["Mitra"], place: "Chai stall", action: "Mitra writes", lines: [], animate: false });
+    await kriya(cwd, "run", "shot_recipe", "--input", `item=${shot}`, "--id", "other");
+    // A crash just after the drawing started: "other"'s log up to there. Anything that carries it on draws, and pays.
+    const store = openStore(join(cwd, ".kriya"));
+    try {
+      const log = store.events.read("other");
+      for (const e of log.slice(0, log.findIndex((e) => e.type === "AttemptStarted") + 1)) store.events.append("cut", e.type, e.payload);
+      const before = store.events.read("cut").length;
+      for (const look of [["status"], ["status", "cut"], ["show", "cut"], ["show", "cut", "draw"], ["inbox"], ["log", "cut"]]) {
+        const r = await kriya(cwd, ...look);
+        expect(r.code, `${look.join(" ")}: ${r.err}`).toBe(0);
+      }
+      expect((await kriya(cwd, "decide", "other:pick", "lock", "--pick", "v1")).code).toBe(0);
+      expect(store.events.read("cut").length).toBe(before);
+
+      const status = (await kriya(cwd, "status", "cut")).out;
+      expect(status).toContain("cut · shot_recipe · running · 1 in progress");
+      expect(status).toContain("If nothing else is carrying it on (kriya web, another terminal): kriya resume cut");
+      const r = await kriya(cwd, "resume", "cut");
+      expect(r.code, r.err).toBe(0);
+      expect(store.events.read("cut").length).toBeGreaterThan(before);
+      expect(Object.keys(Recorder.resume(store.events, "cut").state.nodes.draw!.versions)).toEqual(["1.1", "1.2", "1.3"]);
+      expect((await kriya(cwd, "resume", "other")).out).toBe("other is completed; there's nothing to carry on");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("status shows what a Library change made stale in a run still going, without recording it", async () => {
+    const cwd = await project();
+    entity(cwd, "mitra", "name: Mitra\nkind: character\nlook: { words: a thin 60-year-old bald man }\n");
+    await kriya(cwd, "run", "part_recipe", "--input", "part_no=3", "--input", "story_pages=x");
+    await kriya(cwd, "decide", "1", "approve");
+    expect((await kriya(cwd, "decide", "1", "lock", "--pick", "v1")).code).toBe(0); // S1's panel, with Mitra in it
+    entity(cwd, "mitra", "name: Mitra\nkind: character\nlook: { words: a stout 60-year-old bald man }\n");
+    const store = openStore(join(cwd, ".kriya"));
+    try {
+      const before = store.events.read("part_recipe-1").length;
+      expect((await kriya(cwd, "status", "part_recipe-1")).out).toContain("↻ per_shot[S1].draw · stale: Mitra's look changed");
+      expect(store.events.read("part_recipe-1").length).toBe(before);
+    } finally {
+      store.close();
+    }
   });
 });
 

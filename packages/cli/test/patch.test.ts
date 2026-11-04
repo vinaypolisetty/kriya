@@ -31,7 +31,7 @@ async function shotLists(cwd: string): Promise<Record<string, { ids: string[]; s
   const project = loadProject(cwd);
   const store = openStore(join(project.root, ".kriya"));
   try {
-    const { rec } = await openRun(project, store, "p3", { out: () => {}, err: () => {}, cwd }, { readOnly: true });
+    const { rec } = await openRun(project, store, "p3", { out: () => {}, err: () => {}, cwd });
     return Object.fromEntries(
       Object.values(rec.state.nodes.shot_list!.versions).map((v) => {
         const shots = v.output.shots as Record<string, unknown>[];
@@ -82,7 +82,7 @@ describe("the step chat patches instead of making the list again", () => {
     const project = loadProject(cwd);
     const store = openStore(join(project.root, ".kriya"));
     try {
-      const { rec } = await openRun(project, store, "p3", { out: () => {}, err: () => {}, cwd }, { readOnly: true });
+      const { rec } = await openRun(project, store, "p3", { out: () => {}, err: () => {}, cwd });
       const brief = chatBrief(project, rec.state, "shot_list", "add a shot");
       expect(brief.shapes[0]).toBe("shot: id (text), characters (list<library.character>), place (library.place), action (text), lines (list<line>), animate (boolean), music (text)");
       expect(brief.shapes[1]).toMatch(/^line: id \(text\), speaker \(library\.character\)/);

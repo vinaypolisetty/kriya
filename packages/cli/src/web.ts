@@ -255,7 +255,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
   const quiet: IO = { out: () => {}, err: () => {}, cwd: opts.io.cwd };
   /** Writes, one at a time, and the runs carrying on after them (D-86). */
   const live = new LiveRuns(
-    async (run) => openRun(current(), store, run, quiet, { readOnly: true }),
+    async (run) => openRun(current(), store, run, quiet),
     (run, e) => opts.io.err(`! ${run}: ${describeError(e)}`),
   );
   const clients = new Set<ServerResponse>();
@@ -287,9 +287,9 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
   };
   const inbox = async (): Promise<WebItem[]> => {
     const project = current();
-    const entries = await allInbox(project, store, quiet, { readOnly: true });
+    const entries = await allInbox(project, store, quiet);
     const states = new Map<string, RunState>();
-    for (const e of entries) if (!states.has(e.run)) states.set(e.run, (await openRun(project, store, e.run, quiet, { readOnly: true })).rec.state);
+    for (const e of entries) if (!states.has(e.run)) states.set(e.run, (await openRun(project, store, e.run, quiet)).rec.state);
     return entries.map((e) => {
       e = { ...e, beside: e.beside.map((b) => ({ ...b, value: projectFile(project, b.value) })) };
       const item = web(e, typeOf, estimates(project, states.get(e.run)!, e.key), project.kb.rules);
@@ -302,7 +302,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     const project = current();
     const out = [];
     for (const id of store.events.runs()) {
-      const { rec, s } = await openRun(project, store, id, quiet, { readOnly: true });
+      const { rec, s } = await openRun(project, store, id, quiet);
       const events = store.events.read(id);
       const nodes = Object.values(rec.state.nodes);
       out.push({
@@ -323,7 +323,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
 
   const runGraph = async (id: string, at: string) => {
     const project = current();
-    const { rec, s } = await openRun(project, store, id, quiet, { readOnly: true });
+    const { rec, s } = await openRun(project, store, id, quiet);
     // `at` names one item of a for-each step (`per_shot[P3-04]`, nested ones chained): walk down to its recipe.
     let g = findGraph(project.graphs, rec.state.graph);
     let prefix = "";

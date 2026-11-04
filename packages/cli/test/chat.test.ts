@@ -84,7 +84,7 @@ describe("what the chat is told and what it may do", () => {
     const project = loadProject(cwd);
     const store = openStore(join(cwd, ".kriya"));
     try {
-      const { rec } = await openRun(project, store, "part_recipe-1", { out: () => {}, err: () => {}, cwd }, { readOnly: true });
+      const { rec } = await openRun(project, store, "part_recipe-1", { out: () => {}, err: () => {}, cwd });
       const b = chatBrief(project, rec.state, DRAW, "hi");
       expect(b.versions.map((v) => [v.n, v.intention, v.locked])).toEqual([[1, "from recipe", false], [2, "from recipe", false], [3, "from recipe", false]]);
       expect(b.canEdit).toBe(true);
@@ -101,7 +101,7 @@ describe("what the chat is told and what it may do", () => {
     const project = loadProject(cwd);
     const store = openStore(join(cwd, ".kriya"));
     try {
-      const { rec, s } = await openRun(project, store, "part_recipe-1", { out: () => {}, err: () => {}, cwd }, { readOnly: true });
+      const { rec, s } = await openRun(project, store, "part_recipe-1", { out: () => {}, err: () => {}, cwd });
       const chat: Chat = async () => ({ text: "Locked.", actions: [{ do: "lock", version: 2, why: "it has the best composition" }], model: "test", cost_usd: 0.02 });
       const { did } = await talk(project, s, chat, DRAW, "go with v2");
       expect(did).toEqual(["locked v2"]);
@@ -117,7 +117,7 @@ describe("what the chat is told and what it may do", () => {
     const project = loadProject(cwd);
     const store = openStore(join(cwd, ".kriya"));
     try {
-      const { rec, s } = await openRun(project, store, "part_recipe-1", { out: () => {}, err: () => {}, cwd }, { readOnly: true });
+      const { rec, s } = await openRun(project, store, "part_recipe-1", { out: () => {}, err: () => {}, cwd });
       const chat: Chat = async () => ({ text: "Sure.", actions: [{ do: "lock", version: 9, why: "" }, { do: "make", from: 0, instruction: "  ", how: "redo" }], model: "test", cost_usd: 0 });
       const { did } = await talk(project, s, chat, DRAW, "lock v9 and redo it");
       expect(did).toEqual(["couldn't lock v9: there's no v9", "couldn't make a new version: say what to change, e.g. \"make it night\""]);

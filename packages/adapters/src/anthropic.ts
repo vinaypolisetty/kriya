@@ -51,7 +51,7 @@ export class Refusal extends Error {}
 /** No key to call Claude with. Thrown before anything is sent, so the step can simply run again once a key is set. */
 export class MissingKey extends Error {
   constructor() {
-    super("this step needs Claude, and there's no key. Put ANTHROPIC_API_KEY=… in .env at the project root (see .env.example), then run the command again");
+    super("this step needs Claude, and there's no key. Put ANTHROPIC_API_KEY=… in .env at the project root (see .env.example)");
   }
 }
 

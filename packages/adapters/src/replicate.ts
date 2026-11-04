@@ -127,7 +127,7 @@ export type ReplicateOptions = {
 /** No token to call Replicate with. Thrown before anything is sent, so the step can run again once one is set. */
 export class MissingToken extends Error {
   constructor() {
-    super("this step needs Replicate, and there's no token. Put REPLICATE_API_TOKEN=… in .env at the project root (see .env.example), then run the command again");
+    super("this step needs Replicate, and there's no token. Put REPLICATE_API_TOKEN=… in .env at the project root (see .env.example)");
   }
 }
 
