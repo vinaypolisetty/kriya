@@ -28,7 +28,7 @@ Operations inside a node:
 
 ## Talking to a step
 
-Every model, agent and tool step has a conversation of its own ([D-87](17-decisions.md)): `kriya chat <run> <step>`, or **Talk to this step** in its box in the browser.
+Every model, agent and tool step has a conversation of its own ([D-87](17-decisions.md)): `kriya chat <run> <step>`, or **Talk to this step** in its box in the browser (right under the pictures when it waits for your review).
 
 - **Versions are numbered** v1, v2, v3… in the order they were made, across branches, so "v3" always names one version. Each one says why it exists, in one line: `from recipe`, `"make him smile"`, `from v2: "night"`, `v4 + v2: "the sky"`, `made again`.
 - **Asking is free of side effects.** "Why is v2 flatter than v3?" gets an answer from what's recorded: each version's prompt, model and checks, pictures of the latest ones, and the story so far (the run's inputs and every locked output). Nothing is made.

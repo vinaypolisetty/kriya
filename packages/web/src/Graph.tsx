@@ -15,7 +15,7 @@
  *
  * Everything opens in place: the graph is the whole page, with no popups and
  * no side panel. Click a step and its box grows to hold its details, or its
- * review if it's waiting on you. Every moment's steps are on this same graph,
+ * review if it's waiting on you, with the step's conversation under it. Every moment's steps are on this same graph,
  * each on its own row, with each drawing or page a box of its own. A box measures what it holds
  * and the layout makes room, so the boxes after it move along and the arrows
  * follow. A big run is a big graph, and that's fine. (With "Show all steps",
@@ -31,7 +31,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { flushSync } from "react-dom";
 import { graphUrl, fileUrl } from "./App";
 import { useLive, useLiveAll, type GEdge, type GItem, type GNode, type Item, type RunGraph, type TraceView } from "./api";
-import { NodePanel, RunPanel } from "./NodePanel";
+import { Chat, NodePanel, RunPanel, talks } from "./NodePanel";
 import { Screen } from "./Screen";
 import { simplify, unfold, waitsOnYou } from "./simple";
 
@@ -758,6 +758,7 @@ function Box({ n, graph, style, answer, drag, dragging, opened, measure }: { n: 
               </ul>
             )}
             {asking && graph.run && <BoxReview n={n} run={graph.run} />}
+            {asking && talks(made, graph.run) && <Chat run={graph.run} n={made} />}
             {n.leaf ? (
               !asking && picture && <img className="box-picture" src={picture.url} alt="" />
             ) : !graph.run ? (
@@ -765,7 +766,7 @@ function Box({ n, graph, style, answer, drag, dragging, opened, measure }: { n: 
             ) : n.items || asking ? (
               <details className="box-more">
                 <summary>Step details</summary>
-                <NodePanel n={made} run={graph.run} />
+                <NodePanel n={made} run={graph.run} chat={!asking} />
               </details>
             ) : (
               <NodePanel n={made} run={graph.run} />

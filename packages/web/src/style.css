@@ -235,6 +235,9 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 .said .did::before { content: "· "; }
 .chat-form { display: flex; gap: 8px; align-items: flex-end; }
 .chat-form textarea { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); resize: vertical; }
+/* under a review the box is as wide as its pictures: the talk stays readable, and a long one scrolls, newest last */
+.box-open > .chat { max-width: 760px; margin-top: 12px; }
+.box-open > .chat .thread { max-height: 320px; overflow-y: auto; }
 .version .why { margin: 0; padding: 0 8px 6px; font-size: 11px; line-height: 15px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* buttons */
