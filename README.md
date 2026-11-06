@@ -4,9 +4,9 @@
 
 kriya runs a recipe of steps (AI drafts, tools and your decisions) as a durable graph. Every step makes **versions**; you **lock** the one you want, and only locked work flows on. Change your mind upstream and kriya tells you what went **stale** and why, and redoes only that. A run can wait days for you, survive a crash, and never pay for the same call twice: everything is an append-only event log, replayed, never re-asked.
 
-![kriya web: a run as its graph, a step's versions and what happened, the Library](docs/img/demo.gif)
+![kriya web: projects, a run waiting for you to pick a panel, a run as one graph, a step's versions and the checker's verdicts, the Library, in light and dark](docs/img/demo.gif)
 
-*The real Part 3 of* Mohalla Mitra *(an Instagram motion comic) in `kriya web`: 13 panels, 4 clips and 19 voice lines made end to end through kriya and assembled into a 106-second Reel.*
+*Real episodes of* Mohalla Mitra *(an Instagram motion comic) in `kriya web`: one run stopped for you to pick a panel, and a finished one,* The Genie of the Old Well *Part 2: 12 panels, 4 clips and 15 voice lines made end to end through kriya and assembled into an 89-second Reel.*
 
 ## Try it: three commands, no keys
 
