@@ -57,17 +57,28 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
 /** A conversation and the box to add to it: a step's (D-87) or the whole run's (D-95). What the chat did is listed under its answer. */
 export function Talk({ title, label, hint, placeholder, thread, onSay }: { title: string; label: string; hint: string; placeholder: string; thread: RunChatEntry[]; onSay: (text: string) => Promise<unknown> }) {
   const [text, setText] = useState("");
-  const [sent, setSent] = useState<string>();
+  // What you said and where the thread ended then, until the chat has answered.
+  const [sent, setSent] = useState<{ text: string; at: number }>();
   const [error, setError] = useState<string>();
+  // It's recorded before the chat thinks, so the thread shows it within a moment: then our own copy goes.
+  const heard = !!sent && thread.slice(sent.at).some((t) => t.by === "you" && t.text === sent.text);
+  // A long talk scrolls (under a review it's capped): keep the newest in view.
+  const end = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    const ol = end.current;
+    if (ol) ol.scrollTop = ol.scrollHeight;
+  }, [thread.length, sent]);
   const send = async () => {
     const said = text.trim();
     if (!said || sent) return;
-    setSent(said);
+    setSent({ text: said, at: thread.length });
+    setText("");
     setError(undefined);
     try {
       await onSay(said);
-      setText("");
     } catch (e) {
+      // Not heard: give the words back to try again.
+      setText(said);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSent(undefined);
@@ -78,7 +89,7 @@ export function Talk({ title, label, hint, placeholder, thread, onSay }: { title
       <h3>{title}</h3>
       {thread.length === 0 && !sent && <p className="muted small">{hint}</p>}
       {(thread.length > 0 || sent) && (
-        <ol className="thread">
+        <ol className="thread" ref={end}>
           {thread.map((t, i) => (
             <li key={i} className={`said ${t.by}`}>
               <p>{t.text}</p>
@@ -87,7 +98,7 @@ export function Talk({ title, label, hint, placeholder, thread, onSay }: { title
               ))}
             </li>
           ))}
-          {sent && <li className="said you"><p>{sent}</p></li>}
+          {sent && !heard && <li className="said you"><p>{sent.text}</p></li>}
           {sent && <li className="said kriya muted"><p>Thinking…</p></li>}
         </ol>
       )}
