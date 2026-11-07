@@ -571,6 +571,77 @@ describe("models: { image: replicate } (Day 16)", () => {
   });
 });
 
+describe("models: { image: modelslab } (D-99)", () => {
+  const png = (tag: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tag)]);
+
+  /** A stand-in for ModelsLab on localhost: uploads, requests that start processing, fetches that finish, outputs. Every answer is HTTP 200. */
+  async function modelslabStandIn() {
+    const asks: { key: string; model_id: string; prompt: string; init_image?: string[] }[] = [];
+    let n = 0;
+    const server: Server = createServer((req, res) => {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+        const send = (body: unknown) => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+        };
+        if (req.url === "/v6/base64_to_url") return send({ status: "success", id: 1, output: [`${base}/up/sheet.png`] });
+        const fetched = /\/v7\/images\/fetch\/(\d+)$/.exec(req.url!);
+        if (fetched) return send({ status: "success", id: Number(fetched[1]), output: [`${base}/out/${fetched[1]}.png`] });
+        if (req.url === "/v7/images/image-to-image") {
+          asks.push(JSON.parse(data));
+          return send({ status: "processing", id: ++n, eta: 5 });
+        }
+        const out = /\/out\/(\d+)\.png$/.exec(req.url!);
+        if (out) {
+          res.writeHead(200);
+          return res.end(png(`panel ${out[1]}`));
+        }
+        send({ status: "error", message: "not found" });
+      });
+    });
+    await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+    return { asks, url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, close: () => server.close() };
+  }
+
+  it("draws three candidates on ModelsLab with the character sheet as a reference, and records model and price", async () => {
+    const api = await modelslabStandIn();
+    const saved = { key: process.env.MODELSLAB_API_KEY, url: process.env.MODELSLAB_BASE_URL };
+    process.env.MODELSLAB_API_KEY = "ml_test";
+    process.env.MODELSLAB_BASE_URL = api.url;
+    try {
+      const cwd = await project();
+      mkdirSync(join(cwd, "sheets"));
+      writeFileSync(join(cwd, "sheets", "bheem.png"), png("bheem"));
+      writeFileSync(join(cwd, "kriya.yaml"), readFileSync(join(cwd, "kriya.yaml"), "utf8").replace("models: fake", "models:\n  image: modelslab"));
+      entity(cwd, "bheem", "name: Bheem\nkind: character\nlook: { image: sheets/bheem.png, words: a very tall bodybuilder }\n");
+      entity(cwd, "reservoir", "name: Reservoir\nkind: place\nlook: a concrete water tank on stilts\n");
+      const item = JSON.stringify({ id: "P3-08", action: "Bheem leaps up screaming", characters: ["Bheem"], place: "Reservoir", lines: [], animate: false });
+
+      const r = await kriya(cwd, "run", "shot_recipe", "--input", `item=${item}`);
+      expect(r.code, r.err).toBe(0);
+      expect(api.asks).toHaveLength(3);
+      expect(api.asks[0]).toMatchObject({ key: "ml_test", model_id: "nano-banana", init_image: [`${api.url}/up/sheet.png`] });
+      expect(api.asks[0]!.prompt).toContain("Characters: Bheem, a very tall bodybuilder (image 1)");
+      expect((await kriya(cwd, "show", "shot_recipe-1", "draw")).out).toMatch(/Version 1\.3 · not locked · modelslab\/nano-banana · \$0\.05/);
+      expect(readdirSync(join(cwd, ".kriya", "jobs"))).toHaveLength(1); // the ledger: one step, three fetch links
+    } finally {
+      api.close();
+      for (const [k, v] of [["MODELSLAB_API_KEY", saved.key], ["MODELSLAB_BASE_URL", saved.url]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  });
+
+  it("a misspelt provider is an error that names the ones there are", async () => {
+    const cwd = await project();
+    writeFileSync(join(cwd, "kriya.yaml"), readFileSync(join(cwd, "kriya.yaml"), "utf8").replace("models: fake", "models:\n  video: modellab"));
+    expect((await kriya(cwd, "status")).err).toBe("✗ kriya.yaml: models.video: there's no 'modellab'; use 'fake', 'replicate', 'modelslab'. Did you mean 'modelslab'?");
+  });
+});
+
 describe("the Library (Day 18)", () => {
   const MITRA = "name: Mitra\nkind: character\nlook: { image: sheets/mitra.png, words: a thin 60-year-old bald man }\nvoice: { voice: Charon, words: calm and dry }\nspeech: Hinglish\n";
   const line = JSON.stringify({ id: "L06", speaker: "Mitra", hinglish: "Ek cutting chai, extra cheeni, aur ek confession.", emotion: "dry, satisfied", caption_en: "One confession." });

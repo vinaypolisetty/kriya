@@ -1,8 +1,8 @@
 # @kriya/adapters
 
-Turns the engine's requests into real work: Claude for writing, judging and agents; Replicate for images, clips, voices and music; ffmpeg for local media tools. Every call runs as a job: the engine gets a ticket at once, and `settle()` delivers the result when it arrives. Also home to the fix policy, which is pure and decides what to press on a review screen.
+Turns the engine's requests into real work: Claude for writing, judging and agents; Replicate or ModelsLab for images, clips, voices and music; ffmpeg for local media tools. Every call runs as a job: the engine gets a ticket at once, and `settle()` delivers the result when it arrives. Also home to the fix policy, which is pure and decides what to press on a review screen.
 
-Depends on `@kriya/engine` and `@anthropic-ai/sdk`. Replicate is plain `fetch`.
+Depends on `@kriya/engine` and `@anthropic-ai/sdk`. Replicate and ModelsLab are plain `fetch`.
 
 ## Files
 
@@ -12,6 +12,7 @@ Depends on `@kriya/engine` and `@anthropic-ai/sdk`. Replicate is plain `fetch`.
 | [`anthropic.ts`](src/anthropic.ts) | `anthropicExecutors`: `llm.write` / `llm.vision` with structured outputs, `llm.research` with web search and fetch (D-74), the judge (`check`), agent turns; prices; `describeError` (D-54, D-63) |
 | [`chat.ts`](src/chat.ts) | `claudeChat`: a step's chat (D-87), one Claude call per message, answering with words and actions (lock, make, patch, change a facet for the run, keep it, D-88) as structured output; `briefText`, the step in words, with what the creator points at with @ (D-96). `claudeRunChat`: the whole run's chat (D-95), the same actions each naming its step; `runBriefText`, the run in words |
 | [`replicate.ts`](src/replicate.ts) | `replicateExecutors`: `image.generate`, `image.edit`, `video.from_image`, `audio.speech`, `audio.music`; the job ledger; throttle handling (D-56, D-58, D-69) |
+| [`modelslab.ts`](src/modelslab.ts) | `modelslabExecutors`: the same five capabilities on ModelsLab (Nano Banana, Wan, Kling, ElevenLabs…), with Replicate's request builders; key in the body, errors read from it, jobs fetched at `fetch/<id>` and kept in the ledger; at most 4 out at once (D-99) |
 | [`tools.ts`](src/tools.ts) | `mediaTools`: `crop`, `compress`, `assemble_reel`, `extract_frames`, `stills`, `attach`, `insert_caricatures`, run locally as jobs (D-62, D-80); each result is pinned to a hash of the code and worker that made it (D-93) |
 | [`workers/assemble_reel.py`](workers/assemble_reel.py) | The Reel assembler: Python, Pillow and ffmpeg; reads a manifest, prints one JSON line |
 | [`workers/insert_caricatures.py`](workers/insert_caricatures.py) | Cuts caricatures into a video at their moments (group, one each, or over the frozen frame); same manifest-in, JSON-line-out shape |

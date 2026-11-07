@@ -33,7 +33,7 @@ Every call records: provider, **exact model version** (e.g. Replicate version ha
 
 **Creators bring their own keys** ([Decision D-09](17-decisions.md)). Model costs bill to their accounts; the platform shows estimates before each run.
 
-- v0.1: `.env` (`REPLICATE_API_TOKEN`, `ANTHROPIC_API_KEY`). Never committed.
+- v0.1: `.env` (`REPLICATE_API_TOKEN`, `MODELSLAB_API_KEY`, `ANTHROPIC_API_KEY`). Never committed.
 - Later (hosted): a guided "Connect Replicate" step during setup (opens the provider page, paste once, verify it works), stored with envelope encryption; clear errors when a key is missing or out of credit.
 
 The model dropdown in the builder only shows models for which a key is connected.
@@ -70,12 +70,13 @@ The tools run on the creator's machine with ffmpeg, as jobs like model calls (D-
 
 ## Which providers at launch
 
-Three providers in v0.1, each with one job ([D-31](17-decisions.md)):
+Three providers in v0.1, each with one job ([D-31](17-decisions.md)), then ModelsLab as a second home for media ([D-99](17-decisions.md)):
 
 | Provider | Role | Capabilities |
 |---|---|---|
 | **Anthropic** | Reasoning and navigation: agents, checkers, shot lists, the builder assistant | `llm.write`, `llm.vision` |
 | **Replicate** | Real media generation | `image.generate`, `image.edit`, `video.from_image`, `audio.speech`, `audio.music` |
+| **ModelsLab** | The same media, per kind instead of Replicate ([D-99](17-decisions.md)): Nano Banana, Wan 2.7, Kling, Seedance, ElevenLabs | `image.generate`, `image.edit`, `video.from_image`, `audio.speech`, `audio.music` |
 | **Fake** | Quick testing and the no-keys demo: canned outputs for every capability, $0, deterministic | All |
 
 Anything else runs through **manual mode** until it earns an adapter.

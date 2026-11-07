@@ -59,6 +59,7 @@ packages/adapters/src/
   jobs.ts          in-flight provider calls as tickets; settle() delivers them (D-53)
   anthropic.ts     Claude: llm.write / llm.vision steps and agent turns (D-54)
   replicate.ts     Replicate: images (Nano Banana), clips (Wan), voice (Gemini TTS), music (Lyria); job ledger (D-56, D-58)
+  modelslab.ts     ModelsLab: the same capabilities per kind instead of Replicate (Nano Banana, Wan, Kling, ElevenLabs) (D-99)
   duration.ts      length of a WAV or MP4 from its bytes
   schema.ts        a step's `out` types as a strict JSON Schema
   tools.ts         local tools on ffmpeg: crop, compress, assemble_reel, run as jobs (D-62)
