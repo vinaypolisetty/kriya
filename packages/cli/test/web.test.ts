@@ -178,6 +178,11 @@ describe("kriya web: the inbox over HTTP (Day 22)", () => {
       expect(one.trail.map((t) => t.label)).toEqual(["part_recipe", "S2"]);
       expect(one.nodes.find((n) => n.key === "per_shot[S2].pick")!.status).toBe("awaiting_human");
       expect((await fetch(`${web.url}/api/runs/part/graph?at=nope[x]`)).status).toBe(400);
+      // What a step chat's @ list offers (D-96): the run's own steps nearest first, then other items'.
+      const refs = (await (await fetch(`${web.url}/api/runs/part/refs?key=${encodeURIComponent("per_shot[S1].draw")}`)).json()) as { refs: { ref: string; kind: string }[] };
+      expect(refs.refs[0]).toMatchObject({ ref: "shot_list", kind: "step" });
+      expect(refs.refs.map((r) => r.ref)).toContain("per_shot[S2].draw");
+      expect((await fetch(`${web.url}/api/runs/part/refs?key=nope`)).status).toBe(400);
 
       // The Inputs box: what the run, and each item, was started with; every decision with what it was made on.
       expect(((await (await fetch(`${web.url}/api/runs/part/graph`)).json()) as { given: unknown }).given).toEqual({ part_no: 3, story_pages: "x" });

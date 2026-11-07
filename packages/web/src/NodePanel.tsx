@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { branchOff, retry, say, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunGraph, type TraceLine, type TraceView } from "./api";
 import { statusOf } from "./Graph";
+import { MentionBox, Said, useRefs } from "./Mentions";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 
@@ -39,13 +40,15 @@ export function NodePanel({ n, run, chat = true }: { n: GNode; run: string; chat
 /**
  * Talk to this step (D-87): ask about its versions, or say what you want
  * ("make v2 at night", "lock v3, the smile reads"). The chat answers and does
- * what a click could; what it did is listed under its answer.
+ * what a click could; what it did is listed under its answer. Type @ to point
+ * at the Library or another step (D-96).
  */
 export function Chat({ run, n }: { run: string; n: GNode }) {
   const [text, setText] = useState("");
   const [sent, setSent] = useState<string>();
   const [error, setError] = useState<string>();
   const thread = n.thread ?? [];
+  const refs = useRefs(run, n.key);
   // A long talk scrolls (under a review it's capped): keep the newest in view.
   const end = useRef<HTMLOListElement>(null);
   useEffect(() => {
@@ -69,12 +72,12 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
   return (
     <section className="chat">
       <h3>Talk to this step</h3>
-      {thread.length === 0 && !sent && <p className="muted small">Ask about its versions, or say what you want: "make v2 at night", "lock v3, the smile reads".</p>}
+      {thread.length === 0 && !sent && <p className="muted small">Ask about its versions, or say what you want: "make v2 at night", "lock v3, the smile reads". Type @ to point at the Library or another step.</p>}
       {(thread.length > 0 || sent) && (
         <ol className="thread" ref={end}>
           {thread.map((t, i) => (
             <li key={i} className={`said ${t.by}`}>
-              <p>{t.text}</p>
+              <p><Said text={t.text} refs={refs} /></p>
               {t.did?.map((d, j) => (
                 <p key={j} className="did">{d}</p>
               ))}
@@ -91,11 +94,12 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
           void send();
         }}
       >
-        <textarea
+        <MentionBox
           value={text}
+          refs={refs}
           rows={2}
           aria-label={`Say something to ${n.name}`}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();

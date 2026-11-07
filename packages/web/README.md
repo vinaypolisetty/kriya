@@ -13,6 +13,7 @@ React 19 and Vite. No router or state library: routes live in the URL hash, and 
 | [`Graph.tsx`](src/Graph.tsx) | A run's recipe as a graph (desktop) or a step list (phone, `useNarrow`). Boxes open in place, and the Inputs box and video steps play their video. On desktop it's a canvas: zoom with pinch, ⌘-scroll, ⌘+/−/0 or the corner buttons; pan by scrolling or dragging empty space |
 | [`simple.ts`](src/simple.ts) | The simple view: only the steps a person acts on, with every moment, drawing and page a node on one graph |
 | [`NodePanel.tsx`](src/NodePanel.tsx) | One step: state, why, version tree by branch, Branch off / Switch here, Try again |
+| [`Mentions.tsx`](src/Mentions.tsx) | @ in a step's chat (D-96): the text box's list of what to point at, and a message with its refs marked |
 | [`Screen.tsx`](src/Screen.tsx) | The review: the big preview, candidates, checks, suggestion, note, marked area, buttons; batches. `embedded` is the one-tap version inside a box on the graph |
 | [`Region.tsx`](src/Region.tsx) | Drag on an image to mark an area (`x,y,w,h` fractions) |
 | [`Library.tsx`](src/Library.tsx) | The Library, read-only: entities by kind; one entity's facets and history |
