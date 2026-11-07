@@ -45,10 +45,13 @@ export function NodePanel({ n, run, chat = true }: { n: GNode; run: string; chat
  */
 export function Chat({ run, n }: { run: string; n: GNode }) {
   const [text, setText] = useState("");
-  const [sent, setSent] = useState<string>();
+  // What you said and where the thread ended then, until the chat has answered.
+  const [sent, setSent] = useState<{ text: string; at: number }>();
   const [error, setError] = useState<string>();
   const thread = n.thread ?? [];
   const refs = useRefs(run, n.key);
+  // It's recorded before the chat thinks, so the thread shows it within a moment: then our own copy goes.
+  const heard = !!sent && thread.slice(sent.at).some((t) => t.by === "you" && t.text === sent.text);
   // A long talk scrolls (under a review it's capped): keep the newest in view.
   const end = useRef<HTMLOListElement>(null);
   useEffect(() => {
@@ -58,12 +61,14 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
   const send = async () => {
     const said = text.trim();
     if (!said || sent) return;
-    setSent(said);
+    setSent({ text: said, at: thread.length });
+    setText("");
     setError(undefined);
     try {
       await say(run, n.key, said);
-      setText("");
     } catch (e) {
+      // Not heard: give the words back to try again.
+      setText(said);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSent(undefined);
@@ -83,7 +88,7 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
               ))}
             </li>
           ))}
-          {sent && <li className="said you"><p>{sent}</p></li>}
+          {sent && !heard && <li className="said you"><p>{sent.text}</p></li>}
           {sent && <li className="said kriya muted"><p>Thinking…</p></li>}
         </ol>
       )}
