@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import Anthropic from "@anthropic-ai/sdk";
-import { briefText, claudeChat, type ChatBrief, type Media } from "../src/index.js";
+import { briefText, claudeChat, claudeRunChat, runBriefText, type ChatBrief, type Media, type RunChatBrief } from "../src/index.js";
 
 /** A step's chat on Claude (D-87): what it's sent, and how its answer is read. */
 
@@ -116,5 +116,53 @@ describe("briefText", () => {
     expect(t).toContain('- shot_list: {"hook":"the tanker never came"}');
     expect(t).toContain('Library facets it uses:\n- Mitra.look (from the Library): {"image":"sheets/mitra.png","words":"a thin 60-year-old bald man"}');
     expect(t).toContain("In the Library: Mitra (character): look, voice, speech");
+  });
+});
+
+const runBrief = (over: Partial<RunChatBrief> = {}): RunChatBrief => ({
+  run: { id: "alien-3", recipe: "episode" },
+  finished: false,
+  steps: ["- shot_list: Break it into shots (model) · locked · v1, locked v1", "- per_shot[P3-04].draw: Draw the shot (model) · waiting for you · v1–v3"],
+  whole: [{ ...brief(), step: { key: "shot_list", name: "Break it into shots", kind: "model", asks: "Turn these pages into shots", makes: ["shots (list<shot>)"] }, shapes: ["shot: id (text), action (text)"], versions: [{ n: 1, branch: "main", locked: true, intention: "from recipe", output: { shots: [{ id: "P3-05", action: "Mitra at the tap" }] } }] }],
+  library: ["Mitra (character): look, voice, speech"],
+  story: { inputs: { part_no: 3 }, locked: [{ key: "per_shot[P3-04].draw", value: { image: "(media)" } }] },
+  thread: [{ by: "you", text: "hi" }, { by: "kriya", text: "Hello." }],
+  message: "add a shot after P3-05 where Mitra spots the leak",
+  ...over,
+});
+
+describe("claudeRunChat (D-95)", () => {
+  it("sends the conversation, then the run in words and the message, and every action names its step", async () => {
+    const { client, requests } = fakeClient({
+      reply: "Added P3-05a.",
+      actions: [
+        { step: "shot_list", do: "patch", version: 1, why: "", instruction: "", how: "edit", edits: '[{"op":"add"}]', entity: "", facet: "", field: "", value: "" },
+        { step: "", do: "change", version: 0, why: "", instruction: "", how: "edit", edits: "", entity: "Mitra", facet: "voice", field: "words", value: "older" },
+      ],
+    });
+    const r = await claudeRunChat({ client })(runBrief());
+    const [req] = requests;
+    expect(req!.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    const last = req!.messages[2]!.content as { type: string; text?: string }[];
+    expect(last.map((b) => b.type)).toEqual(["text", "text"]); // no pictures
+    expect(last[1]!.text).toBe("The person says: add a shot after P3-05 where Mitra spots the leak");
+    expect(req!.output_config.format.schema).toMatchObject({ properties: { actions: { items: { required: expect.arrayContaining(["step", "do", "edits"]) } } } });
+    expect(r.actions).toEqual([
+      { step: "shot_list", do: "patch", from: 1, edits: '[{"op":"add"}]' },
+      { step: "", do: "change", entity: "Mitra", facet: "voice", field: "words", value: "older" },
+    ]);
+  });
+});
+
+describe("runBriefText (D-95)", () => {
+  it("lists every step in a line, shows the run's own steps whole, then the Library and the story", () => {
+    const t = runBriefText(runBrief());
+    expect(t).toContain("Run: alien-3 (recipe episode). It's in progress.");
+    expect(t).toContain("Its steps, a line each:\n- shot_list: Break it into shots (model) · locked · v1, locked v1\n- per_shot[P3-04].draw");
+    expect(t).toContain("Step: Break it into shots (shot_list, a model step).");
+    expect(t).toContain('v1 (locked): from recipe\n  output: {"shots":[{"id":"P3-05","action":"Mitra at the tap"}]}');
+    expect(t).toContain("What its lists hold:\nshot: id (text), action (text)");
+    expect(t).toContain('- per_shot[P3-04].draw: {"image":"(media)"}');
+    expect(runBriefText(runBrief({ finished: true }))).toContain("It's finished, so it's frozen.");
   });
 });

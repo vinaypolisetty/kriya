@@ -3,7 +3,7 @@
  * with no keys and no cost. Outputs are made up from each step's declared
  * `out` types, so the recipe's own conditions and maps still work.
  */
-import type { Chat } from "@kriya/adapters";
+import type { Chat, RunChat } from "@kriya/adapters";
 import { libraryKind, type Executors, type Graph, type Node, type StepContext, type Tools } from "@kriya/engine";
 
 /** The Library's names by kind; fake outputs use real names where a field is typed `library.<kind>`. */
@@ -61,6 +61,20 @@ export const fakeChat: Chat = async (brief) => {
   }
   const pointed = brief.points.length ? ` You pointed at: ${brief.points.map((p) => `${p.ref} (${p.what})`).join("; ")}.` : "";
   return { text: `(fake chat) ${brief.step.name} has ${brief.versions.length} version${brief.versions.length === 1 ? "" : "s"}. You said: ${said}${pointed}`, actions: [], ...usage };
+};
+
+/**
+ * The run's chat in fake mode (D-95), no key, no cost: "<step>: <words>" says the words to that
+ * step's fake chat ("shot_list: patch [...]", "per_shot[S1].draw: lock v2"); a facet's set or keep
+ * needs no step; anything else gets an echo.
+ */
+export const fakeRunChat: RunChat = async (brief) => {
+  const to = /^(\S+):\s+(.+)$/s.exec(brief.message);
+  const step = to?.[1] ?? "";
+  const seen = brief.whole.find((w) => w.step.key === step) ?? { step: { key: step, name: step, kind: "model", asks: "", makes: [] }, shapes: [], canEdit: false, versions: [], facets: [] };
+  const r = await fakeChat({ ...seen, finished: brief.finished, library: brief.library, story: brief.story, points: [], images: [], thread: [], message: to?.[2] ?? brief.message });
+  if (r.actions.length === 0) return { ...r, actions: [], text: `(fake chat) ${brief.run.id} has ${brief.steps.length} step${brief.steps.length === 1 ? "" : "s"} going. You said: ${brief.message}` };
+  return { ...r, actions: r.actions.map((a) => ({ ...a, step: a.do === "change" || a.do === "keep" ? "" : step })) };
 };
 
 /** Tools that do nothing but say what they were asked (fake mode; real tools arrive on Day 19). */

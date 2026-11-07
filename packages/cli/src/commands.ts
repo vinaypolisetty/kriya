@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
 import { answerTip, preventFor, projectTips } from "./kb.js";
-import { chatFor, parseEdits, recipeOf, talk, threadLines } from "./chat.js";
+import { chatFor, parseEdits, recipeOf, runChatFor, talk, talkRun, threadLines } from "./chat.js";
 import { trace } from "./trace.js";
 import { libraryAssets } from "./library.js";
 import { loadProject, namesOf, releaseOf, UserError, type Project } from "./project.js";
@@ -50,7 +50,7 @@ const HELP = `kriya: run recipes with people in the loop
                                                   merge two versions: base, taking what the note says from <from>
   kriya patch <run> <step> <version> <edits> [--note text]
                                                   a new version with items added, changed, removed or moved by key; the rest kept exactly
-  kriya chat <run> <step> [message]               talk to a step about its versions: ask, lock or change by saying so
+  kriya chat <run> [step] [message]               talk to the run, or one step: ask, lock or change by saying so
 
 Values starting with @ are read from a file: --input story_pages=@pages.txt`;
 
@@ -805,25 +805,30 @@ function versionNamed(n: NodeState, name: string): string {
 }
 
 /**
- * Talks to one step (D-87): with no message, its conversation so far; with
- * one, the chat answers and does what it was asked (a lock, a new version),
- * and the run carries on.
+ * Talks to one step (D-87), or to the whole run when the word after the run
+ * isn't one of its steps (D-95): with no message, the conversation so far;
+ * with one, the chat answers and does what it was asked (a lock, a new
+ * version), and the run carries on.
  */
 async function chatCommand(args: string[], io: IO): Promise<number> {
-  const [id, step, ...words] = args;
-  if (!id || !step) throw new UserError('say which run and step: kriya chat <run> <step> "why is v2 darker?"');
+  const [id, ...rest] = args;
+  if (!id) throw new UserError('say which run: kriya chat <run> "add a shot after P3-05", or to one step: kriya chat <run> <step> "why is v2 darker?"');
   const project = checkedProject(io);
   const store = openStore(join(project.root, ".kriya"));
   try {
     const { rec, s, jobs } = await openRun(project, store, id, io);
-    const n = rec.state.nodes[step];
-    if (!n) throw new UserError(`there's no step '${step}' in ${id} yet${suggest(step, Object.keys(rec.state.nodes))}`);
+    const step = rest[0] !== undefined && rec.state.nodes[rest[0]] ? rest[0] : undefined;
+    // A first word shaped like a step key (per_shot[P3-04].draw, shot_list) that isn't one is a mistyped step, not a message to the run.
+    if (!step && rest[0] !== undefined && /^[\w-]+(\[[^\]\s]+\])?(\.[\w-]+)*$/.test(rest[0]) && /[[._]/.test(rest[0])) {
+      throw new UserError(`there's no step '${rest[0]}' in ${id} yet${suggest(rest[0]!, Object.keys(rec.state.nodes))}`);
+    }
+    const words = step ? rest.slice(1) : rest;
     if (words.length === 0) {
-      const lines = threadLines(n);
-      io.out(lines.length ? lines.join("\n") : `Nothing said to ${step} yet. Say something: kriya chat ${id} ${step} "why is v2 darker?"`);
+      const lines = threadLines(step ? rec.state.nodes[step]! : rec.state);
+      io.out(lines.length ? lines.join("\n") : step ? `Nothing said to ${step} yet. Say something: kriya chat ${id} ${step} "why is v2 darker?"` : `Nothing said to ${id} yet. Say something: kriya chat ${id} "add a shot after P3-05"`);
       return 0;
     }
-    const { reply, did } = await talk(project, s, chatFor(project, projectMedia(project, store)), step, words.join(" "));
+    const { reply, did } = step ? await talk(project, s, chatFor(project, projectMedia(project, store)), step, words.join(" ")) : await talkRun(project, s, runChatFor(project), id, words.join(" "));
     io.out(`kriya: ${reply.text}`);
     for (const d of did) io.out(`  · ${d}`);
     if (rec.state.status === "running") await drive(s, jobs, io, true);

@@ -1,8 +1,8 @@
 /** One step of a run, inside its box on the graph: its state, why, what it made, and its conversation (D-87). */
 import { useEffect, useRef, useState } from "react";
-import { branchOff, retry, say, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunGraph, type TraceLine, type TraceView } from "./api";
+import { branchOff, retry, say, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunChatEntry, type RunGraph, type TraceLine, type TraceView } from "./api";
 import { statusOf } from "./Graph";
-import { MentionBox, Said, useRefs } from "./Mentions";
+import { MentionBox, Said, useRefs, type Ref } from "./Mentions";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 
@@ -44,12 +44,26 @@ export function NodePanel({ n, run, chat = true }: { n: GNode; run: string; chat
  * at the Library or another step (D-96).
  */
 export function Chat({ run, n }: { run: string; n: GNode }) {
+  const refs = useRefs(run, n.key);
+  return (
+    <Talk
+      title="Talk to this step"
+      label={`Say something to ${n.name}`}
+      hint='Ask about its versions, or say what you want: "make v2 at night", "lock v3, the smile reads". Type @ to point at the Library or another step.'
+      placeholder={n.versions.length > 1 ? `e.g. why is v${n.versions.length} darker?` : "e.g. make it night"}
+      thread={n.thread ?? []}
+      refs={refs}
+      onSay={(text) => say(run, n.key, text)}
+    />
+  );
+}
+
+/** A conversation and the box to add to it: a step's (D-87) or the whole run's (D-95). What the chat did is listed under its answer; `refs` is what @ can point at (D-96), none in the run's chat yet. */
+export function Talk({ title, label, hint, placeholder, thread, refs = [], onSay }: { title: string; label: string; hint: string; placeholder: string; thread: RunChatEntry[]; refs?: Ref[]; onSay: (text: string) => Promise<unknown> }) {
   const [text, setText] = useState("");
   // What you said and where the thread ended then, until the chat has answered.
   const [sent, setSent] = useState<{ text: string; at: number }>();
   const [error, setError] = useState<string>();
-  const thread = n.thread ?? [];
-  const refs = useRefs(run, n.key);
   // It's recorded before the chat thinks, so the thread shows it within a moment: then our own copy goes.
   const heard = !!sent && thread.slice(sent.at).some((t) => t.by === "you" && t.text === sent.text);
   // A long talk scrolls (under a review it's capped): keep the newest in view.
@@ -65,7 +79,7 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
     setText("");
     setError(undefined);
     try {
-      await say(run, n.key, said);
+      await onSay(said);
     } catch (e) {
       // Not heard: give the words back to try again.
       setText(said);
@@ -76,8 +90,8 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
   };
   return (
     <section className="chat">
-      <h3>Talk to this step</h3>
-      {thread.length === 0 && !sent && <p className="muted small">Ask about its versions, or say what you want: "make v2 at night", "lock v3, the smile reads". Type @ to point at the Library or another step.</p>}
+      <h3>{title}</h3>
+      {thread.length === 0 && !sent && <p className="muted small">{hint}</p>}
       {(thread.length > 0 || sent) && (
         <ol className="thread" ref={end}>
           {thread.map((t, i) => (
@@ -103,7 +117,7 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
           value={text}
           refs={refs}
           rows={2}
-          aria-label={`Say something to ${n.name}`}
+          aria-label={label}
           onChange={setText}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -111,7 +125,7 @@ export function Chat({ run, n }: { run: string; n: GNode }) {
               e.currentTarget.form?.requestSubmit();
             }
           }}
-          placeholder={n.versions.length > 1 ? `e.g. why is v${n.versions.length} darker?` : "e.g. make it night"}
+          placeholder={placeholder}
           disabled={!!sent}
         />
         <button type="submit" className="primary" disabled={!text.trim() || !!sent}>{sent ? "…" : "Send"}</button>

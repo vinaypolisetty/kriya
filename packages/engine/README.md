@@ -35,7 +35,7 @@ s.inbox();                                                  // what's waiting on
 replay(readRun(eventLog, "run-1"));                         // equals rec.state, always
 ```
 
-What the scheduler can do to a run: `run`, `recover`, `inbox`, `answer`, `lock`, `writeVersion`, `patch` (a version changed by item key, D-89), `rebuild` (stale work, and takes waiting for a review that are `outdated`, D-90), `retry`, `keep`, `branch`, `switchBranch`, `adopt`, `replayChange`, `make` (a version asked for from a step's chat, D-87), `choose` (a lock by word: answers the waiting screen if there is one), `said` / `answered` (the step's conversation), `updateContext`, `override`, `mention`, `removeDefault`, `assetsChanged`, `unblock`. Jobs come back through `deliver`, `deliverTool`, `deliverTurn`, `deliverVerdicts` and `failJob`.
+What the scheduler can do to a run: `run`, `recover`, `inbox`, `answer`, `lock`, `writeVersion`, `patch` (a version changed by item key, D-89), `rebuild` (stale work, and takes waiting for a review that are `outdated`, D-90), `retry`, `keep`, `branch`, `switchBranch`, `adopt`, `replayChange`, `make` (a version asked for from a step's chat, D-87), `choose` (a lock by word: answers the waiting screen if there is one), `said` / `answered` (the step's conversation, or the run's with no step, D-95), `updateContext`, `override`, `mention`, `removeDefault`, `assetsChanged`, `unblock`. Jobs come back through `deliver`, `deliverTool`, `deliverTurn`, `deliverVerdicts` and `failJob`.
 
 What it asks of the outside world:
 

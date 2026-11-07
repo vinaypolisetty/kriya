@@ -101,6 +101,9 @@ export type NodeState = {
 /** One message in a step's conversation: the creator's (`you`) or the chat's answer (`kriya`), on the branch it was said on. */
 export type ChatEntry = { by: "you" | "kriya"; text: string; branch: string; did?: string[]; model?: string; costUsd?: number };
 
+/** One message in the run's own conversation (D-95): a run has no branches, so none is named. */
+export type RunChatEntry = Omit<ChatEntry, "branch">;
+
 export type RunState = {
   release: string;
   graph: string;
@@ -113,6 +116,8 @@ export type RunState = {
   context: Record<string, Record<string, unknown>>;
   /** Facet overrides: scope (a step key, or `run`) → `Entity.facet` → value. */
   overrides: Record<string, Record<string, unknown>>;
+  /** The run's own conversation, oldest first (D-95): what was said to the whole run, not to one step. */
+  thread: RunChatEntry[];
   costUsd: number;
 };
 
@@ -138,11 +143,15 @@ const newNode = (): NodeState => ({
 export function apply(state: RunState | undefined, e: EngineEvent): RunState {
   if (e.type === "RunStarted") {
     if (state) fail(e, "the run has already started");
-    return { release: e.release, graph: e.graph, inputs: e.inputs, status: "running", nodes: {}, edges: {}, context: e.context, overrides: {}, costUsd: 0 };
+    return { release: e.release, graph: e.graph, inputs: e.inputs, status: "running", nodes: {}, edges: {}, context: e.context, overrides: {}, thread: [], costUsd: 0 };
   }
   if (!state) fail(e, "it came before RunStarted");
   // Talking about a step changes no work, so it's allowed in a finished run too (D-87).
   if (e.type === "ChatSaid" || e.type === "ChatAnswered") {
+    if (e.node === undefined) {
+      const entry: RunChatEntry = e.type === "ChatSaid" ? { by: "you", text: e.text } : { by: "kriya", text: e.text, did: e.did, model: e.model, costUsd: e.cost_usd };
+      return { ...state, thread: [...state.thread, entry], costUsd: state.costUsd + (e.type === "ChatAnswered" ? e.cost_usd : 0) };
+    }
     const n = state.nodes[e.node];
     if (!n) fail(e, `step '${e.node}' hasn't started, so there's nothing to talk about yet`);
     const entry: ChatEntry = e.type === "ChatSaid" ? { by: "you", text: e.text, branch: n.branch } : { by: "kriya", text: e.text, branch: n.branch, did: e.did, model: e.model, costUsd: e.cost_usd };

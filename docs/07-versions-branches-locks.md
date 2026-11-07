@@ -38,6 +38,8 @@ Every model, agent and tool step has a conversation of its own ([D-87](17-decisi
 - **A finished run is done and frozen.** You can talk about it; nothing in it is locked, made or changed, and a Library change doesn't make it stale: it keeps the voices and looks it was made with. Worked on again, it catches up.
 - **In a run still going, a lock that leaves later work stale rebuilds it** at once: in progress follows the change.
 
+**Or talk to the whole run** ([D-95](17-decisions.md)): `kriya chat <run> "add a shot after P3-05"`, or **Talk to this run** beside the graph. You don't find the step first: the run's chat sees every step in a line and the run's own steps (the shot list, the Reel) whole, picks the step from what you said, and does there exactly what that step's chat would, naming the step on each line ("Break it into shots: made v2 from v1: added P3-05a after P3-05"). It sees no pictures, so for how a panel looks it sends you to that step. Its conversation is kept on the run.
+
 Every message, answer and action is an event, recorded once and replayed (rule 1). The conversation never leaves the step: only its locked version and your lock's why flow downstream ([D-11](17-decisions.md), [D-29](17-decisions.md)).
 
 Not built yet: @references to other steps' versions, and changes for one step only.

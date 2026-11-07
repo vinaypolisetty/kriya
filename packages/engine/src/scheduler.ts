@@ -1638,14 +1638,14 @@ export class Scheduler {
     this.lock(key, version, why);
   }
 
-  /** Records what the creator said in a step's chat. Talking changes no work, so a finished run stays finished. */
-  said(key: string, text: string): void {
-    this.atomic(() => this.rec.record({ type: "ChatSaid", node: key, text }));
+  /** Records what the creator said in a step's chat, or the run's with no step (D-95). Talking changes no work, so a finished run stays finished. */
+  said(key: string | undefined, text: string): void {
+    this.atomic(() => this.rec.record({ type: "ChatSaid", ...(key === undefined ? {} : { node: key }), text }));
   }
 
   /** Records the chat's answer: its words, what it did, and the call's model and cost. */
-  answered(key: string, a: { text: string; did: string[]; model: string; cost_usd: number }): void {
-    this.atomic(() => this.rec.record({ type: "ChatAnswered", node: key, ...a }));
+  answered(key: string | undefined, a: { text: string; did: string[]; model: string; cost_usd: number }): void {
+    this.atomic(() => this.rec.record({ type: "ChatAnswered", ...(key === undefined ? {} : { node: key }), ...a }));
   }
 
   // ── Cache keys and stale (docs/03-engine.md §6) ─────────────────────────
