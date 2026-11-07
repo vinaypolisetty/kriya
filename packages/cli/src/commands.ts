@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse, stringify } from "yaml";
 import { findGraph, formatProblems, numbers, Recorder, Scheduler, suggest, type Blobs, type EventSink, type Judged, type Executors, type InboxItem, type NodeState, type RunState } from "@kriya/engine";
-import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, TIP_AFTER, MissingKey, MissingToken, replicateExecutors, settle, type FixRule, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
+import { anthropicExecutors, describeError, EXT, Jobs, mediaTools, MIME, sniff, suggestFix, TIP_AFTER, MissingKey, MissingModelsLabKey, MissingToken, modelslabExecutors, replicateExecutors, settle, type FixRule, type Ledger, type Media, type ReplicateCapability } from "@kriya/adapters";
 import { createHash } from "node:crypto";
 import { openStore, type Store } from "@kriya/store";
 import { fakeExecutors, fakeTools } from "./fake.js";
@@ -29,7 +29,7 @@ const HELP = `kriya: run recipes with people in the loop
 
   kriya init <folder> [--example <name>]          start a project (examples: kriya init --examples)
   kriya run <recipe> [--input name=value]… [--id name]
-                                                  start a run (models from kriya.yaml: fake, anthropic, replicate)
+                                                  start a run (models from kriya.yaml: fake, anthropic, replicate, modelslab)
   kriya status [run]                              your runs, or one run's steps (looking never spends)
   kriya resume <run>                              carry a run on after a crash or a closed terminal
   kriya show <run> [step] [version]               what a run made: every step, or one step's full output
@@ -890,24 +890,28 @@ const autoDecide = (rules: FixRule[]): Executors["decide"] => (node, ctx) => {
   return { ...d, by: "auto" };
 };
 
-/** Steps of each kind of media that Replicate runs, from `models:` in kriya.yaml. */
+/** Steps of each kind of media, run by the provider `models:` in kriya.yaml names for that kind (any real one, if none is asked). */
 const MEDIA: Record<"image" | "video" | "audio", ReplicateCapability[]> = {
   image: ["image.generate", "image.edit"],
   video: ["video.from_image"],
   audio: ["audio.speech", "audio.music"],
 };
-const realMedia = (project: Project): ReplicateCapability[] =>
-  (Object.keys(MEDIA) as (keyof typeof MEDIA)[]).flatMap((k) => (project.settings.models[k] === "replicate" ? MEDIA[k] : []));
+const realMedia = (project: Project, by?: "replicate" | "modelslab"): ReplicateCapability[] =>
+  (Object.keys(MEDIA) as (keyof typeof MEDIA)[]).flatMap((k) => {
+    const p = project.settings.models[k];
+    return p && p !== "fake" && (!by || p === by) ? MEDIA[k] : [];
+  });
 
 /**
  * Which models run the steps. `fake` (the default) makes up outputs, no keys, no
  * cost. `anthropic` sends text, vision and agent steps to Claude; `replicate`
- * runs images, clips and audio, per kind (keys from `.env`).
+ * or `modelslab` runs images, clips and audio, per kind (keys from `.env`).
  */
 function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType<typeof fakeTools>): Executors {
   const fake = fakeExecutors(project.graphs, namesOf(project));
   const models = project.settings.models;
   const media = realMedia(project);
+  const [onReplicate, onModelsLab] = [realMedia(project, "replicate"), realMedia(project, "modelslab")];
   const toolRun = project.settings.tools;
   if (models.llm !== "anthropic" && media.length === 0 && toolRun === "fake") return { ...fake, decide: autoDecide(project.kb.rules) };
   const env = join(project.root, ".env");
@@ -924,7 +928,8 @@ function executors(project: Project, store: Store, jobs: Jobs, tools: ReturnType
           ...(toolRun.font ? { font: resolve(project.root, toolRun.font) } : {}),
         })]
       : []),
-    ...(media.length ? [replicateExecutors({ graphs: project.graphs, jobs, prevent, media: projectMedia(project, store), ledger: fileLedger(project), capabilities: media, ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
+    ...(onReplicate.length ? [replicateExecutors({ graphs: project.graphs, jobs, prevent, media: projectMedia(project, store), ledger: fileLedger(project), capabilities: onReplicate, ...(project.settings.replicate ? { models: project.settings.replicate } : {}) })] : []),
+    ...(onModelsLab.length ? [modelslabExecutors({ graphs: project.graphs, jobs, prevent, media: projectMedia(project, store), ledger: fileLedger(project), capabilities: onModelsLab, ...(project.settings.modelslab ? { models: project.settings.modelslab } : {}) })] : []),
   ];
   const claude = models.llm === "anthropic" ? (real.find((r) => "turn" in r) as ReturnType<typeof anthropicExecutors>) : undefined;
   return {
@@ -958,7 +963,7 @@ export function projectMedia(project: Project, store: Store): Media {
   };
 }
 
-/** Replicate prediction ids by idempotency key, one small file each in `.kriya/jobs/`. */
+/** Provider jobs by idempotency key (Replicate prediction ids, ModelsLab fetch links), one small file each in `.kriya/jobs/`. */
 function fileLedger(project: Project): Ledger {
   const dir = join(project.root, ".kriya", "jobs");
   const file = (key: string) => join(dir, `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`);
@@ -984,7 +989,7 @@ export async function drive(s: Scheduler, jobs: Jobs, io: IO, recover = false): 
     if (jobs.size > 0) io.out("  ⏳ waiting on the models…");
     await settle(s, jobs, describeError);
   } catch (e) {
-    if (e instanceof MissingKey || e instanceof MissingToken) throw new NeedsKey(`${e.message}, then carry the run on: kriya resume ${s.runId}`);
+    if (e instanceof MissingKey || e instanceof MissingToken || e instanceof MissingModelsLabKey) throw new NeedsKey(`${e.message}, then carry the run on: kriya resume ${s.runId}`);
     throw e;
   }
 }

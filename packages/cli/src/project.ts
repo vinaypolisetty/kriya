@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
-import { REPLICATE_CAPABILITIES } from "@kriya/adapters";
+import { MODELSLAB_CAPABILITIES, REPLICATE_CAPABILITIES } from "@kriya/adapters";
 import { findGraph, libraryKind, loadDir, suggest, type Graph, type Problem } from "@kriya/engine";
 import { loadKb, type Kb } from "./kb.js";
 import { loadLibrary, type Library } from "./library.js";
@@ -22,8 +22,9 @@ export const ProjectFile = z
     name: z.string().min(1),
     /**
      * Which providers run which steps. `fake` (the default): made-up outputs, no keys.
-     * Per kind of step: `{ llm: anthropic, image: replicate, video: replicate, audio: replicate }`;
-     * kinds left out stay fake. `anthropic` is short for `{ llm: anthropic }`.
+     * Per kind of step: `{ llm: anthropic, image: replicate, video: modelslab, audio: replicate }`;
+     * media kinds run on Replicate or ModelsLab (D-99); kinds left out stay fake.
+     * `anthropic` is short for `{ llm: anthropic }`.
      */
     models: z
       .union([
@@ -31,9 +32,9 @@ export const ProjectFile = z
         z
           .object({
             llm: z.enum(["fake", "anthropic"]).optional(),
-            image: z.enum(["fake", "replicate"]).optional(),
-            video: z.enum(["fake", "replicate"]).optional(),
-            audio: z.enum(["fake", "replicate"]).optional(),
+            image: z.enum(["fake", "replicate", "modelslab"]).optional(),
+            video: z.enum(["fake", "replicate", "modelslab"]).optional(),
+            audio: z.enum(["fake", "replicate", "modelslab"]).optional(),
           })
           .strict(),
       ])
@@ -50,6 +51,26 @@ export const ProjectFile = z
         z
           .object({
             model: z.string().optional(),
+            params: z.record(z.unknown()).optional(),
+            fields: z.object({ prompt: z.string().optional(), images: z.string().optional(), voice: z.string().optional(), style: z.string().optional() }).strict().optional(),
+            price_usd: z.number().nonnegative().optional(),
+            price_per_second_usd: z.number().nonnegative().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    /**
+     * ModelsLab settings per capability, as for Replicate, plus the endpoint the model is asked at:
+     * model (its `model_id`), endpoint (`v7/images/text-to-image`), params sent every time, the
+     * model's input field names, and a price per output or per second. A step's own `model:` and `params:` win.
+     */
+    modelslab: z
+      .record(
+        z.enum(MODELSLAB_CAPABILITIES),
+        z
+          .object({
+            model: z.string().optional(),
+            endpoint: z.string().optional(),
             params: z.record(z.unknown()).optional(),
             fields: z.object({ prompt: z.string().optional(), images: z.string().optional(), voice: z.string().optional(), style: z.string().optional() }).strict().optional(),
             price_usd: z.number().nonnegative().optional(),
@@ -107,6 +128,21 @@ export function releaseOf(graphs: Graph[], graphId: string): string {
     .digest("hex");
 }
 
+/**
+ * A kriya.yaml problem in plain words. `models:` is a word or a map, so a typo
+ * inside it fails both readings: say what was wrong in the closest one, not
+ * "Invalid input". A misspelt choice names the choices and the nearest one.
+ */
+function settingsProblem(issue: z.ZodIssue): string {
+  const i = issue.code === "invalid_union" ? (issue.unionErrors.flatMap((e) => e.issues).sort((a, b) => b.path.length - a.path.length)[0] ?? issue) : issue;
+  const where = i.path.join(".") || "(top)";
+  if (i.code === "invalid_enum_value") {
+    const options = i.options.map(String);
+    return `${where}: there's no '${String(i.received)}'; use ${options.map((o) => `'${o}'`).join(", ")}${suggest(String(i.received), options)}`;
+  }
+  return `${where}: ${i.message}`;
+}
+
 /** Finds kriya.yaml in `from` or a folder above it. */
 export function findRoot(from: string): string | undefined {
   let dir = resolve(from);
@@ -126,10 +162,7 @@ export function loadProject(from: string): Project {
     throw new UserError("kriya.yaml: the Library moved to the library/ folder, one file per entity (e.g. library/mitra.yaml with name, kind and facets). Move each Entity.facet there and delete library: from kriya.yaml; see docs/cli.md");
   }
   const parsed = ProjectFile.safeParse(raw);
-  if (!parsed.success) {
-    const i = parsed.error.issues[0]!;
-    throw new UserError(`kriya.yaml: ${i.path.join(".") || "(top)"}: ${i.message}`);
-  }
+  if (!parsed.success) throw new UserError(`kriya.yaml: ${settingsProblem(parsed.error.issues[0]!)}`);
   const dir = join(root, parsed.data.recipes);
   if (!existsSync(dir)) throw new UserError(`the recipes folder '${parsed.data.recipes}' doesn't exist`);
   const { graphs, problems } = loadDir(dir);

@@ -134,10 +134,13 @@ export class MissingToken extends Error {
 /** A Replicate call that failed for good, in plain words. */
 export class ReplicateError extends Error {}
 
+/** What a step received can't be made into a request (no image to start a clip from, no words to say), in plain words. */
+export class AskError extends Error {}
+
 type Prediction = { id: string; status: string; version: string; output: unknown; error: unknown; metrics?: Record<string, unknown> };
 
 /** What a step's job is asked: the inputs to send, and what to record about them. */
-type Ask = { input: Record<string, unknown>; prompt: string; references: { label: string; ref: string }[] };
+export type Ask = { input: Record<string, unknown>; prompt: string; references: { label: string; ref: string }[] };
 
 export function replicateExecutors(opts: ReplicateOptions): Pick<Executors, "produce"> & { handles(node: Node): boolean } {
   const http = opts.fetch ?? fetch;
@@ -285,7 +288,7 @@ export function replicateExecutors(opts: ReplicateOptions): Pick<Executors, "pro
   };
 }
 
-type Img = { bytes: Uint8Array; mime: string } | { url: string };
+export type Img = { bytes: Uint8Array; mime: string } | { url: string };
 type Facet = { entity: string; facet: string; value: unknown };
 const isFacet = (v: unknown): v is Facet => !!v && typeof v === "object" && "value" in v && "entity" in v;
 const fill = (prompt: string | undefined, sub: (ref: string) => string) => (prompt ?? "").replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, ref: string) => sub(ref));
@@ -302,8 +305,10 @@ const refsIn = (prompt: string | undefined) => new Set([...(prompt ?? "").matchA
  * - Clips: the one image the step received is the start frame; looks bring
  *   their words only (the frame already shows who's who).
  * - Music: words only.
+ *
+ * ModelsLab builds its requests here too: only the calls differ (D-99).
  */
-async function mediaRequest(
+export async function mediaRequest(
   node: Extract<Node, { kind: "model" }>,
   ctx: StepContext,
   field: string,
@@ -324,7 +329,7 @@ async function mediaRequest(
   };
   // A refining `image.generate` is a new drawing of the same shot: the version it replaces goes in its tree but not in the request.
   const parent = node.refines && node.capability === "image.generate" ? undefined : ctx.parent?.output[field];
-  if (makes === "image" && parent !== undefined && !add("the image to edit", parent)) throw new ReplicateError(`the version to edit has no image kriya can read (${String(parent)})`);
+  if (makes === "image" && parent !== undefined && !add("the image to edit", parent)) throw new AskError(`the version to edit has no image kriya can read (${String(parent)})`);
 
   /** A received value as prompt text; images become "image N" and join the references. */
   const words = (ref: string, v: unknown): string => {
@@ -351,7 +356,7 @@ async function mediaRequest(
   if (makes === "image" && images.length) prompt += `\n\nReference images: ${images.map((x, i) => `${i + 1} = ${x.label}`).join("; ")}.`;
   prompt = prompt.trim();
   if (makes === "video" && images.length !== 1) {
-    throw new ReplicateError(
+    throw new AskError(
       images.length === 0
         ? `'${node.id}' makes a clip from an image, and it received none. Add the panel to its uses, e.g. uses: [pick.selected]`
         : `'${node.id}' makes a clip from one image, and it received ${images.length} (${images.map((x) => x.label).join(", ")}). Keep one image in its uses`,
@@ -369,7 +374,7 @@ async function mediaRequest(
 function readSpeech(text: string): { say: string; how?: string; voice?: string } {
   const part = (name: string) => new RegExp(`^${name}:[ \\t]*(.*?)(?=\\n(?:Say|How|Voice):|$(?![\\s\\S]))`, "ms").exec(text)?.[1]?.replace(/\n\s+/g, "\n").trim() || undefined;
   const say = part("Say");
-  if (!say) throw new ReplicateError(`there's no "Say:" line in what was sent, so kriya doesn't know the words: ${text.slice(0, 80)}`);
+  if (!say) throw new AskError(`there's no "Say:" line in what was sent, so kriya doesn't know the words: ${text.slice(0, 80)}`);
   const how = part("How");
   const voice = part("Voice");
   return { say, ...(how ? { how } : {}), ...(voice ? { voice } : {}) };
@@ -383,7 +388,7 @@ function readSpeech(text: string): { say: string; how?: string; voice?: string }
  * style the settings or the step give in `params` (Gemini refuses some styles
  * that lead with it, D-60), then a redo note.
  */
-function speechRequest(
+export function speechRequest(
   node: Extract<Node, { kind: "model" }>,
   ctx: StepContext,
   fields: ModelFields,
@@ -399,9 +404,12 @@ function speechRequest(
   const used = refsIn(node.prompt);
   const sent = ctx.send === undefined ? undefined : readSpeech(ctx.send);
   const say = sent?.say ?? fill(node.prompt, (ref) => text(ctx.uses[ref])).trim();
-  if (!say) throw new ReplicateError(`'${node.id}' says nothing: its prompt is the line to speak, e.g. prompt: "{{item.hinglish}}"`);
+  if (!say) throw new AskError(`'${node.id}' says nothing: its prompt is the line to speak, e.g. prompt: "{{item.hinglish}}"`);
 
+  const textField = fields.prompt ?? "text";
   const styleField = fields.style ?? "prompt";
+  // A model that takes only the words (its style field is its text field) gets no direction: it would be read out.
+  const styled = styleField !== textField;
   const voiceField = fields.voice ?? "voice";
   let voice: string | undefined;
   let voiceOf: string | undefined;
@@ -424,10 +432,10 @@ function speechRequest(
   if (sent) how.splice(0, how.length, ...(sent.how ? [sent.how] : []));
 
   // The speaker's voice beats the settings' default voice; a step's own params beat both.
-  const input: Record<string, unknown> = { ...base, ...(voice ? { [voiceField]: voice } : {}), ...own, ...(sent?.voice ? { [voiceField]: sent.voice } : {}), [fields.prompt ?? "text"]: say };
-  if (how.length) input[styleField] = how.join("\n");
-  else delete input[styleField];
-  const style = input[styleField];
+  const input: Record<string, unknown> = { ...base, ...(voice ? { [voiceField]: voice } : {}), ...own, ...(sent?.voice ? { [voiceField]: sent.voice } : {}), [textField]: say };
+  if (styled && how.length) input[styleField] = how.join("\n");
+  else if (styled) delete input[styleField];
+  const style = styled ? input[styleField] : undefined;
   const prompt = [`Say: ${say}`, typeof style === "string" ? `How: ${style.replace(/\n/g, "\n     ")}` : undefined, input[voiceField] !== undefined ? `Voice: ${String(input[voiceField])}` : undefined].filter(Boolean).join("\n");
   return { input, prompt, references: voice ? [{ label: `${voiceOf}'s voice`, ref: voice }] : [] };
 }
