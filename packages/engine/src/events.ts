@@ -154,13 +154,16 @@ export const EngineEvent = z.discriminatedUnion("type", [
    * used changed while its takes waited for you (D-90).
    */
   on("VersionAsked", { node: NodeKey, from: z.string().optional(), instruction: z.string().min(1).optional() }),
-  /** The creator said something in a step's conversation (D-87). Allowed in a finished run: talking changes nothing. */
-  on("ChatSaid", { node: NodeKey, text: z.string().min(1) }),
   /**
-   * The step's chat answered (D-87): its words, what it did as plain lines ("locked v3"),
-   * each something a click could do, and the call's exact model and cost (rule 6).
+   * The creator said something in a step's conversation (D-87), or to the whole run with no `node`
+   * (D-95). Allowed in a finished run: talking changes nothing.
    */
-  on("ChatAnswered", { node: NodeKey, text: z.string(), did: z.array(z.string()).default([]), model: z.string().min(1), cost_usd: Usd }),
+  on("ChatSaid", { node: NodeKey.optional(), text: z.string().min(1) }),
+  /**
+   * The chat answered (D-87; the run's, with no `node`, D-95): its words, what it did as plain
+   * lines ("locked v3"), each something a click could do, and the call's exact model and cost (rule 6).
+   */
+  on("ChatAnswered", { node: NodeKey.optional(), text: z.string(), did: z.array(z.string()).default([]), model: z.string().min(1), cost_usd: Usd }),
   on("NodeCompleted", { node: NodeKey }),
   on("NodeFailed", { node: NodeKey, reason: z.string().min(1) }),
   on("RunCompleted", { status: z.enum(["completed", "failed", "cancelled"]) }),

@@ -24,8 +24,9 @@
  *                          failed items); a note or inputs left out try it with a change (Q-24)
  *   POST /api/branch       branch off from a version: { run, key, name, from } (Day 26, D-71)
  *   POST /api/switch       switch a step to another of its branches: { run, key, branch }
- *   POST /api/chat         say something to a step (D-87): { run, key, text }; answers { text, did } once the chat
- *                          has answered and done what it was asked (a lock, a new version); the run carries on in the background
+ *   POST /api/chat         say something to a step (D-87): { run, key, text }, or to the whole run with no key (D-95):
+ *                          { run, text }; answers { text, did } once the chat has answered and done what it was asked
+ *                          (a lock, a new version, on the step it names); the run carries on in the background
  *   GET  /api/tips         what keeps failing and the words that would prevent it, and the tips applied (D-76)
  *   POST /api/tips         say yes or no to a tip: { id, answer: "apply" | "dismiss" } (saved in kb.yaml)
  *   GET  /api/recipes      every recipe file, oldest first: its YAML as written, when the file was made,
@@ -66,7 +67,7 @@ import { describeError, sniff, suggestFix, type FixRule } from "@kriya/adapters"
 import { openStore, type Store } from "@kriya/store";
 import { findGraph, intention, numbers, type RunState } from "@kriya/engine";
 import { allInbox, openRun, projectMedia, recipeId, startRun, type Entry, type IO } from "./commands.js";
-import { chatFor, hear, recipeOf, reply } from "./chat.js";
+import { chatFor, hear, hearRun, recipeOf, reply, replyRun, runChatFor } from "./chat.js";
 import { answerTip, projectTips } from "./kb.js";
 import { LiveRuns } from "./live.js";
 import { traceView } from "./trace.js";
@@ -397,7 +398,7 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
       };
     });
     const edges = arrows(g);
-    return { run: id, recipe: g.graph, at, trail, status: rec.state.status, costUsd: rec.state.costUsd, inputs: g.inputs, given: s.inputsAt(prefix) ?? {}, nodes, edges };
+    return { run: id, recipe: g.graph, at, trail, status: rec.state.status, costUsd: rec.state.costUsd, inputs: g.inputs, given: s.inputsAt(prefix) ?? {}, nodes, edges, ...(rec.state.thread.length ? { thread: rec.state.thread } : {}) };
   };
 
   /** A failed step tried again (`kriya retry`), maybe with a change: recorded at once, then the run carries on in the background. */
@@ -424,11 +425,17 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
     );
   };
 
-  /** One message to a step's chat (D-87): answered and recorded at once; a new version or a rebuild carries on in the background. */
+  /** One message to a step's chat (D-87), or the run's with no key (D-95): answered and recorded at once; a new version or a rebuild carries on in the background. */
   const chat = async (body: { run?: unknown; key?: unknown; text?: unknown }) => {
     const { run, key, text } = body;
-    if (typeof run !== "string" || typeof key !== "string" || typeof text !== "string") throw new BadRequest('say which run and step, and what to say: { run, key, text: "why is v2 darker?" }');
+    if (typeof run !== "string" || (key !== undefined && typeof key !== "string") || typeof text !== "string") throw new BadRequest('say which run and what to say, and the step if it\'s for one: { run, text: "add a shot after P3-05" } or { run, key, text: "why is v2 darker?" }');
     const project = current();
+    if (key === undefined) {
+      const brief = await live.change(run, (s) => hearRun(project, s, run, text), { carryOn: false });
+      const r = await runChatFor(project)(brief); // outside the line of writes, as a step's (D-86)
+      const did = await live.change(run, (s) => replyRun(project, s, brief.message, r), { carryOn: r.actions.length > 0 });
+      return { text: r.text, did };
+    }
     const brief = await live.change(run, (s) => hear(project, s, key, text), { carryOn: false });
     // Asked outside the line of writes: a chat thinking for a few seconds holds up no one else's decision (D-86).
     const r = await chatFor(project, projectMedia(project, store))(brief);

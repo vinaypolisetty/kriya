@@ -189,6 +189,22 @@ describe("the conversation itself (D-87)", () => {
   });
 });
 
+describe("talking to the whole run (D-95)", () => {
+  it("is kept on the run, not on any step, costs count, and a finished run stays finished", () => {
+    const { s, rec, events } = finishedShot();
+    s.said(undefined, "add a shot after P3-05");
+    s.answered(undefined, { text: "Added P3-05a.", did: ["Break it into shots: made v2 from v1"], model: "claude-opus-5-5", cost_usd: 0.02 });
+    expect(rec.state.status).toBe("completed");
+    expect(rec.state.thread).toEqual([
+      { by: "you", text: "add a shot after P3-05" },
+      { by: "kriya", text: "Added P3-05a.", did: ["Break it into shots: made v2 from v1"], model: "claude-opus-5-5", costUsd: 0.02 },
+    ]);
+    expect(Object.values(rec.state.nodes).every((n) => n.thread.length === 0)).toBe(true);
+    expect(rec.state.costUsd).toBeCloseTo(0.02);
+    expect(replay(events())).toEqual(rec.state);
+  });
+});
+
 describe("a finished run keeps the Library it was made with (D-88)", () => {
   it("a new facet version leaves it alone; reopened, it catches up", () => {
     let look = "v1";

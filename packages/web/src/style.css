@@ -115,7 +115,8 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 /* the graph */
 .graph-scroll { position: absolute; inset: 0; overflow: auto; scrollbar-width: none; overscroll-behavior: contain; cursor: grab; user-select: none; }
 .graph-scroll.panning { cursor: grabbing; }
-.run-body:has(> .graph-scroll) { min-height: max(320px, calc(100vh - 225px)); }
+.run-body:has(> .graph-scroll), .run-body:has(> .run-graph) { min-height: max(320px, calc(100vh - 225px)); }
+.run-graph { position: relative; flex: 1; min-width: 0; }
 .graph-room { position: relative; }
 .graph-zoom { position: absolute; transform-origin: 0 0; }
 .graph-tools { position: absolute; left: 16px; bottom: 16px; z-index: 3; display: flex; gap: 8px; align-items: center; }
@@ -236,6 +237,9 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 .chat-form { display: flex; gap: 8px; align-items: flex-end; }
 .chat-form textarea { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); resize: vertical; }
 /* under a review the box is as wide as its pictures: the talk stays readable, and a long one scrolls, newest last */
+.run-head-end { display: flex; align-items: center; gap: 12px; }
+.run-chat .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.run-chat .thread { flex: 1; overflow-y: auto; align-content: start; }
 .box-open > .chat { max-width: 760px; margin-top: 12px; }
 .box-open > .chat .thread { max-height: 320px; overflow-y: auto; }
 .version .why { margin: 0; padding: 0 8px 6px; font-size: 11px; line-height: 15px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -291,6 +295,8 @@ button.icon { min-height: 32px; width: 32px; padding: 0; border: 0; font-size: 2
   .run { padding: 6px 10px; border: 1px solid var(--line); }
   .run-head { padding: 12px 16px 0; }
   .run-body { flex-direction: column; }
+  .run-graph { min-height: 60vh; }
+  .run-chat { flex: none; border-left: 0; border-top: 1px solid var(--line); }
   .key { display: none; }
   .inbox { padding: 16px; }
 }

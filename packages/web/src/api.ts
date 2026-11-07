@@ -56,7 +56,7 @@ export type GNode = {
 export type GItem = { key: string; label: string; status: string; steps?: { key: string; name: string; status: string; waitingOnYou: boolean; asksYou?: boolean }[]; thumb?: Media };
 export type GEdge = { from: string; to: string; label?: string; back?: boolean; limit?: number };
 /** `inputs` are the types the recipe asks for; `given` is what this run (or item) was started with, absent before any run. */
-export type RunGraph = { run: string; recipe: string; at: string; trail: { label: string; at: string }[]; status: string; costUsd: number; inputs: Record<string, string>; given?: Record<string, unknown>; nodes: GNode[]; edges: GEdge[] };
+export type RunGraph = { run: string; recipe: string; at: string; trail: { label: string; at: string }[]; status: string; costUsd: number; inputs: Record<string, string>; given?: Record<string, unknown>; nodes: GNode[]; edges: GEdge[]; thread?: RunChatEntry[] };
 
 /**
  * Where this page's project is served: `/` when kriya web runs in a project, `/p/<folder>/` when it runs
@@ -89,8 +89,10 @@ export const switchBranch = (run: string, key: string, branch: string) => call<{
 
 /** One message in a step's conversation: yours, or the chat's answer with what it did (D-87). */
 export type ChatEntry = { by: "you" | "kriya"; text: string; branch: string; did?: string[]; model?: string; costUsd?: number };
-/** Says something to a step; comes back once the chat has answered and done what it was asked. */
-export const say = (run: string, key: string, text: string) => call<{ text: string; did: string[] }>("/api/chat", { method: "POST", body: JSON.stringify({ run, key, text }) });
+/** One message in the run's own conversation (D-95): a run has no branches. */
+export type RunChatEntry = Omit<ChatEntry, "branch">;
+/** Says something to a step, or to the whole run with no key (D-95); comes back once the chat has answered and done what it was asked. */
+export const say = (run: string, key: string | undefined, text: string) => call<{ text: string; did: string[] }>("/api/chat", { method: "POST", body: JSON.stringify({ run, ...(key === undefined ? {} : { key }), text }) });
 
 export const retry = (run: string, key: string, change: { note?: string; leaveOut?: string[] } = {}) => call<{ ok: true }>("/api/retry", { method: "POST", body: JSON.stringify({ run, key, ...change }) });
 

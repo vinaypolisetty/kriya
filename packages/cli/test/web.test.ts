@@ -562,6 +562,23 @@ describe("talking to a step from the browser (D-87)", () => {
     }
   });
 
+  it("with no step, it's the run's chat: the step is named on what it did, and the graph has the run's conversation (D-95)", async () => {
+    const { web } = await waitingShot();
+    try {
+      expect(await post(web, "/api/chat", { run: "shot", text: "draw: lock v2, the chai looks hot" })).toEqual({ status: 200, body: { text: "Locking v2.", did: ["Draw the shot: locked v2"] } });
+      const g = (await (await fetch(`${web.url}/api/runs/shot/graph`)).json()) as Graph & { thread?: unknown[] };
+      expect(g.thread).toEqual([
+        { by: "you", text: "draw: lock v2, the chai looks hot" },
+        { by: "kriya", text: "Locking v2.", did: ["Draw the shot: locked v2"], model: "fake", costUsd: 0 },
+      ]);
+      const d = g.nodes.find((n) => n.id === "draw")!;
+      expect(d.locked).toMatchObject({ version: "1.2", why: "the chai looks hot" });
+      expect(d.thread).toBeUndefined();
+    } finally {
+      await web.close();
+    }
+  });
+
   it("plain refusals: nothing to say, a step with no versions of its own", async () => {
     const { web } = await waitingShot();
     try {

@@ -19,15 +19,20 @@
  * A completed run is done and frozen: the chat talks about it, but nothing in
  * it is locked, made or changed. In a run still going, a lock or a change that
  * leaves work stale has that work redone at once: in progress follows the change.
+ *
+ * The run's chat (D-95) is the same for the whole run: told every step in a
+ * line and the run's own steps whole, it names a step on each thing it asks
+ * for, and each is checked and done on that step exactly as that step's chat
+ * would do it. What was said is kept on the run, not on a step.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { claudeChat, describeError, type Chat, type ChatBrief, type ChatReply, type Media } from "@kriya/adapters";
-import { Edit, findGraph, intention, numbers, onBranch, suggest, type Graph, type NodeState, type RunState, type Scheduler } from "@kriya/engine";
+import { claudeChat, claudeRunChat, describeError, type Chat, type ChatAction, type ChatBrief, type ChatReply, type Media, type RunChat, type RunChatBrief, type RunChatReply, type StepBrief } from "@kriya/adapters";
+import { Edit, findGraph, intention, numbers, onBranch, suggest, type Graph, type NodeState, type RunChatEntry, type RunState, type Scheduler } from "@kriya/engine";
 import { parse } from "yaml";
 import { z } from "zod";
 import { MEDIA, writeFacet } from "./library.js";
-import { fakeChat } from "./fake.js";
+import { fakeChat, fakeRunChat } from "./fake.js";
 import { namesOf, UserError, type Project } from "./project.js";
 
 /** The recipe a step key is in, walking down for-each items: `per_shot[P3-04].pick` → shot_recipe and `per_shot[P3-04].`. */
@@ -43,36 +48,74 @@ export function recipeOf(project: Project, state: RunState, key: string) {
   return g ? { g, prefix } : undefined;
 }
 
-/** The chat this project talks with: Claude when `models: { llm: anthropic }`, else a fake that needs no key. */
-export function chatFor(project: Project, media?: Media): Chat {
-  if (project.settings.models.llm !== "anthropic") return fakeChat;
+/** Whether this project's chats are Claude (`models: { llm: anthropic }`, its key read from `.env`), not the fake. */
+function onClaude(project: Project): boolean {
+  if (project.settings.models.llm !== "anthropic") return false;
   const env = join(project.root, ".env");
   if (existsSync(env)) process.loadEnvFile(env); // keys already in the environment win
-  return claudeChat({ ...(project.settings.claude ?? {}), ...(media ? { media } : {}) });
+  return true;
+}
+
+/** The chat this project talks with: Claude when `models: { llm: anthropic }`, else a fake that needs no key. */
+export function chatFor(project: Project, media?: Media): Chat {
+  return onClaude(project) ? claudeChat({ ...(project.settings.claude ?? {}), ...(media ? { media } : {}) }) : fakeChat;
+}
+
+/** The run's chat this project talks with (D-95), the same way. */
+export function runChatFor(project: Project): RunChat {
+  return onClaude(project) ? claudeRunChat({ ...(project.settings.claude ?? {}) }) : fakeRunChat;
 }
 
 /** How many of a step's latest versions the chat sees pictures of, besides the locked one. */
 const PICTURES = 6;
 
-/** What the chat is told about one step: built from recorded state only. */
-export function chatBrief(project: Project, state: RunState, key: string, message: string): ChatBrief {
+/** A step in this run and its place in the recipe, if it has started. */
+function stepOf(project: Project, state: RunState, key: string) {
   const n = state.nodes[key];
   const r = recipeOf(project, state, key);
   const node = r?.g.nodes.find((x) => x.id === key.slice(r.prefix.length));
-  if (!n || !node || !r) throw new UserError(`there's no step '${key}' in this run yet. See its steps with: kriya status <run>`);
+  return n && node && r ? { n, node, r } : undefined;
+}
+
+/** A step that has versions of its own to talk about; a plain refusal otherwise. */
+function talkable(project: Project, state: RunState, key: string) {
+  const got = stepOf(project, state, key);
+  if (!got) throw new UserError(`there's no step '${key}' in this run yet${suggest(key, Object.keys(state.nodes)) || ". See its steps with: kriya status <run>"}`);
+  const { node, r } = got;
   if (node.kind === "screen" || node.kind === "map" || node.kind === "subgraph") {
     const shows = node.kind === "screen" ? node.show?.split(".")[0] : undefined;
     throw new UserError(`'${key}' has no versions of its own to talk about${shows ? `; talk to the step it shows: ${r.prefix}${shows}` : ""}`);
   }
+  return { ...got, node };
+}
+
+/** What the chat is told about one step: built from recorded state only. */
+export function chatBrief(project: Project, state: RunState, key: string, message: string): ChatBrief {
+  const { n } = talkable(project, state, key);
+  const num = numbers(n);
+  const byNumber = Object.values(n.versions).sort((a, b) => num[a.id]! - num[b.id]!);
+  const shown = new Set([...byNumber.slice(-PICTURES).map((v) => v.id), ...(n.locked ? [n.locked.version] : [])]);
+  return {
+    ...stepBrief(project, state, key),
+    finished: state.status === "completed",
+    library: libraryLines(project),
+    story: { inputs: state.inputs, locked: lockedWork(state, new Set([key])) },
+    images: byNumber.filter((v) => shown.has(v.id)).flatMap((v) => Object.values(v.output).filter((x): x is string => typeof x === "string" && x.startsWith("blob:")).map((ref) => ({ n: num[v.id]!, ref }))),
+    thread: n.thread.map((t) => ({ by: t.by, text: t.text })),
+    message,
+  };
+}
+
+/** One step as any chat sees it: what it is and is asked, what its lists hold, every version by number, the facets used. */
+function stepBrief(project: Project, state: RunState, key: string): StepBrief {
+  const { n, node, r } = talkable(project, state, key);
   const num = numbers(n);
   const byNumber = Object.values(n.versions).sort((a, b) => num[a.id]! - num[b.id]!);
   const asks = node.kind === "model" ? (node.prompt ?? node.send ?? node.capability) : node.kind === "agent" ? node.goal : `the ${node.tool} tool`;
-  const shown = new Set([...byNumber.slice(-PICTURES).map((v) => v.id), ...(n.locked ? [n.locked.version] : [])]);
   return {
     step: { key, name: node.name ?? node.id, kind: node.kind, asks, makes: Object.entries(node.out).map(([f, t]) => `${f} (${t})`) },
     shapes: shapes(Object.values(node.out), r.g.types),
     canEdit: r.g.nodes.some((x) => (x.kind === "model" || x.kind === "agent") && x.refines === node.id),
-    finished: state.status === "completed",
     versions: byNumber.map((v) => ({
       n: num[v.id]!,
       branch: v.branch,
@@ -84,12 +127,42 @@ export function chatBrief(project: Project, state: RunState, key: string, messag
       ...(v.verdicts.length ? { checks: checks(v.verdicts) } : {}),
     })),
     facets: usedFacets(project, state, n),
-    library: [...project.library.entities.values()].map((e) => `${e.name}${e.kind ? ` (${e.kind})` : ""}: ${Object.keys(e.facets).join(", ")}`),
-    story: { inputs: state.inputs, locked: lockedWork(state, key) },
-    images: byNumber.filter((v) => shown.has(v.id)).flatMap((v) => Object.values(v.output).filter((x): x is string => typeof x === "string" && x.startsWith("blob:")).map((ref) => ({ n: num[v.id]!, ref }))),
-    thread: n.thread.map((t) => ({ by: t.by, text: t.text })),
+  };
+}
+
+/** Everyone in the Library, `Name (kind): facet, facet`. */
+const libraryLines = (project: Project) => [...project.library.entities.values()].map((e) => `${e.name}${e.kind ? ` (${e.kind})` : ""}: ${Object.keys(e.facets).join(", ")}`);
+
+const STATUS: Partial<Record<NodeState["status"], string>> = { awaiting_human: "waiting for you", waiting_external: "waiting on the provider", completed: "done" };
+
+/** What the run's chat is told (D-95): every step in a line, the run's own steps whole, the story so far. Recorded state only. */
+export function runChatBrief(project: Project, state: RunState, run: string, message: string): RunChatBrief {
+  const keys = Object.keys(state.nodes);
+  const line = (key: string) => {
+    const { n, node } = stepOf(project, state, key) ?? {};
+    const count = n ? Object.keys(n.versions).length : 0;
+    const locked = n?.locked ? numbers(n)[n.locked.version] : undefined;
+    const where = n ? [STATUS[n.status] ?? n.status, ...(count ? [count === 1 ? "v1" : `v1–v${count}`] : []), ...(locked ? [`locked v${locked}`] : []), ...(n.staleReason ? [`stale: ${n.staleReason}`] : [])] : [];
+    return `- ${key}: ${node ? `${node.name ?? node.id} (${node.kind})` : key} · ${where.join(" · ")}`;
+  };
+  // The run's own steps whole, a for-each's items a line each: thirteen shots' versions in full would bury the list.
+  const whole = keys.filter((k) => !k.includes("[") && Object.keys(state.nodes[k]!.versions).length > 0 && hasVersions(project, state, k)).map((k) => stepBrief(project, state, k));
+  return {
+    run: { id: run, recipe: state.graph },
+    finished: state.status === "completed",
+    steps: keys.map(line),
+    whole,
+    library: libraryLines(project),
+    story: { inputs: state.inputs, locked: lockedWork(state, new Set(whole.map((w) => w.step.key))) },
+    thread: state.thread.map((t) => ({ by: t.by, text: t.text })),
     message,
   };
+}
+
+/** Whether a step makes versions of its own (not a screen, a for-each or a sub-recipe). */
+function hasVersions(project: Project, state: RunState, key: string): boolean {
+  const kind = stepOf(project, state, key)?.node.kind;
+  return kind !== undefined && kind !== "screen" && kind !== "map" && kind !== "subgraph";
 }
 
 /** The declared types a step's outputs hold, nested ones too, in words: `shot: id (text), place (library.place), …`. */
@@ -139,12 +212,12 @@ function checks(verdicts: NodeState["versions"][string]["verdicts"]): string {
   return issues.length ? `issues: ${issues.join("; ")}` : "passed";
 }
 
-/** Every other step's locked output, in words: media are named, not pasted (only the step's own pictures are shown). */
-function lockedWork(state: RunState, key: string): { key: string; value: unknown }[] {
+/** The locked output of every step not left out, in words: media are named, not pasted (only a step's own pictures are shown). */
+function lockedWork(state: RunState, leaveOut: Set<string>): { key: string; value: unknown }[] {
   const named = (v: unknown): unknown =>
     typeof v === "string" ? (v.startsWith("blob:") || v.startsWith("fake://") ? "(media)" : v) : Array.isArray(v) ? v.map(named) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, named(x)])) : v;
   return Object.entries(state.nodes).flatMap(([k, n]) => {
-    if (k === key || !n.locked || n.status === "stale") return [];
+    if (leaveOut.has(k) || !n.locked || n.status === "stale") return [];
     const out = n.versions[n.locked.version]?.output ?? {};
     if (Object.values(out).every((v) => named(v) === "(media)")) return [];
     return [{ key: k, value: named(out) }];
@@ -180,16 +253,59 @@ export function reply(project: Project, s: Scheduler, key: string, message: stri
     try {
       return act(project, s, key, a, message);
     } catch (e) {
-      const what = a.do === "lock" ? `lock v${a.version}` : a.do === "make" || a.do === "patch" ? "make a new version" : `${a.do} ${a.entity}'s ${a.facet}`;
-      return `couldn't ${what}: ${describeError(e)}`;
+      return `couldn't ${what(a)}: ${describeError(e)}`;
     }
   });
   s.answered(key, { text: r.text, did, model: r.model, cost_usd: r.cost_usd });
   return did;
 }
 
+/** What an action would have done, for when it couldn't. */
+const what = (a: ChatAction) => (a.do === "lock" ? `lock v${a.version}` : a.do === "make" || a.do === "patch" ? "make a new version" : `${a.do} ${a.entity}'s ${a.facet}`);
+
+/** One message to the whole run (D-95), start to finish: heard, answered, each action done on its step. The caller then drives the run. */
+export async function talkRun(project: Project, s: Scheduler, chat: RunChat, run: string, text: string): Promise<{ reply: RunChatReply; did: string[] }> {
+  const brief = hearRun(project, s, run, text);
+  const r = await chat(brief);
+  return { reply: r, did: replyRun(project, s, brief.message, r) };
+}
+
+/** Records what the creator said to the whole run and returns what the run's chat is told (D-95). */
+export function hearRun(project: Project, s: Scheduler, run: string, text: string): RunChatBrief {
+  const message = text.trim();
+  if (!message) throw new UserError('say something to the run, e.g. kriya chat <run> "add a shot after P3-05"');
+  const brief = runChatBrief(project, s.state, run, message);
+  s.said(undefined, message);
+  return brief;
+}
+
+/**
+ * Does what the run's chat asked (D-95), each on the step it names, exactly as that step's chat
+ * would, and records the answer on the run. Each line says which step it was done on.
+ */
+export function replyRun(project: Project, s: Scheduler, message: string, r: RunChatReply): string[] {
+  const did = r.actions.map(({ step, ...a }) => {
+    // A facet is the run's (D-88), so a change or keep names no step.
+    if (a.do === "change" || a.do === "keep") {
+      try {
+        return act(project, s, "", a, message);
+      } catch (e) {
+        return `couldn't ${what(a)}: ${describeError(e)}`;
+      }
+    }
+    try {
+      const { node } = talkable(project, s.state, step);
+      return `${node.name ?? node.id}: ${act(project, s, step, a, message)}`;
+    } catch (e) {
+      return `couldn't ${what(a)} in ${step || "a step"}: ${describeError(e)}`;
+    }
+  });
+  s.answered(undefined, { text: r.text, did, model: r.model, cost_usd: r.cost_usd });
+  return did;
+}
+
 /** Does one thing the chat asked for, the way a click would, and says what was done. */
-function act(project: Project, s: Scheduler, key: string, a: ChatReply["actions"][number], message: string): string {
+function act(project: Project, s: Scheduler, key: string, a: ChatAction, message: string): string {
   if (a.do === "keep") return keep(project, s, a.entity, a.facet);
   if (s.state.status === "completed") return `didn't ${a.do} anything: this run is finished, so it stays as it is`;
   if (a.do === "change") return change(project, s, a);
@@ -259,7 +375,7 @@ function keep(project: Project, s: Scheduler, entity: string, facet: string): st
   return `kept ${entity}'s ${facet} in the Library (${e.file}): runs from now on start with it; finished runs keep theirs`;
 }
 
-/** The conversation so far, for the terminal. */
-export function threadLines(n: NodeState): string[] {
-  return n.thread.flatMap((t) => [`${t.by === "you" ? "you" : "kriya"}: ${t.text}`, ...(t.did ?? []).map((d) => `  · ${d}`)]);
+/** The conversation so far, a step's or the run's (D-95), for the terminal. */
+export function threadLines(x: { thread: RunChatEntry[] }): string[] {
+  return x.thread.flatMap((t) => [`${t.by === "you" ? "you" : "kriya"}: ${t.text}`, ...(t.did ?? []).map((d) => `  · ${d}`)]);
 }

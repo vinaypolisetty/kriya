@@ -4,7 +4,8 @@
  * underneath. A recipe opens on its runs, with its graph and YAML one tab
  * over. A run opens as a live graph of its steps (Day 24, D-67), the recipe's
  * other runs on the left. Everything opens in place on the graph: a step's
- * details, a for-each's items, an item's own graph, a review.
+ * details, a for-each's items, an item's own graph, a review. "Talk to this
+ * run" opens the whole run's chat beside the graph (D-95): no step to find.
  * "Waiting for you" opens the inbox; each entry goes to its run.
  *
  * Routes live in the hash: #/, #/recipe/<file>, #/run/<id>[/<item>],
@@ -14,9 +15,10 @@
  * /p/<folder>/, and everything above happens inside it.
  */
 import { useEffect, useState, type FormEvent } from "react";
-import { answerTip, BASE, startRun, uploadFile, useLive, useLiveFlag, type Item, type ProjectFile, type ProjectCard, type Run, type RunGraph, type Recipe, type Shown, type Tips } from "./api";
+import { answerTip, BASE, say, startRun, uploadFile, useLive, useLiveFlag, type Item, type ProjectFile, type ProjectCard, type Run, type RunGraph, type Recipe, type Shown, type Tips } from "./api";
 import { Graph, statusOf } from "./Graph";
 import { LibraryPage } from "./Library";
+import { Talk } from "./NodePanel";
 import { Screen } from "./Screen";
 import { ThemePicker } from "./Theme";
 
@@ -382,6 +384,7 @@ export const graphUrl = (run: string, at: string) => `/api/runs/${encodeURICompo
 
 function RunView({ run, at }: { run: string; at: string }) {
   const g = useLive<RunGraph>(graphUrl(run, at));
+  const [talking, setTalking] = useState(false);
   if (g.error) return <p className="error pad">{g.error}</p>;
   if (!g.data) return <p className="muted pad">Loading…</p>;
   return (
@@ -395,10 +398,31 @@ function RunView({ run, at }: { run: string; at: string }) {
             </span>
           ))}
         </nav>
-        <span className="muted mono">{statusOf(g.data.status).label === "done" ? "finished" : g.data.status} · {usd(g.data.costUsd)}</span>
+        <span className="run-head-end">
+          <span className="muted mono">{statusOf(g.data.status).label === "done" ? "finished" : g.data.status} · {usd(g.data.costUsd)}</span>
+          <button type="button" className={talking ? undefined : "primary"} aria-expanded={talking} aria-controls="run-chat" onClick={() => setTalking(!talking)}>
+            {talking ? "Close the chat" : "Talk to this run"}
+          </button>
+        </span>
       </div>
       <div className="run-body">
-        <Graph key={`${run}:${at}`} graph={g.data} />
+        {/* The graph fills its own box, so the run's chat sits beside it, not over it. */}
+        <div className="run-graph">
+          <Graph key={`${run}:${at}`} graph={g.data} />
+        </div>
+        {talking && (
+          // The whole run's chat (D-95): say what you want from anywhere; it finds the step and names it on what it did.
+          <aside id="run-chat" className="panel run-chat" aria-label={`Chat for ${run}`}>
+            <Talk
+              title="Talk to this run"
+              label={`Say something to ${run}`}
+              hint='Say what you want without finding the step first: "add a shot after P3-05 where Mitra spots the leak", "lock v3 of P3-04, the smile reads".'
+              placeholder="e.g. add a shot after P3-05"
+              thread={g.data.thread ?? []}
+              onSay={(text) => say(run, undefined, text)}
+            />
+          </aside>
+        )}
       </div>
       <Key />
     </section>
