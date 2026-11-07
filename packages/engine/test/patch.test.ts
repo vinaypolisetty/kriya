@@ -73,8 +73,11 @@ describe("applying edits by key", () => {
   });
 });
 
-/** A finished Part 3 whose fakes log every call, so a test sees exactly what ran again. */
-function finishedPart() {
+/**
+ * A Part 3 whose fakes log every call, so a test sees exactly what ran again.
+ * With `picksWait`, each shot's pick waits for you; `slow` names a shot whose drawing comes back on a ticket.
+ */
+function partRun(picksWait = false, slow?: string) {
   const calls: string[] = [];
   const item = (c: StepContext) => (c.inputs.item as { id: string }).id;
   const exec: Executors = {
@@ -82,7 +85,7 @@ function finishedPart() {
       calls.push(c.key);
       switch (node.id) {
         case "shot_list": return [OUTPUT];
-        case "draw": return [{ image: `img:${item(c)}` }];
+        case "draw": return item(c) === slow ? { ticket: c.key } : [{ image: `img:${item(c)}` }];
         case "animate": return [{ clip: `clip:${item(c)}` }];
         case "speak": return [{ audio: `wav:${item(c)}`, seconds: 4 }];
         case "assemble": return [{ reel: `reel#${calls.filter((k) => k === "assemble").length}` }];
@@ -90,8 +93,8 @@ function finishedPart() {
       }
     },
     check: (_n, _c, cands) => cands.map((c) => ({ version: c.version, pass: true, issues: [] })),
-    decide(node, ctx): Decision {
-      if (node.id === "pick") return { action: "lock", selection: [ctx.shows!.at(-1)!.version] };
+    decide(node, ctx): Decision | undefined {
+      if (node.id === "pick") return picksWait ? undefined : { action: "lock", selection: [ctx.shows!.at(-1)!.version] };
       return { action: "approve" };
     },
   };
@@ -100,9 +103,14 @@ function finishedPart() {
   const s = new Scheduler(part, rec, exec, graphs, LIBRARY);
   s.start("a".repeat(64), { story_pages: "pages 7–9", part_no: 3 }, SERIES);
   s.run();
-  expect(rec.state.status).toBe("completed");
   calls.length = 0;
   return { s, rec, calls, events: () => readRun(log, "run1") };
+}
+
+function finishedPart() {
+  const run = partRun();
+  expect(run.rec.state.status).toBe("completed");
+  return run;
 }
 
 describe("a patched version in a run (D-89)", () => {
@@ -147,5 +155,74 @@ describe("a patched version in a run (D-89)", () => {
     const { s, rec } = finishedPart();
     const bad: Edit[] = [{ op: "update", field: "shots", key: "P3-01", set: { place: "Resevoir" } }];
     expect(() => s.patch("shot_list", rec.state.nodes.shot_list!.locked!.version, bad, { names: SHAPE.names! })).toThrow("Did you mean 'Reservoir'?");
+  });
+});
+
+describe("a shot list changed while its shots are still going (D-97)", () => {
+  const picks = (s: Scheduler) => s.inbox().map((i) => i.key).filter((k) => k.endsWith(".pick"));
+  const pickAll = (s: Scheduler, rec: Recorder) => {
+    for (const key of picks(s)) s.answer(key, { action: "lock", selection: [Object.keys(rec.state.nodes[key.replace(".pick", ".draw")]!.versions).at(-1)!] });
+    s.run();
+  };
+  const patched = (edits: Edit[], slow?: string) => {
+    const run = partRun(true, slow);
+    const { version } = run.s.patch("shot_list", run.rec.state.nodes.shot_list!.locked!.version, edits);
+    run.s.lock("shot_list", version);
+    run.s.run();
+    return run;
+  };
+
+  it("starts only the new shot: the other shots' drawings and waiting picks stay as they are", () => {
+    const run = partRun(true);
+    expect(picks(run.s)).toEqual(["per_shot[P3-01].pick", "per_shot[P3-02].pick", "per_shot[P3-03].pick"]);
+    const { s, rec, calls, events } = patched([{ op: "add", field: "shots", after: "P3-02", item: shot("P3-02a", "Mitra notices the leak") }]);
+    expect(rec.state.nodes.per_shot!.items!.keys).toEqual(["P3-01", "P3-02", "P3-02a", "P3-03"]);
+    expect(calls).toEqual(["per_shot[P3-02a].draw"]);
+    expect(picks(s)).toEqual(["per_shot[P3-01].pick", "per_shot[P3-02].pick", "per_shot[P3-02a].pick", "per_shot[P3-03].pick"]);
+    expect(s.stale()).toEqual([]);
+    expect(s.outdated()).toEqual([]);
+    pickAll(s, rec);
+    expect(rec.state.status).toBe("completed");
+    expect(rec.state.nodes.per_shot!.versions[rec.state.nodes.per_shot!.locked!.version]!.output.panel).toHaveLength(4);
+    expect(replay(events())).toEqual(rec.state);
+  });
+
+  it("parks a shot taken out: its pick leaves the inbox and the run finishes without it", () => {
+    const { s, rec, calls, events } = patched([{ op: "remove", field: "shots", key: "P3-03" }]);
+    expect(calls).toEqual([]);
+    expect(rec.state.nodes.per_shot!.items!.parked).toEqual({ "P3-03": "1.1" });
+    expect(picks(s)).toEqual(["per_shot[P3-01].pick", "per_shot[P3-02].pick"]);
+    pickAll(s, rec);
+    expect(rec.state.status).toBe("completed");
+    expect(rec.state.nodes["per_shot[P3-03].pick"]!.status).toBe("awaiting_human");
+    expect(replay(events())).toEqual(rec.state);
+  });
+
+  it("still takes in a parked shot's drawing that was on its way: it was paid for", () => {
+    const { s, rec, events } = patched([{ op: "remove", field: "shots", key: "P3-03" }], "P3-03");
+    expect(rec.state.nodes["per_shot[P3-03].draw"]!.status).toBe("waiting_external");
+    s.deliver("per_shot[P3-03].draw", [{ image: "img:P3-03" }]);
+    s.run();
+    expect(Object.values(rec.state.nodes["per_shot[P3-03].draw"]!.versions).map((v) => v.output.image)).toEqual(["img:P3-03"]);
+    expect(picks(s)).toEqual(["per_shot[P3-01].pick", "per_shot[P3-02].pick"]);
+    pickAll(s, rec);
+    expect(rec.state.status).toBe("completed");
+    expect(replay(events())).toEqual(rec.state);
+  });
+
+  it("brings a parked shot back with its work when the old list is locked again", () => {
+    const { s, rec, calls } = patched([{ op: "remove", field: "shots", key: "P3-03" }]);
+    s.lock("shot_list", "1.1");
+    s.run();
+    expect(rec.state.nodes.per_shot!.items!.keys).toEqual(["P3-01", "P3-02", "P3-03"]);
+    expect(rec.state.nodes.per_shot!.items!.parked).toEqual({});
+    expect(calls).toEqual([]);
+    expect(picks(s)).toContain("per_shot[P3-03].pick");
+  });
+
+  it("makes a changed shot again only through its own step, listed with why", () => {
+    const { s, calls } = patched([{ op: "update", field: "shots", key: "P3-02", set: { action: "Mitra spots the leak first" } }]);
+    expect(calls).toEqual([]);
+    expect(s.outdated().map((x) => x.key)).toEqual(["per_shot[P3-02].draw"]);
   });
 });

@@ -94,8 +94,11 @@ export type NodeState = {
   asked?: { attempt: number; from?: string; instruction?: string };
   /** The step's conversation, oldest first (D-87). */
   thread: ChatEntry[];
-  /** For a map step: its items, in list order, and where they were read from. In a one-at-a-time map, `started` is how far this pass got and `walking` that it's a pass over items already made. */
-  items?: { keys: string[]; source: string; version: string; path: string[]; started?: string[]; walking?: boolean };
+  /**
+   * For a map step: its items, in list order, and where they were read from. In a one-at-a-time map, `started` is how far this pass got and `walking` that it's a pass over items already made.
+   * `parked` is each item the list dropped while the map was going, with the version it was last read from (D-97).
+   */
+  items?: { keys: string[]; source: string; version: string; path: string[]; started?: string[]; walking?: boolean; parked?: Record<string, string> };
 };
 
 /** One message in a step's conversation: the creator's (`you`) or the chat's answer (`kriya`), on the branch it was said on. */
@@ -233,6 +236,16 @@ export function apply(state: RunState | undefined, e: EngineEvent): RunState {
       if (e.version !== "inputs" && !src?.versions[e.version]) fail(e, `source ${e.source} @ ${e.version} doesn't exist`);
       if (new Set(e.keys).size !== e.keys.length) fail(e, "two items share a key");
       return next({ items: { keys: e.keys, source: e.source, version: e.version, path: e.path, started: [], walking: !!n.walkBack }, walkBack: false });
+    }
+
+    case "MapListChanged": {
+      if (!n.items) fail(e, "the for-each hasn't read its list yet");
+      if (!state.nodes[n.items.source]?.versions[e.version]) fail(e, `source ${n.items.source} @ ${e.version} doesn't exist`);
+      if (new Set(e.keys).size !== e.keys.length) fail(e, "two items share a key");
+      const parked = Object.fromEntries(Object.entries(n.items.parked ?? {}).filter(([k]) => !e.keys.includes(k)));
+      for (const k of n.items.keys) if (!e.keys.includes(k)) parked[k] = n.items.version;
+      const started = n.items.started?.filter((k) => e.keys.includes(k));
+      return next({ items: { ...n.items, keys: e.keys, version: e.version, ...(started ? { started } : {}), parked } });
     }
 
     case "ItemStarted":

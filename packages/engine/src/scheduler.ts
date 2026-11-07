@@ -331,16 +331,18 @@ export class Scheduler {
     for (let i = 0; i < MAX_STEPS; i++) {
       if (this.rec.state.status !== "running") return this.rec.state;
       const all = this.instances();
-      if (this.atomic(() => this.settleMaps(all))) continue;
+      if (this.atomic(() => this.followLists(all) || this.settleMaps(all))) continue;
       const next = all.find((x) => this.status(x.key) === "ready");
       if (!next && this.atomic(() => this.rejoin(all))) continue;
       if (!next) {
         // Waiting for a person, a provider job or a missing asset: the run stays open.
-        if (Object.values(this.rec.state.nodes).some((n) => n.status === "awaiting_human" || n.status === "waiting_external" || n.status === "blocked")) {
+        // An item its list dropped (D-97) isn't waited on, and can't fail the run.
+        const now = all.map((x) => this.status(x.key));
+        if (now.some((s) => s === "awaiting_human" || s === "waiting_external" || s === "blocked")) {
           return this.rec.state;
         }
         const top = this.root();
-        const failed = Object.values(this.rec.state.nodes).some((n) => n.status === "failed");
+        const failed = now.includes("failed");
         // Stale work waits for a rebuild or a keep; it hasn't failed. A finished run whose
         // recipe changed under it ended "failed" with nothing failed (Oct 27, a step added after pick).
         if (!failed && !this.endReached(top) && Object.values(this.rec.state.nodes).some((n) => n.status === "stale")) return this.rec.state;
@@ -1036,8 +1038,10 @@ export class Scheduler {
     });
   }
 
+  /** The step waiting on a job's ticket. A parked item's job is still taken in when it comes back (D-97): it was paid for, and stays in its history. */
   private waitingOn(ticket: string): Instance | undefined {
-    return this.instances().find((x) => this.rec.state.nodes[x.key]?.ticket === ticket && this.status(x.key) === "waiting_external");
+    const all = this.instances();
+    return [...all, ...this.parked(all)].find((x) => this.rec.state.nodes[x.key]?.ticket === ticket && this.status(x.key) === "waiting_external");
   }
 
   /**
@@ -1911,18 +1915,8 @@ export class Scheduler {
 
     const from = this.listSource(node.over, ctx);
     if ("missing" in from) return this.fail(key, from.missing);
-    const list = this.readList(from.source, from.version, from.path);
-    if (!list) return this.fail(key, `'${node.over}' isn't a list`);
-
-    const keys: string[] = [];
-    for (const [i, item] of list.entries()) {
-      const k = itemKey(item, node.key);
-      if (typeof k !== "string" && typeof k !== "number") return this.fail(key, `item ${i + 1} of '${node.over}' has no '${node.key}'`);
-      const s = String(k);
-      if (!ITEM_KEY.test(s)) return this.fail(key, `item key '${s}' can only use letters, digits, - and _`);
-      if (keys.includes(s)) return this.fail(key, `two items in '${node.over}' have the same ${node.key} '${s}'`);
-      keys.push(s);
-    }
+    const keys = this.listKeys(node, this.readList(from.source, from.version, from.path));
+    if (typeof keys === "string") return this.fail(key, keys);
 
     this.rec.record({ type: "AttemptStarted", node: key, attempt: n.attempts + 1 });
     this.rec.record({ type: "MapExpanded", node: key, keys, source: from.source, version: from.version, path: from.path });
@@ -1931,6 +1925,62 @@ export class Scheduler {
       return;
     }
     for (const k of keys) this.startItem(key, node, k);
+  }
+
+  /** Each item's key, in list order, or what's wrong with the list. */
+  private listKeys(node: Extract<Node, { kind: "map" }>, list: unknown[] | undefined): string[] | string {
+    if (!list) return `'${node.over}' isn't a list`;
+    const keys: string[] = [];
+    for (const [i, item] of list.entries()) {
+      const k = itemKey(item, node.key);
+      if (typeof k !== "string" && typeof k !== "number") return `item ${i + 1} of '${node.over}' has no '${node.key}'`;
+      const s = String(k);
+      if (!ITEM_KEY.test(s)) return `item key '${s}' can only use letters, digits, - and _`;
+      if (keys.includes(s)) return `two items in '${node.over}' have the same ${node.key} '${s}'`;
+      keys.push(s);
+    }
+    return keys;
+  }
+
+  /**
+   * A for-each still going follows its list when the list's lock moves (D-97):
+   * a shot added to a locked shot list starts while the other shots' picks
+   * wait, a shot taken out is parked, and every other item keeps its work.
+   * An item whose own entry changed is redone the usual way: its locked work
+   * goes stale, its takes waiting for you are listed by `outdated()`. A
+   * finished for-each goes stale instead (D-45). Returns whether it recorded anything.
+   */
+  private followLists(all: Instance[]): boolean {
+    for (const { key, node, ctx } of all) {
+      const items = this.rec.state.nodes[key]?.items;
+      if (node.kind !== "map" || this.status(key) !== "running" || !items) continue;
+      const from = this.listSource(node.over, ctx);
+      if (!("source" in from) || from.source !== items.source || from.version === items.version) continue;
+      const keys = this.listKeys(node, this.readList(from.source, from.version, from.path));
+      if (typeof keys === "string") {
+        this.fail(key, keys);
+        return true;
+      }
+      const before = items.keys;
+      this.rec.record({ type: "MapListChanged", node: key, keys, version: from.version });
+      // One at a time, a new item waits for its turn like the others.
+      if (!node.one_at_a_time) for (const k of keys) if (!before.includes(k)) this.startItem(key, node, k);
+      return true;
+    }
+    return false;
+  }
+
+  /** Items a for-each's list dropped while it was going, read from the version each was last in. */
+  private parked(all: Instance[]): Instance[] {
+    return all.flatMap(({ key, node }) => {
+      const items = this.rec.state.nodes[key]?.items;
+      const graph = node.kind === "map" ? this.graphs.get(node.graph) : undefined;
+      if (node.kind !== "map" || !items?.parked || !graph) return [];
+      return Object.entries(items.parked).flatMap(([k, version]) => {
+        const item = this.readList(items.source, version, items.path)?.find((x) => String(itemKey(x, node.key)) === k);
+        return this.instances({ prefix: `${key}[${k}].`, graph, inputs: { item } });
+      });
+    });
   }
 
   /** Makes one item's work ready. Returns the steps of an item from before that are running again. */
