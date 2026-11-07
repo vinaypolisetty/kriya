@@ -41,6 +41,7 @@ const brief = (over: Partial<ChatBrief> = {}): ChatBrief => ({
   facets: [{ ref: "Mitra.look", value: { image: "sheets/mitra.png", words: "a thin 60-year-old bald man" }, from: "Library" }],
   library: ["Mitra (character): look, voice, speech"],
   story: { inputs: { part_no: 3 }, locked: [{ key: "shot_list", value: { hook: "the tanker never came" } }] },
+  points: [],
   images: [{ n: 1, ref: "blob:abc" }, { n: 2, ref: "blob:def" }],
   thread: [
     { by: "you", text: "why so dark?" },
@@ -86,6 +87,16 @@ describe("claudeChat", () => {
       model: "claude-opus-5-5",
       cost_usd: (1000 * 4 + 200 * 20) / 1e6,
     });
+  });
+
+  it("shows the pictures of what the person points at with @ after the step's own, named by the ref (D-96)", async () => {
+    const { client, requests } = fakeClient({ reply: "Same light.", actions: [] });
+    const pointed = { ref: "@per_shot[P3-03].draw v2", what: "the step Draw the shot, v2 (not locked)", value: { image: "blob:abc" }, images: ["blob:abc", "blob:def"] };
+    await claudeChat({ client, media })(brief({ points: [pointed], message: "match @per_shot[P3-03].draw v2" }));
+    const last = requests[0]!.messages[2]!.content as { type: string; text?: string }[];
+    expect(last.map((b) => b.type)).toEqual(["text", "text", "image", "text", "image", "text"]); // def isn't readable, again
+    expect(last[3]!.text).toBe("@per_shot[P3-03].draw v2:");
+    expect(last[0]!.text).toContain('What the person points at:\n- @per_shot[P3-03].draw v2: the step Draw the shot, v2 (not locked)\n  {"image":"blob:abc"}');
   });
 
   it("an unanswered message (a crash before the answer) still alternates roles", async () => {

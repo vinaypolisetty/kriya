@@ -59,7 +59,8 @@ export const fakeChat: Chat = async (brief) => {
     const how = /\b(redo|again)\b/i.test(said) || !brief.canEdit ? "redo" : "edit";
     return { text: "Making a new version.", actions: [{ do: "make", from, instruction: said, how }], ...usage };
   }
-  return { text: `(fake chat) ${brief.step.name} has ${brief.versions.length} version${brief.versions.length === 1 ? "" : "s"}. You said: ${said}`, actions: [], ...usage };
+  const pointed = brief.points.length ? ` You pointed at: ${brief.points.map((p) => `${p.ref} (${p.what})`).join("; ")}.` : "";
+  return { text: `(fake chat) ${brief.step.name} has ${brief.versions.length} version${brief.versions.length === 1 ? "" : "s"}. You said: ${said}${pointed}`, actions: [], ...usage };
 };
 
 /** Tools that do nothing but say what they were asked (fake mode; real tools arrive on Day 19). */
