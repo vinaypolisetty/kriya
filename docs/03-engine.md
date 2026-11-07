@@ -61,7 +61,7 @@ Rules:
 - **Stable task keys** come from item identity (`per_shot[P3-04].draw`), not position. If the shot list is regenerated and P3-04 is unchanged, its accepted work survives.
 - **Item-level edges**: `clips[P3-01]` depends on `images[P3-01]` only, so clips start while other panels are still in their fix loops.
 - **Barriers** (`wait: all`) when a stage must finish first, optionally with a human sign-off on the whole set.
-- **Splitting, adding or removing items is a data change** ([D-35](17-decisions.md)): edit the locked list and the map re-materializes. Unchanged keys keep their work, removed keys are parked, new keys start. The running graph itself is never edited in place.
+- **Splitting, adding or removing items is a data change** ([D-35](17-decisions.md)): edit the locked list and the map re-materializes. Unchanged keys keep their work, removed keys are parked, new keys start. That holds while the map is still going too ([D-97](17-decisions.md)): lock a list with one shot added while the other shots' picks wait, and only the new shot starts. The running graph itself is never edited in place.
 - **Stream by default** ([D-34](17-decisions.md)): between maps linked by the same item key, each item moves on as soon as *its* output is locked. Joins over whole maps (`from: [per_shot, voices]`) are barriers. Set-level review is opt-in: `wait: all` plus a screen on the set.
 
 ## 3. Node instance lifecycle

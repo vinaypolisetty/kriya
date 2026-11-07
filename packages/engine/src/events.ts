@@ -58,6 +58,11 @@ export const EngineEvent = z.discriminatedUnion("type", [
   on("MapExpanded", { node: NodeKey, keys: z.array(z.string()), source: NodeKey, version: z.string(), path: z.array(z.string()) }),
   /** A one-at-a-time for-each moved on to this item. Its order is the list's; this records how far it got. */
   on("ItemStarted", { node: NodeKey, item: z.string().min(1) }),
+  /**
+   * A for-each still going read its list again: the list's lock moved to `version` (D-97).
+   * New keys start, keys no longer in it are parked, the rest keep their work.
+   */
+  on("MapListChanged", { node: NodeKey, keys: z.array(z.string()), version: z.string() }),
   on("AttemptStarted", { node: NodeKey, attempt: Count }),
   on("CandidateProduced", {
     node: NodeKey,
