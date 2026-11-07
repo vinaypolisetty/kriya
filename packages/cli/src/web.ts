@@ -8,6 +8,9 @@
  *                          a run as its recipe's graph with each step's live state (Day 24, D-67), its versions
  *                          numbered v1, v2… with why each exists, and its conversation (D-87);
  *                          `at` opens one item of a for-each step; `given` is what it was started with
+ *   GET  /api/runs/<id>/refs?key=<step>
+ *                          what a message to that step's chat can point at with @ (D-96): the Library, its
+ *                          entities, the run's other steps, nearest first, and its for-each items
  *   GET  /api/runs/<id>/trace[?at=…][&key=…][&all=1]
  *                          what happened, from the event log (Day 36): one step's lines in plain words
  *                          (`key`), how often each arrow was taken, and each review's last answer;
@@ -68,6 +71,7 @@ import { openStore, type Store } from "@kriya/store";
 import { findGraph, intention, numbers, type RunState } from "@kriya/engine";
 import { allInbox, openRun, projectMedia, recipeId, startRun, type Entry, type IO } from "./commands.js";
 import { chatFor, hear, hearRun, recipeOf, reply, replyRun, runChatFor } from "./chat.js";
+import { pointables } from "./refs.js";
 import { answerTip, projectTips } from "./kb.js";
 import { LiveRuns } from "./live.js";
 import { traceView } from "./trace.js";
@@ -595,6 +599,16 @@ function projectApi(first: Project, opts: WebOptions): ProjectApi {
       if (!store.events.runs().includes(id)) throw new BadRequest(`there's no run '${id}'`);
       const opts = { at: url.searchParams.get("at") ?? "", ...(url.searchParams.get("key") ? { key: url.searchParams.get("key")! } : {}), all: url.searchParams.has("all") };
       return json(res, 200, traceView(store.events.read(id), current().graphs, opts));
+    }
+    const refs = /^\/api\/runs\/([^/]+)\/refs$/.exec(url.pathname);
+    if (req.method === "GET" && refs) {
+      const id = decodeURIComponent(refs[1]!);
+      const key = url.searchParams.get("key");
+      if (!store.events.runs().includes(id)) throw new BadRequest(`there's no run '${id}'`);
+      const project = current();
+      const { rec } = await openRun(project, store, id, quiet);
+      if (!key || !rec.state.nodes[key]) throw new BadRequest(`say which step's chat: ?key=<step>; '${key ?? ""}' isn't a step in ${id}`);
+      return json(res, 200, { refs: pointables(project, rec.state, key) });
     }
     const graph = /^\/api\/runs\/([^/]+)\/graph$/.exec(url.pathname);
     if (req.method === "GET" && graph) return json(res, 200, await runGraph(decodeURIComponent(graph[1]!), url.searchParams.get("at") ?? ""));

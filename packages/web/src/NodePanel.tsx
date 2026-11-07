@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { branchOff, retry, say, switchBranch, useLive, type DecisionTrace, type GNode, type GVersion, type RunChatEntry, type RunGraph, type TraceLine, type TraceView } from "./api";
 import { statusOf } from "./Graph";
+import { MentionBox, Said, useRefs, type Ref } from "./Mentions";
 
 const usd = (n: number) => `$${n.toFixed(n > 0 && n < 0.01 ? 4 : 2)}`;
 
@@ -39,23 +40,26 @@ export function NodePanel({ n, run, chat = true }: { n: GNode; run: string; chat
 /**
  * Talk to this step (D-87): ask about its versions, or say what you want
  * ("make v2 at night", "lock v3, the smile reads"). The chat answers and does
- * what a click could; what it did is listed under its answer.
+ * what a click could; what it did is listed under its answer. Type @ to point
+ * at the Library or another step (D-96).
  */
 export function Chat({ run, n }: { run: string; n: GNode }) {
+  const refs = useRefs(run, n.key);
   return (
     <Talk
       title="Talk to this step"
       label={`Say something to ${n.name}`}
-      hint='Ask about its versions, or say what you want: "make v2 at night", "lock v3, the smile reads".'
+      hint='Ask about its versions, or say what you want: "make v2 at night", "lock v3, the smile reads". Type @ to point at the Library or another step.'
       placeholder={n.versions.length > 1 ? `e.g. why is v${n.versions.length} darker?` : "e.g. make it night"}
       thread={n.thread ?? []}
+      refs={refs}
       onSay={(text) => say(run, n.key, text)}
     />
   );
 }
 
-/** A conversation and the box to add to it: a step's (D-87) or the whole run's (D-95). What the chat did is listed under its answer. */
-export function Talk({ title, label, hint, placeholder, thread, onSay }: { title: string; label: string; hint: string; placeholder: string; thread: RunChatEntry[]; onSay: (text: string) => Promise<unknown> }) {
+/** A conversation and the box to add to it: a step's (D-87) or the whole run's (D-95). What the chat did is listed under its answer; `refs` is what @ can point at (D-96), none in the run's chat yet. */
+export function Talk({ title, label, hint, placeholder, thread, refs = [], onSay }: { title: string; label: string; hint: string; placeholder: string; thread: RunChatEntry[]; refs?: Ref[]; onSay: (text: string) => Promise<unknown> }) {
   const [text, setText] = useState("");
   // What you said and where the thread ended then, until the chat has answered.
   const [sent, setSent] = useState<{ text: string; at: number }>();
@@ -92,7 +96,7 @@ export function Talk({ title, label, hint, placeholder, thread, onSay }: { title
         <ol className="thread" ref={end}>
           {thread.map((t, i) => (
             <li key={i} className={`said ${t.by}`}>
-              <p>{t.text}</p>
+              <p><Said text={t.text} refs={refs} /></p>
               {t.did?.map((d, j) => (
                 <p key={j} className="did">{d}</p>
               ))}
@@ -109,11 +113,12 @@ export function Talk({ title, label, hint, placeholder, thread, onSay }: { title
           void send();
         }}
       >
-        <textarea
+        <MentionBox
           value={text}
+          refs={refs}
           rows={2}
           aria-label={label}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();

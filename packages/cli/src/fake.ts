@@ -59,7 +59,8 @@ export const fakeChat: Chat = async (brief) => {
     const how = /\b(redo|again)\b/i.test(said) || !brief.canEdit ? "redo" : "edit";
     return { text: "Making a new version.", actions: [{ do: "make", from, instruction: said, how }], ...usage };
   }
-  return { text: `(fake chat) ${brief.step.name} has ${brief.versions.length} version${brief.versions.length === 1 ? "" : "s"}. You said: ${said}`, actions: [], ...usage };
+  const pointed = brief.points.length ? ` You pointed at: ${brief.points.map((p) => `${p.ref} (${p.what})`).join("; ")}.` : "";
+  return { text: `(fake chat) ${brief.step.name} has ${brief.versions.length} version${brief.versions.length === 1 ? "" : "s"}. You said: ${said}${pointed}`, actions: [], ...usage };
 };
 
 /**
@@ -71,7 +72,7 @@ export const fakeRunChat: RunChat = async (brief) => {
   const to = /^(\S+):\s+(.+)$/s.exec(brief.message);
   const step = to?.[1] ?? "";
   const seen = brief.whole.find((w) => w.step.key === step) ?? { step: { key: step, name: step, kind: "model", asks: "", makes: [] }, shapes: [], canEdit: false, versions: [], facets: [] };
-  const r = await fakeChat({ ...seen, finished: brief.finished, library: brief.library, story: brief.story, images: [], thread: [], message: to?.[2] ?? brief.message });
+  const r = await fakeChat({ ...seen, finished: brief.finished, library: brief.library, story: brief.story, points: [], images: [], thread: [], message: to?.[2] ?? brief.message });
   if (r.actions.length === 0) return { ...r, actions: [], text: `(fake chat) ${brief.run.id} has ${brief.steps.length} step${brief.steps.length === 1 ? "" : "s"} going. You said: ${brief.message}` };
   return { ...r, actions: r.actions.map((a) => ({ ...a, step: a.do === "change" || a.do === "keep" ? "" : step })) };
 };

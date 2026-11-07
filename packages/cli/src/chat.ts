@@ -16,6 +16,9 @@
  * to the Library, for runs from then on; finished runs keep what they were made
  * with.
  *
+ * What the creator points at with @ (D-96) is shown to the chat whole
+ * (refs.ts); a ref that names nothing is an error before anything is recorded.
+ *
  * A completed run is done and frozen: the chat talks about it, but nothing in
  * it is locked, made or changed. In a run still going, a lock or a change that
  * leaves work stale has that work redone at once: in progress follows the change.
@@ -33,6 +36,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { MEDIA, writeFacet } from "./library.js";
 import { fakeChat, fakeRunChat } from "./fake.js";
+import { pointsIn } from "./refs.js";
 import { namesOf, UserError, type Project } from "./project.js";
 
 /** The recipe a step key is in, walking down for-each items: `per_shot[P3-04].pick` → shot_recipe and `per_shot[P3-04].`. */
@@ -100,6 +104,7 @@ export function chatBrief(project: Project, state: RunState, key: string, messag
     finished: state.status === "completed",
     library: libraryLines(project),
     story: { inputs: state.inputs, locked: lockedWork(state, new Set([key])) },
+    points: pointsIn(project, state, key, message),
     images: byNumber.filter((v) => shown.has(v.id)).flatMap((v) => Object.values(v.output).filter((x): x is string => typeof x === "string" && x.startsWith("blob:")).map((ref) => ({ n: num[v.id]!, ref }))),
     thread: n.thread.map((t) => ({ by: t.by, text: t.text })),
     message,

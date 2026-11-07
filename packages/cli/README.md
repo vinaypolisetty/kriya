@@ -15,6 +15,7 @@ Depends on every other package, plus `yaml`, `zod` and `qrcode` (the phone-pairi
 | [`kb.ts`](src/kb.ts) | `kb.yaml`: the project's own rules and its answers to tips; failures by step from every run's checks; `preventFor`, the words applied tips add to a prompt (D-76) |
 | [`trace.ts`](src/trace.ts) | The event log as plain-words lines (`kriya log`, a step's **What happened** in `kriya web`), versions named v1, v2… as the chat names them; arrow counts and each review's last answer |
 | [`chat.ts`](src/chat.ts) | Talking to a step (`kriya chat`, `POST /api/chat`, D-87): the brief the chat gets from recorded state, and `talk`, which records the message, asks the chat, does what it asked the way a click would (lock, make a version, change a facet for the run, keep it in the Library) and records the answer. `talkRun` is the same for the whole run (D-95): every step in a line, the run's own steps whole, each action done on the step it names |
+| [`refs.ts`](src/refs.ts) | @ in a step's chat (D-96): `pointables`, what a message can point at (the browser's @ list), and `pointsIn`, what the chat is shown of each thing a message points at |
 | [`fake.ts`](src/fake.ts) | Fake models, tools, a fake step chat and a fake run chat (`<step>: <words>`), so a whole episode runs without keys or cost |
 | [`web.ts`](src/web.ts) | `kriya web`: the JSON API, media, server-sent events, LAN pairing. Its header lists every route |
 | [`live.ts`](src/live.ts) | The runs `kriya web` is carrying on: writes one at a time, one scheduler per run while its models work (D-86) |

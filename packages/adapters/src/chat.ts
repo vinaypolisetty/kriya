@@ -17,6 +17,7 @@
  * by number with why it exists, the prompt it was made with and its checks,
  * pictures of the latest ones, and the story so far (the run's inputs and
  * every locked output). Rejected versions of other steps stay out (D-11).
+ * What the creator points at with @ (D-96) is shown whole, pictures too.
  *
  * The run's chat (D-95) is the same chat for the whole run, so the creator
  * doesn't have to find a step first: "add a shot after P3-05" from anywhere.
@@ -53,6 +54,8 @@ export type ChatBrief = {
   library: string[];
   /** The story so far: the run's inputs and every step's locked output. */
   story: { inputs: Record<string, unknown>; locked: { key: string; value: unknown }[] };
+  /** What the creator points at with @ in their message (D-96): what each is, what it holds, the pictures in it. */
+  points: { ref: string; what: string; value: unknown; images: string[] }[];
   /** Pictures to look at, by version number (image outputs only). */
   images: { n: number; ref: string }[];
   /** The conversation so far, oldest first. */
@@ -122,6 +125,7 @@ Rules:
 - Write patch edits from the version's output and the item shapes below; use the Library's names exactly.
 - You can't change other steps, the Library or the recipe. When the person wants that, say what would need to change and where.
 - If the run is finished, it's done and frozen: talk, but don't lock, make or change; say so. You can still keep a change made earlier.
+- When the person points at something with @ (@Mitra, @shot_list v2), it's shown to you whole under "What the person points at": read it there. It's for you to look at; you still act only on this step and the Library's facets.
 - Answer from what's recorded (prompts, checks, pictures). If you can't tell, say so.
 - Be brief and plain. Answer in the person's language.`;
 
@@ -209,7 +213,12 @@ function storyText(b: { library: string[]; story: ChatBrief["story"] }): string[
 
 /** The step and its versions in words, for the chat to read. */
 export function briefText(b: ChatBrief): string {
-  return [stepText(b, `The run is ${b.finished ? "finished, so it's frozen" : "in progress"}.`), ...storyText(b)].join("\n\n");
+  const points = b.points.map((p) => `- ${p.ref}: ${p.what}\n  ${clip(p.value, 8000)}`);
+  return [
+    stepText(b, `The run is ${b.finished ? "finished, so it's frozen" : "in progress"}.`),
+    ...storyText(b),
+    ...(points.length ? [`What the person points at:\n${points.join("\n")}`] : []),
+  ].join("\n\n");
 }
 
 /** The run in words (D-95): every step in a line, its own steps whole, the story so far. */
@@ -269,6 +278,9 @@ function action(a: Raw["actions"][number]): ChatAction {
   return { do: "make", from: a.version, instruction: a.instruction, how: a.how === "redo" ? "redo" : "edit" };
 }
 
+/** How many pictures of what the person points at the chat sees, across everything pointed at. */
+const POINTED_PICTURES = 6;
+
 /** The chat on Claude. */
 export function claudeChat(opts: Opts = {}): Chat {
   const ask = asker(opts);
@@ -277,7 +289,13 @@ export function claudeChat(opts: Opts = {}): Chat {
       const img = storedImage(opts.media, ref);
       return img ? [{ type: "text" as const, text: `v${n}:` }, img] : [];
     });
-    const { got, model, cost_usd } = await ask(SYSTEM_CHAT, REPLY_SCHEMA, b.thread, [{ type: "text", text: briefText(b) }, ...pictures, { type: "text", text: `The person says: ${b.message}` }]);
+    // Pictures of what was pointed at, a few at most: the rest are named in the brief.
+    const pointed = b.points
+      .flatMap((p) => p.images.map((ref) => ({ label: p.ref, img: storedImage(opts.media, ref) })))
+      .filter((x) => x.img)
+      .slice(0, POINTED_PICTURES)
+      .flatMap(({ label, img }) => [{ type: "text" as const, text: `${label}:` }, img!]);
+    const { got, model, cost_usd } = await ask(SYSTEM_CHAT, REPLY_SCHEMA, b.thread, [{ type: "text", text: briefText(b) }, ...pictures, ...pointed, { type: "text", text: `The person says: ${b.message}` }]);
     return { text: got.reply, actions: got.actions.map(action), model, cost_usd };
   };
 }

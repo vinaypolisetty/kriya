@@ -235,6 +235,15 @@ code { background: var(--tool); padding: 1px 5px; border-radius: 4px; }
 .said .did { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .said .did::before { content: "· "; }
 .chat-form { display: flex; gap: 8px; align-items: flex-end; }
+/* @ in the chat (D-96): the list opens above the box; what a message points at is marked */
+.mention-box { position: relative; flex: 1; min-width: 0; display: flex; }
+.mentions { position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; z-index: 5; list-style: none; margin: 0; padding: 4px; max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 6px 20px color-mix(in srgb, var(--shadow) 18%, transparent); }
+.mentions li { display: grid; gap: 1px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.mentions li.on { background: var(--teal-soft); }
+.mention-ref { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.mention-label { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-kind { font-weight: 600; }
+mark.ref { background: none; color: var(--teal-deep); font-weight: 600; }
 .chat-form textarea { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); resize: vertical; }
 /* under a review the box is as wide as its pictures: the talk stays readable, and a long one scrolls, newest last */
 .run-head-end { display: flex; align-items: center; gap: 12px; }
